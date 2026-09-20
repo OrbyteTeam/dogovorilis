@@ -1,87 +1,116 @@
-// СКЕЛЕТ сервера. Назначение: чтобы `docker compose up` из чистого клона поднимал сервис,
-// применял миграции и отвечал на /healthz. Реальная логика собирается по docs/SPEC.md и ЗАДАЧА_01.md.
-// Слои: src/transport (bot, http), src/domain, src/db, src/integrations.
+// Точка входа. Порядок старта — SPEC §4.4: конфиг → БД (с ретраем) → миграции → HTTP → бот → планировщик.
+// При ошибке конфигурации или токена — понятное сообщение и exit(1), без стектрейса в лицо.
 import 'dotenv/config';
-import { readdir, readFile } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import Fastify from 'fastify';
-import fastifyStatic from '@fastify/static';
-import pg from 'pg';
+import { ConfigError, loadConfig, setConfig, type Config } from './config.js';
+import { closeDb, connectDb } from './db/pool.js';
+import { migrate } from './db/migrate.js';
+import { initLogger, log } from './logger.js';
+import { ALLOWED_UPDATES, createBot, explainStartupError } from './transport/bot/index.js';
+import { createHttpServer } from './transport/http/server.js';
+import { startScheduler } from './scheduler/index.js';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
+const SHUTDOWN_GRACE_MS = 10_000;
 
-const cfg = {
-  port: Number(process.env.PORT ?? 8080),
-  databaseUrl: process.env.DATABASE_URL ?? '',
-  maxMode: (process.env.MAX_MODE ?? 'off') as 'polling' | 'webhook' | 'off',
-  maxBotToken: process.env.MAX_BOT_TOKEN ?? '',
-  publicBaseUrl: process.env.PUBLIC_BASE_URL ?? `http://localhost:${process.env.PORT ?? 8080}`,
-  webappDist: path.resolve(here, '..', '..', 'webapp', 'dist'),
-  migrationsDir: path.resolve(here, '..', 'migrations'),
-};
-
-async function runMigrations(pool: pg.Pool): Promise<string[]> {
-  const client = await pool.connect();
-  const applied: string[] = [];
+async function main(): Promise<void> {
+  let config: Config;
   try {
-    await client.query('CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())');
-    const files = (await readdir(cfg.migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
-    for (const file of files) {
-      const { rowCount } = await client.query('SELECT 1 FROM schema_migrations WHERE name = $1', [file]);
-      if (rowCount) continue;
-      const sql = await readFile(path.join(cfg.migrationsDir, file), 'utf8');
-      await client.query('BEGIN');
-      try {
-        await client.query(sql);
-        await client.query('INSERT INTO schema_migrations (name) VALUES ($1)', [file]);
-        await client.query('COMMIT');
-        applied.push(file);
-      } catch (e) {
-        await client.query('ROLLBACK');
-        throw e;
-      }
+    config = setConfig(loadConfig());
+  } catch (e) {
+    if (e instanceof ConfigError) {
+      process.stderr.write(`${e.message}\n\nСмотрите .env.example и docs/SPEC.md §4.3.\n`);
+      process.exit(1);
     }
-  } finally {
-    client.release();
+    throw e;
   }
-  return applied;
-}
+  initLogger(config.LOG_LEVEL);
+  log.info(
+    { mode: config.MAX_MODE, provider: config.PAYMENT_PROVIDER, demo: config.DEMO_MODE, tz: config.APP_TIMEZONE, env: config.NODE_ENV },
+    'запуск «Договорились»',
+  );
 
-async function main() {
-  const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } });
+  const pool = await connectDb(config.DATABASE_URL);
+  const applied = await migrate(pool);
+  log.info({ applied: applied.length ? applied : 'нет новых' }, 'миграции проверены');
 
-  const pool = new pg.Pool({ connectionString: cfg.databaseUrl });
-  const applied = await runMigrations(pool);
-  app.log.info({ applied }, 'migrations checked');
+  let botReady = false;
+  let runtime: Awaited<ReturnType<typeof createBot>> | null = null;
 
-  app.get('/healthz', async () => ({ ok: true, service: 'dogovorilis', mode: cfg.maxMode }));
-  app.get('/readyz', async (_req, reply) => {
+  if (config.MAX_MODE !== 'off') {
     try {
-      await pool.query('SELECT 1');
-      return { ok: true };
+      runtime = await createBot(config);
+      // Ник бота нужен для диплинков; если в .env его нет — берём из GET /me (SPEC §19).
+      if (!config.MAX_BOT_USERNAME) setConfig({ ...config, MAX_BOT_USERNAME: runtime.username });
     } catch (e) {
-      reply.code(503);
-      return { ok: false, error: (e as Error).message };
+      const hint = explainStartupError(e);
+      log.fatal({ err: (e as Error).message }, hint ?? 'не удалось инициализировать бота');
+      if (hint) process.stderr.write(`\n${hint}\n`);
+      await closeDb();
+      process.exit(1);
     }
-  });
-
-  await app.register(fastifyStatic, { root: cfg.webappDist, prefix: '/app/', decorateReply: false });
-  app.get('/app', (_req, reply) => reply.redirect('/app/'));
-
-  if (cfg.maxMode !== 'off') {
-    if (!cfg.maxBotToken) {
-      app.log.warn('MAX_MODE задан, но MAX_BOT_TOKEN пуст — бот не запущен (скелет).');
-    } else {
-      app.log.info({ mode: cfg.maxMode }, 'bot: запуск описан в docs/SPEC.md §4.4 и ЗАДАЧА_01.md — в скелете не реализован');
-    }
+  } else {
+    log.warn('MAX_MODE=off — бот не запускается, работают только API и мини-приложение');
   }
 
-  await app.listen({ port: cfg.port, host: '0.0.0.0' });
-  app.log.info({ url: cfg.publicBaseUrl }, 'skeleton up');
+  const app = await createHttpServer({ config, max: runtime?.max ?? null, botReady: () => botReady });
+
+  if (runtime && config.MAX_MODE === 'webhook') {
+    // Обработчик webhook встраиваем в наш Fastify: startWebhook поднял бы второй http-сервер (CONTRACTS §1.3).
+    const handler = await runtime.bot.createWebhook({
+      domain: new URL(config.PUBLIC_BASE_URL).host,
+      path: '/webhooks/max',
+      secret: config.MAX_WEBHOOK_SECRET,
+      allowedUpdates: ALLOWED_UPDATES,
+    });
+    app.post('/webhooks/max', (req, reply) => handler(req.raw, reply.raw));
+    botReady = true;
+    log.info({ path: '/webhooks/max' }, 'бот: webhook зарегистрирован');
+  }
+
+  await app.listen({ port: config.PORT, host: '0.0.0.0' });
+  log.info({ port: config.PORT, base: config.PUBLIC_BASE_URL }, 'http слушает');
+
+  if (runtime && config.MAX_MODE === 'polling') {
+    // ВНИМАНИЕ: polling удаляет все webhook-подписки этого токена (CONTRACTS §1.3) — один токен = один экземпляр.
+    void runtime.bot.start({ mode: 'polling', options: { allowedUpdates: ALLOWED_UPDATES } }).catch((e) => {
+      const hint = explainStartupError(e);
+      log.fatal({ err: (e as Error).message }, hint ?? 'polling не запустился');
+      process.exit(1);
+    });
+    botReady = true;
+    log.info({ bot: `https://max.ru/${runtime.username}` }, 'бот: polling запущен');
+  }
+
+  const scheduler = startScheduler({ max: runtime?.max ?? null, sendReminders: false });
+
+  const shutdown = async (signal: string) => {
+    log.info({ signal }, 'остановка');
+    const timer = setTimeout(() => {
+      log.warn('остановка затянулась, выходим принудительно');
+      process.exit(1);
+    }, SHUTDOWN_GRACE_MS);
+    try {
+      scheduler.stop();
+      if (runtime) {
+        if (config.MAX_MODE === 'polling') runtime.bot.stopPolling();
+        else await runtime.bot.stopWebhook().catch(() => undefined);
+      }
+      await app.close();
+      await closeDb();
+      clearTimeout(timer);
+      log.info('остановлено');
+      process.exit(0);
+    } catch (e) {
+      log.error({ err: (e as Error).message }, 'ошибка при остановке');
+      process.exit(1);
+    }
+  };
+
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('unhandledRejection', (reason) => log.error({ reason: String(reason) }, 'необработанное отклонение промиса'));
 }
 
 main().catch((e) => {
-  console.error(e);
+  process.stderr.write(`Критическая ошибка при старте: ${(e as Error).message}\n`);
   process.exit(1);
 });

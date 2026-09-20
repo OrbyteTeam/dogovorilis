@@ -7,6 +7,7 @@ node_modules/
 dist/
 *.log
 # локальное
+.scratch/
 .DS_Store
 .vscode/
 .idea/

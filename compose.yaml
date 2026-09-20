@@ -2,7 +2,10 @@
 # Переменные — из .env (скопируйте .env.example → .env).
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        VITE_BOT_USERNAME: ${MAX_BOT_USERNAME:-}
     env_file: .env
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-dogovorilis}:${POSTGRES_PASSWORD:-dogovorilis}@db:5432/${POSTGRES_DB:-dogovorilis}

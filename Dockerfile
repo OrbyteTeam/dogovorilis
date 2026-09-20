@@ -7,6 +7,10 @@ COPY server/package.json server/
 COPY webapp/package.json webapp/
 RUN npm ci --no-audit --no-fund
 COPY . .
+# Ник бота попадает в бандл мини-приложения при сборке: без MAX Bridge (обычный браузер) спросить его
+# у API нечем, а экран W0 должен давать ссылку на бота. Значение — из compose (MAX_BOT_USERNAME).
+ARG VITE_BOT_USERNAME=""
+ENV VITE_BOT_USERNAME=$VITE_BOT_USERNAME
 RUN npm run build
 
 FROM node:22-alpine AS runtime

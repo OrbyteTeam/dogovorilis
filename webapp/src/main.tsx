@@ -1,22 +1,22 @@
-// СКЕЛЕТ. Реальные экраны описаны в docs/SPEC.md §7 и собираются по ЗАДАЧА_01.md.
+// Точка входа мини-приложения — docs/SPEC.md §7.1; тема и платформа берутся из MAX UI / Bridge (docs/DESIGN.md §1).
 import '@maxhub/max-ui/dist/styles.css';
+import './ui.css';
+
+import { MaxUI } from '@maxhub/max-ui';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { MaxUI, Panel, Typography } from '@maxhub/max-ui';
 
-function App() {
-  return (
-    <MaxUI resetBody>
-      <Panel centeredX centeredY>
-        <Typography.Title>Договорились</Typography.Title>
-        <Typography.Body>Скелет мини-приложения. Экраны — по docs/SPEC.md.</Typography.Body>
-      </Panel>
-    </MaxUI>
-  );
-}
+import { App } from './app';
+import { platform } from './bridge';
 
-createRoot(document.getElementById('root')!).render(
+const container = document.getElementById('root');
+if (!container) throw new Error('Не найден контейнер #root');
+
+createRoot(container).render(
   <StrictMode>
-    <App />
+    {/* colorScheme не задаём: MAX UI сам следит за prefers-color-scheme (DESIGN.md §1). */}
+    <MaxUI platform={platform()} resetBody className="dg-app">
+      <App />
+    </MaxUI>
   </StrictMode>,
 );

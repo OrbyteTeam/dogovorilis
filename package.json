@@ -4,15 +4,25 @@
   "private": true,
   "description": "Договорились — подтверждённая договорённость в чате MAX (хакатон MAX 2026, команда Pulsar)",
   "license": "MIT",
-  "engines": { "node": ">=22 <23" },
-  "workspaces": ["server", "webapp"],
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "workspaces": [
+    "server",
+    "webapp"
+  ],
   "scripts": {
     "build": "npm run build -w webapp && npm run build -w server",
     "dev:server": "npm run dev -w server",
     "dev:webapp": "npm run dev -w webapp",
     "start": "npm run start -w server",
-    "test": "npm run test -w server",
-    "lint": "npm run typecheck -w server && npm run typecheck -w webapp",
-    "check:secrets": "node scripts/check-secrets.mjs"
+    "test": "vitest run --root server",
+    "lint": "npm run typecheck",
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "typecheck": "tsc -p server/tsconfig.test.json --noEmit && tsc -p webapp/tsconfig.json --noEmit",
+    "test:e2e": "vitest run --root server"
+  },
+  "overrides": {
+    "vite": "7.3.6"
   }
 }
