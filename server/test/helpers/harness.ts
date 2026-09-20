@@ -16,6 +16,8 @@ import { createMaxFake, BOT_INFO, type MaxFake } from './max-fake.js';
 export type Harness = {
   bot: Bot;
   max: MaxFake;
+  /** тот же шлюз, что у обработчиков — нужен для прогона тика планировщика */
+  gateway: ReturnType<typeof createMaxGateway>;
   config: Config;
   /** подать событие, как это делает SDK: middleware() + обработчик ошибок */
   feed(update: Update): Promise<void>;
@@ -86,11 +88,8 @@ export async function createHarness(databaseUrl: string, opts?: { keepData?: boo
   const runtime = await createBot(config, { fetch: max.fetch });
   max.reset(); // не считаем setMyCommands
 
-  const http = await createHttpServer({
-    config,
-    max: createMaxGateway(runtime.bot.api),
-    botReady: () => true,
-  });
+  const gateway = createMaxGateway(runtime.bot.api);
+  const http = await createHttpServer({ config, max: gateway, botReady: () => true });
   await http.ready();
 
   const onError: BotErrorHandler = runtime.onError;
@@ -118,6 +117,7 @@ export async function createHarness(databaseUrl: string, opts?: { keepData?: boo
   return {
     bot: runtime.bot,
     max,
+    gateway,
     config,
     feed,
 
