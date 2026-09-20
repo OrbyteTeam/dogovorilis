@@ -1,0 +1,56 @@
+# Одна команда: `docker compose up --build`. Поднимает БД и сервис (бот + API + мини-приложение).
+# Переменные — из .env (скопируйте .env.example → .env).
+services:
+  app:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-dogovorilis}:${POSTGRES_PASSWORD:-dogovorilis}@db:5432/${POSTGRES_DB:-dogovorilis}
+    ports:
+      - "${PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dogovorilis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dogovorilis}
+      POSTGRES_DB: ${POSTGRES_DB:-dogovorilis}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dogovorilis} -d ${POSTGRES_DB:-dogovorilis}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # HTTPS-фронт для VPS: `docker compose --profile prod up -d`. Локально не нужен.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["prod"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

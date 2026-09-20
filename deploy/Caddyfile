@@ -1,0 +1,6 @@
+# HTTPS-фронт на VPS. PUBLIC_HOST задаётся в .env (например, dogovorilis.online).
+# Caddy сам выпускает сертификат Let's Encrypt (доверенный CA — подходит для webhook MAX и ЮKassa).
+{$PUBLIC_HOST} {
+    encode gzip
+    reverse_proxy app:8080
+}
