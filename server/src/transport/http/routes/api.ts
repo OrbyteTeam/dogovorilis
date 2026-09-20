@@ -31,18 +31,22 @@ function rateLimited(userId: number): boolean {
   return entry.count > RATE_LIMIT;
 }
 
+class RateLimitedError extends AppError {
+  constructor() {
+    super('rate_limited', 'Слишком много запросов, попробуйте через минуту');
+  }
+}
+
 export type ApiDeps = { max: MaxGateway | null };
 
 export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
-  app.addHook('onRequest', async (req, reply) => {
+  // Возврат значения из onRequest-хука НЕ завершает запрос (нужен reply.send или исключение),
+  // поэтому хук бросает типизированную ошибку, а формат ответа задаёт errorHandler в server.ts.
+  app.addHook('onRequest', async (req) => {
     if (!req.url.startsWith('/api/')) return;
-    try {
-      const user = await authenticate(req);
-      if (rateLimited(user.maxUserId)) return fail(reply, 429, 'rate_limited', 'Слишком много запросов, попробуйте через минуту');
-      (req as AuthedRequest).appUser = user;
-    } catch (e) {
-      return sendError(reply, e);
-    }
+    const user = await authenticate(req);
+    if (rateLimited(user.maxUserId)) throw new RateLimitedError();
+    (req as AuthedRequest).appUser = user;
   });
 
   app.get('/api/me', async (req) => {
@@ -130,6 +134,8 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
     }
   });
 }
+
+export { RateLimitedError };
 
 // ─────────────────────────── авторизация и ошибки ───────────────────────────
 

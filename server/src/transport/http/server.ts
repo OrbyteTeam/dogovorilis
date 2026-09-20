@@ -5,6 +5,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import type { Config } from '../../config.js';
 import { getPool } from '../../db/pool.js';
+import { AppError, UnauthorizedError, ValidationError } from '../../errors.js';
 import type { MaxGateway } from '../../integrations/max/gateway.js';
 import { log } from '../../logger.js';
 import { registerApi } from './routes/api.js';
@@ -28,6 +29,23 @@ export async function createHttpServer(deps: HttpDeps): Promise<FastifyInstance>
   app.addHook('onResponse', async (req, reply) => {
     if (req.url === '/healthz') return; // healthcheck Docker опрашивает каждые 15 с — не засоряем лог
     log.debug({ method: req.method, url: req.url, status: reply.statusCode }, 'http');
+  });
+
+  // Формат ошибок — один на весь API (SPEC §7.8): { error: { code, message } }.
+  // Без этого Fastify отдавал бы своё тело { statusCode, code, error, message }, которое мини-приложение не разбирает.
+  app.setErrorHandler((err: unknown, req, reply) => {
+    const { status, code, message } = describeError(err);
+    if (status >= 500) log.error({ err: (err as Error)?.message, url: req.url }, 'http: внутренняя ошибка');
+    else log.warn({ code, url: req.url }, 'http: отказ');
+    reply.code(status).send({ error: { code, message } });
+  });
+
+  app.setNotFoundHandler((req, reply) => {
+    if (req.url.startsWith('/api/')) {
+      reply.code(404).send({ error: { code: 'not_found', message: 'Такого метода нет' } });
+      return;
+    }
+    reply.code(404).type('text/plain; charset=utf-8').send('Не найдено');
   });
 
   app.get('/healthz', async () => ({ ok: true, service: 'dogovorilis', mode: deps.config.MAX_MODE }));
@@ -73,4 +91,35 @@ a{display:inline-block;margin-top:16px;padding:12px 16px;background:#007aff;colo
   // любой путь внутри /app/ — это /app/index.html + #/…
 
   return app;
+}
+
+/** Ошибка домена → код и статус HTTP по таблице SPEC §7.8. */
+function describeError(err: unknown): { status: number; code: string; message: string } {
+  if (err instanceof UnauthorizedError) return { status: 401, code: err.code, message: 'Откройте мини-приложение внутри MAX' };
+  if (err instanceof ValidationError) return { status: 400, code: 'validation', message: err.message };
+  if (err instanceof AppError) {
+    switch (err.code) {
+      case 'forbidden':
+        return { status: 403, code: 'forbidden', message: 'Нет доступа к этой сделке' };
+      case 'deal_not_found':
+        return { status: 404, code: 'not_found', message: 'Сделка не найдена' };
+      case 'invalid_transition':
+      case 'client_cancel_locked':
+        return { status: 409, code: 'invalid_transition', message: 'Это действие уже недоступно' };
+      case 'rate_limited':
+        return { status: 429, code: 'rate_limited', message: err.message };
+      default:
+        return { status: 500, code: 'internal', message: 'Внутренняя ошибка, попробуйте позже' };
+    }
+  }
+  // Ошибки самого Fastify (например, битый JSON в теле) — это тоже валидация входа.
+  const fastifyStatus = (err as { statusCode?: number })?.statusCode;
+  if (fastifyStatus && fastifyStatus < 500) {
+    return {
+      status: fastifyStatus,
+      code: fastifyStatus === 400 ? 'validation' : 'bad_request',
+      message: (err as Error)?.message ?? 'Некорректный запрос',
+    };
+  }
+  return { status: 500, code: 'internal', message: 'Внутренняя ошибка, попробуйте позже' };
 }
