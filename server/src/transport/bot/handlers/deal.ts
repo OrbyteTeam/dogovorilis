@@ -113,6 +113,10 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
       if (parsed.sub === 'y') {
         const reason = parsed.arg === 'none' || !parsed.arg ? null : parsed.arg;
         const result = await dealService.cancel(parsed.publicId, actor, reason);
+        // Снимаем ожидание причины отмены: кнопкой «Без причины» сделка уже отменена, и если оставить
+        // запись в user_inputs, следующая же реплика исполнителя уедет в обработчик причины отмены,
+        // тот попробует отменить отменённое и ответит E1 на безобидный текст (поймано живым прогоном).
+        await inTx((c) => inputsRepo.clear(c, userId));
         await publishResult(ctx, deps, result, viewRole);
       } else if (role === 'seller') {
         // Исполнителю предлагаем указать причину (она уйдёт второй стороне в N15).

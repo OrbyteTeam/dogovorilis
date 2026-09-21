@@ -409,6 +409,28 @@ describe.skipIf(!DB)('сквозной сценарий', () => {
       expect(await dealStatus(h, id)).toBe('awaiting_acceptance');
     }, SCENARIO_TIMEOUT);
 
+    it('отмена через «Без причины» снимает ожидание ввода (иначе следующий текст съедается)', async () => {
+      // Поймано живым прогоном на сервере 21.09.2026: «🚫 Отменить» → «Без причины» отменяло сделку,
+      // но запись в user_inputs оставалась на полчаса. Следующая же реплика исполнителя уезжала
+      // в обработчик причины отмены, тот пытался отменить отменённое и отвечал E1 на безобидный текст.
+      await h.start(SELLER, SELLER_CHAT);
+      await h.press(SELLER, SELLER_CHAT, 'dm:new', null);
+      const id = await onlyDealPublicId(h);
+      const sellerCard = await cardMid(h, id, 'seller');
+
+      await h.press(SELLER, SELLER_CHAT, `cn:${id}`, sellerCard); // спрашивает причину
+      expect((await h.query('SELECT kind FROM user_inputs')).length).toBe(1);
+
+      await h.press(SELLER, SELLER_CHAT, `cn:y:${id}:none`, sellerCard); // «Без причины»
+      expect(await dealStatus(h, id)).toBe('cancelled');
+      expect(await h.query('SELECT kind FROM user_inputs')).toHaveLength(0);
+
+      // И контрольный: обычный текст снова получает S3, а не E1.
+      h.max.reset();
+      await h.say(SELLER, SELLER_CHAT, 'спасибо');
+      expect(h.max.texts().join('\n')).toContain(texts.S3);
+    }, SCENARIO_TIMEOUT);
+
     it('неизвестный payload кнопки → E1, процесс продолжает отвечать', async () => {
       await h.start(SELLER, SELLER_CHAT);
       h.max.reset();
