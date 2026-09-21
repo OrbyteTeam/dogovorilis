@@ -4,7 +4,7 @@ import type { Payment, PaymentKind, PaymentProvider, PaymentRail, PaymentStatus 
 
 // raw (последний ответ провайдера) наружу не отдаём — он только для разбора инцидентов.
 const COLS = `id, deal_id, kind, rail, provider, status, amount_kopecks, idempotence_key,
-  provider_payment_id, provider_status, confirmation_url, qr_payload,
+  provider_payment_id, provider_status, confirmation_url, qr_payload, cancellation_reason,
   claimed_at, succeeded_at, canceled_at, expires_at, created_at, updated_at`;
 
 /** Статусы, которые частичный уникальный индекс считает «живыми». */
@@ -23,6 +23,7 @@ type PaymentRow = {
   provider_status: string | null;
   confirmation_url: string | null;
   qr_payload: string | null;
+  cancellation_reason: string | null;
   claimed_at: Date | null;
   succeeded_at: Date | null;
   canceled_at: Date | null;
@@ -45,6 +46,7 @@ function mapPayment(r: PaymentRow): Payment {
     providerStatus: r.provider_status,
     confirmationUrl: r.confirmation_url,
     qrPayload: r.qr_payload,
+    cancellationReason: r.cancellation_reason,
     claimedAt: r.claimed_at,
     succeededAt: r.succeeded_at,
     canceledAt: r.canceled_at,
@@ -121,12 +123,22 @@ export type PaymentPatch = Partial<
     | 'providerStatus'
     | 'confirmationUrl'
     | 'qrPayload'
+    | 'cancellationReason'
     | 'claimedAt'
     | 'succeededAt'
     | 'canceledAt'
     | 'expiresAt'
   >
-> & { raw?: unknown };
+> & {
+  raw?: unknown;
+  /**
+   * Явная метка изменения. По умолчанию ставится now() базы — но для платежей updated_at
+   * работает ещё и меткой последнего опроса провайдера (SPEC §10.3, dueForPolling),
+   * а значит должен идти по тем же часам, что и выборка. Иначе «не чаще раза в 60 с»
+   * держится только при совпадении часов БД и приложения.
+   */
+  updatedAt?: Date;
+};
 
 /** Явная карта полей патча в колонки — без автопреобразования имён. */
 const PATCH_COLUMNS: { readonly [K in keyof Required<PaymentPatch>]: string } = {
@@ -135,11 +147,13 @@ const PATCH_COLUMNS: { readonly [K in keyof Required<PaymentPatch>]: string } = 
   providerStatus: 'provider_status',
   confirmationUrl: 'confirmation_url',
   qrPayload: 'qr_payload',
+  cancellationReason: 'cancellation_reason',
   claimedAt: 'claimed_at',
   succeededAt: 'succeeded_at',
   canceledAt: 'canceled_at',
   expiresAt: 'expires_at',
   raw: 'raw',
+  updatedAt: 'updated_at',
 };
 
 export async function update(q: Queryable, id: number, patch: PaymentPatch): Promise<Payment> {
@@ -163,10 +177,9 @@ export async function update(q: Queryable, id: number, patch: PaymentPatch): Pro
     return current;
   }
 
-  const res = await q.query<PaymentRow>(
-    `UPDATE payments SET ${sets.join(', ')}, updated_at = now() WHERE id = $1 RETURNING ${COLS}`,
-    params,
-  );
+  if (!('updatedAt' in patch)) sets.push('updated_at = now()');
+
+  const res = await q.query<PaymentRow>(`UPDATE payments SET ${sets.join(', ')} WHERE id = $1 RETURNING ${COLS}`, params);
   if (!res.rows[0]) throw new Error(`payments.update: платёж ${id} не найден`);
   return mapPayment(res.rows[0]);
 }

@@ -9,6 +9,7 @@ import { AppError, UnauthorizedError, ValidationError } from '../../errors.js';
 import type { MaxGateway } from '../../integrations/max/gateway.js';
 import { log } from '../../logger.js';
 import { registerApi } from './routes/api.js';
+import { registerWebhooks } from './routes/webhooks.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const WEBAPP_DIST = path.resolve(here, '..', '..', '..', '..', 'webapp', 'dist');
@@ -66,6 +67,7 @@ export async function createHttpServer(deps: HttpDeps): Promise<FastifyInstance>
   });
 
   registerApi(app, { max: deps.max });
+  registerWebhooks(app, { max: deps.max });
 
   // Страница возврата с оплаты (SPEC §9.2). Провайдеры подключаются в ЗАДАЧА_02, страница нужна уже сейчас:
   // её адрес уходит в return_url и должен быть стабильным.

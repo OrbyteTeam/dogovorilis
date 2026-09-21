@@ -1,13 +1,14 @@
-// Платёжные кнопки. Рейл «перевод» работает полностью (SPEC §9.1), рейл «ссылка» в ЗАДАЧА_01 отвечает E11.
+// Платёжные кнопки. Оба рейла работают: «перевод» подтверждают стороны (SPEC §9.1 «[модель]»),
+// «ссылка» идёт через ЮKassa (§9.2 «[тест]»). Ошибки провайдера превращаются в E9 в shared.answerError.
 import type { Context } from '@maxhub/max-bot-api';
-import { RailUnavailable } from '../../../errors.js';
 import * as texts from '../../../texts.js';
 import type { CardRole, DealBundle } from '../../../types.js';
 import * as dealService from '../../../domain/deal/service.js';
 import * as paymentService from '../../../domain/payment/service.js';
+import * as rails from '../../../domain/payment/rails.js';
 import type { Actor } from '../../../domain/deal/service.js';
 import { syncCards } from '../cards.js';
-import { transferCheckKeyboard, transferKeyboard } from '../keyboards.js';
+import { linkPaymentKeyboard, transferCheckKeyboard, transferKeyboard } from '../keyboards.js';
 import { deliver, notifyForEvents } from '../notify.js';
 import { renderAndSendReceipt } from '../receipt.js';
 import type { ParsedCallback } from '../callbacks.js';
@@ -30,19 +31,17 @@ export async function onPaymentCallback(
   const viewRole: CardRole = cardRole ?? (role === 'client' && bundle.deal.demo ? 'client_demo' : role);
 
   switch (parsed.code) {
-    case 'pl': // оплата по ссылке — провайдер не подключён (ЗАДАЧА_01)
-    case 'pc':
-    case 'pe':
+    case 'pl':
     case 'nl':
-      try {
-        await paymentService.createLinkPayment(parsed.publicId, actor);
-      } catch (e) {
-        if (e instanceof RailUnavailable) {
-          await answerWithText(ctx, deps, texts.E11);
-          return;
-        }
-        throw e;
-      }
+      await offerLink(ctx, deps, parsed.publicId, actor, { renew: parsed.code === 'nl' });
+      return;
+
+    case 'pc':
+      await checkLink(ctx, deps, parsed, viewRole);
+      return;
+
+    case 'pe': // эмуляция оплаты — только DEMO-терминал Т-Банка (SPEC §9.3), подключается в ЗАДАЧА_03
+      await answerWithText(ctx, deps, texts.E11);
       return;
 
     case 'pt':
@@ -56,6 +55,48 @@ export async function onPaymentCallback(
     default:
       await answerWithText(ctx, deps, texts.E1);
   }
+}
+
+/**
+ * Клиент выбрал оплату по ссылке (или запросил новую). Карточка получает строку со сроком и
+ * кнопки [Перейти к оплате] [🔄 Проверить оплату] — их рисует cardKeyboard по живому платежу (SPEC §9.1 п. 2).
+ */
+async function offerLink(ctx: Context, deps: Deps, publicId: string, actor: Actor, o: { renew: boolean }): Promise<void> {
+  const { ctx: pay } = await rails.createLinkPayment(publicId, actor, { renew: o.renew });
+  const fresh = await dealService.getBundle(publicId);
+  await answerWithText(
+    ctx,
+    deps,
+    texts.linkIssued({ sumKopecks: pay.payment.amountKopecks, expiresAt: pay.payment.expiresAt, provider: pay.payment.provider }),
+    linkPaymentKeyboard(publicId, pay.payment),
+  );
+  await syncCards(deps.max, fresh);
+}
+
+/**
+ * «🔄 Проверить оплату» — синхронный GET статуса у провайдера (SPEC §9.1 п. 3).
+ * Нужен и как страховка там, где вебхук не доходит (локальный запуск без HTTPS).
+ */
+async function checkLink(
+  ctx: Context,
+  deps: Deps,
+  parsed: Extract<ParsedCallback, { kind: 'deal' }>,
+  viewRole: CardRole,
+): Promise<void> {
+  const paymentId = Number(parsed.arg);
+  if (!Number.isFinite(paymentId)) {
+    await answerWithText(ctx, deps, texts.E1);
+    return;
+  }
+  const result = await rails.refreshFromProvider(paymentId);
+  if (result.transition) {
+    await publishResult(ctx, deps, result.transition, viewRole);
+    await closeIfNoReceiptNeeded(deps, result.transition.bundle);
+    return;
+  }
+  const bundle = await dealService.getBundle(parsed.publicId);
+  await answerWithText(ctx, deps, texts.paymentStillPending(result.payment.status), linkPaymentKeyboard(parsed.publicId, result.payment));
+  await syncCards(deps.max, bundle);
 }
 
 /** Клиент выбрал перевод: показываем реквизиты (P1) и кнопку «Я перевёл(а)». */

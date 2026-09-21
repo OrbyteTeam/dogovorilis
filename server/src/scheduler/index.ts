@@ -12,6 +12,7 @@ import * as dealService from '../domain/deal/service.js';
 import { isSystemAction } from '../domain/reminder/plan.js';
 import { syncCards } from '../transport/bot/cards.js';
 import { notifyForEvents } from '../transport/bot/notify.js';
+import { pollLinkPayments } from './jobs/payments-poll.js';
 
 export const TICK_MS = 30_000;
 const BATCH = 50;
@@ -45,6 +46,8 @@ export function startScheduler(opts: SchedulerOptions): { stop: () => void } {
 export async function tick(opts: SchedulerOptions, now = new Date()): Promise<void> {
   const started = Date.now();
   await runDueReminders(opts, now);
+  // Страховка на случай, когда вебхук провайдера не доходит (локальный запуск без HTTPS) — SPEC §10.3.
+  await pollLinkPayments(opts.max, now).catch((e) => log.error({ err: (e as Error).message }, 'планировщик: опрос платежей упал'));
   await inTx((c) => inputsRepo.deleteExpired(c, now));
   const ms = Date.now() - started;
   if (ms > 5000) log.warn({ ms }, 'планировщик: тик дольше 5 с');

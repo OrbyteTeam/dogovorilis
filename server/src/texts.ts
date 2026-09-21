@@ -7,7 +7,7 @@
 // БД и SDK. Так тексты проверяются юнит-тестами без окружения, а часовой пояс берётся по умолчанию
 // из domain/time.ts (APP_TIMEZONE подставляется на уровне транспорта, если когда-то понадобится).
 
-import type { CancelRule, CardRole, DealStatus, PaymentProvider, PaymentRail, ReminderKind, Role } from './types.js';
+import type { CancelRule, CardRole, DealStatus, PaymentProvider, PaymentRail, PaymentStatus, ReminderKind, Role } from './types.js';
 import { formatMoney, prepaymentPercent } from './domain/money.js';
 import { formatDateShort, formatDateTime, formatDateTimeShort, formatDayMonth } from './domain/time.js';
 
@@ -286,12 +286,14 @@ export function card(v: CardView): string {
 
 export function paymentLine(a: {
   kind: 'prepayment' | 'final';
-  state: 'awaiting' | 'link_issued' | 'claimed' | 'received';
+  state: 'awaiting' | 'link_issued' | 'link_expired' | 'link_canceled' | 'claimed' | 'received';
   sumKopecks: number;
   at: Date | null;
   rail: PaymentRail | null;
   provider: PaymentProvider | null;
   linkExpiresAt: Date | null;
+  /** cancellation_details.reason провайдера — показывается как есть (SPEC §9.2). */
+  cancelReason?: string | null;
 }): string {
   const label = a.kind === 'prepayment' ? 'Предоплата' : 'Остаток';
   const sum = formatMoney(a.sumKopecks);
@@ -303,6 +305,12 @@ export function paymentLine(a: {
       return a.linkExpiresAt
         ? `Ссылка на оплату ${sum} действует до ${formatDateTimeShort(a.linkExpiresAt)}`
         : `Ссылка на оплату ${sum} создана`;
+    case 'link_expired':
+      return `Ссылка на оплату ${sum} истекла — нужна новая`;
+    case 'link_canceled':
+      return a.cancelReason
+        ? `Оплата ${sum} отменена: ${cancelReasonText(a.cancelReason)}`
+        : `Оплата ${sum} отменена — можно создать новую ссылку`;
     case 'claimed':
       return a.at
         ? `${label} ${sum}: клиент сообщил о переводе ${formatDateTimeShort(a.at)} — ждём подтверждения исполнителя`
@@ -419,6 +427,47 @@ export function P3(a: { sumKopecks: number }): string {
   return `Исполнитель пока не видит перевод ${formatMoney(a.sumKopecks)}. Проверьте операцию и нажмите «Я перевёл(а)» ещё раз или выберите оплату по ссылке.`;
 }
 
+/**
+ * Причина отказа от провайдера — человеческим языком (CONTRACTS §2.7).
+ * Полного перечня в документации нет, поэтому незнакомый код показываем как есть,
+ * а не прячем: клиенту важно понять, звонить в банк или менять карту.
+ */
+const CANCEL_REASONS: Record<string, string> = {
+  '3d_secure_failed': 'не пройдено подтверждение 3-D Secure',
+  call_issuer: 'банк отклонил операцию — позвоните в банк',
+  card_expired: 'истёк срок действия карты',
+  fraud_suspected: 'операция отклонена как подозрительная',
+  general_decline: 'банк отклонил операцию',
+  insufficient_funds: 'недостаточно средств',
+  invalid_card_number: 'неверный номер карты',
+  invalid_csc: 'неверный код CVC',
+  issuer_unavailable: 'банк-эмитент недоступен',
+  payment_method_limit_exceeded: 'превышен лимит по карте',
+  payment_method_restricted: 'карта не поддерживает такие операции',
+  country_forbidden: 'оплата картой этой страны недоступна',
+  expired_on_confirmation: 'истёк срок оплаты по ссылке',
+  expired_on_capture: 'истёк срок подтверждения платежа',
+  canceled_by_merchant: 'платёж отменён магазином',
+};
+
+export function cancelReasonText(reason: string): string {
+  return CANCEL_REASONS[reason] ?? reason;
+}
+
+/** Ответ на «🔄 Проверить оплату», когда провайдер ещё не подтвердил платёж (SPEC §9.1 п. 3). */
+export function paymentStillPending(status: PaymentStatus): string {
+  if (status === 'expired') return 'Срок ссылки истёк. Нажмите «🆕 Новая ссылка» — создадим новую.';
+  if (status === 'canceled') return 'Платёж отменён. Нажмите «🆕 Новая ссылка», чтобы попробовать ещё раз.';
+  return 'Оплата пока не подтверждена. Если вы только что заплатили — подождите немного и нажмите ещё раз.';
+}
+
+/** Сообщение клиенту при выдаче ссылки (SPEC §9.1 п. 2, §9.2 п. 4). */
+export function linkIssued(a: { sumKopecks: number; expiresAt: Date | null; provider: PaymentProvider }): string {
+  const sum = formatMoney(a.sumKopecks);
+  const until = a.expiresAt ? ` действует до ${formatDateTimeShort(a.expiresAt)}` : '';
+  return `Ссылка на оплату ${sum}${until}.\n${testRailNotice(a.provider)}`;
+}
+
 /** Строка про тестовую среду провайдера для карточки и сообщения об оплате по ссылке (§9.2 п.4, §18). */
 export function testRailNotice(provider: PaymentProvider): string {
   if (provider === 'yookassa') return '🧪 Тестовый магазин ЮKassa: реальные деньги не списываются.';
@@ -526,9 +575,10 @@ export const BTN = {
   transferReceived: '✅ Получил(а)',
   transferNotReceived: '❌ Не вижу перевода',
   transferCancel: 'Отмена',
+  goToPayment: 'Перейти к оплате',
   checkPayment: '🔄 Проверить оплату',
   emulatePayment: '🧪 Эмулировать оплату',
-  newLink: 'Новая ссылка',
+  newLink: '🆕 Новая ссылка',
   done: '✔️ Выполнено',
   accept: '👍 Принимаю',
   remarks: '⚠️ Есть замечания',

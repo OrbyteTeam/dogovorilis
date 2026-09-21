@@ -29,6 +29,8 @@ export type Harness = {
   api(method: 'GET' | 'POST' | 'PUT', path: string, userId: number, body?: unknown): Promise<{ status: number; json: any }>;
   /** Запрос без подписи или с испорченной — для проверки 401. */
   apiRaw(method: 'GET' | 'POST' | 'PUT', path: string, headers: Record<string, string>, body?: unknown): Promise<{ status: number; json: any }>;
+  /** Доставка вебхука провайдера ровно тем же путём, каким её принимает Fastify. */
+  webhook(path: string, body: unknown, ip?: string): Promise<{ status: number; json: any }>;
   query<T extends pg.QueryResultRow>(sql: string, params?: unknown[]): Promise<T[]>;
   close(): Promise<void>;
 };
@@ -63,7 +65,14 @@ export function signInitData(userId: number, extra: Record<string, string> = {},
   return [...Object.entries(params).map(([k, v]) => `${k}=${encodeURIComponent(v)}`), `hash=${hash}`].join('&');
 }
 
-export async function createHarness(databaseUrl: string, opts?: { keepData?: boolean }): Promise<Harness> {
+export type HarnessOptions = {
+  keepData?: boolean;
+  /** 'yookassa' включает рейл «ссылка»; клиент провайдера при этом обязательно подменяется (без сети). */
+  paymentProvider?: 'none' | 'yookassa' | 'tbank';
+};
+
+export async function createHarness(databaseUrl: string, opts?: HarnessOptions): Promise<Harness> {
+  const provider = opts?.paymentProvider ?? 'none';
   const config = setConfig(
     loadConfig({
       NODE_ENV: 'test',
@@ -72,7 +81,9 @@ export async function createHarness(databaseUrl: string, opts?: { keepData?: boo
       MAX_BOT_USERNAME: BOT_INFO.username,
       PUBLIC_BASE_URL: 'http://localhost:8080',
       DATABASE_URL: databaseUrl,
-      PAYMENT_PROVIDER: 'none',
+      PAYMENT_PROVIDER: provider,
+      YOOKASSA_SHOP_ID: provider === 'yookassa' ? 'test-shop-id' : '',
+      YOOKASSA_SECRET_KEY: provider === 'yookassa' ? 'test_secret_key_not_real' : '',
       DEMO_MODE: 'true',
       APP_TIMEZONE: 'Europe/Moscow',
       PORT: '8080',
@@ -174,6 +185,17 @@ export async function createHarness(databaseUrl: string, opts?: { keepData?: boo
         url: path,
         headers: { 'content-type': 'application/json', ...headers },
         payload: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return { status: res.statusCode, json: safeJson(res.body) };
+    },
+
+    async webhook(path, body, ip) {
+      const res = await http.inject({
+        method: 'POST',
+        url: path,
+        headers: { 'content-type': 'application/json', ...(ip ? { 'x-forwarded-for': ip } : {}) },
+        remoteAddress: ip ?? '127.0.0.1',
+        payload: JSON.stringify(body),
       });
       return { status: res.statusCode, json: safeJson(res.body) };
     },

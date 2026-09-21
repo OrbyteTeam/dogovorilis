@@ -5,7 +5,7 @@ import { Keyboard } from '@maxhub/max-bot-api';
 import type { Button } from '@maxhub/max-bot-api/types';
 import { BTN } from '../../texts.js';
 import type { AttachmentRequest } from '../../integrations/max/gateway.js';
-import type { CardRole, DealBundle, PaymentKind } from '../../types.js';
+import type { CardRole, DealBundle, Payment, PaymentKind } from '../../types.js';
 import { livePayment, remaining } from '../../types.js';
 import { cb } from './callbacks.js';
 
@@ -41,9 +41,11 @@ export type CardKeyboardOptions = {
   demoMode: boolean;
   /** ссылка вида https://max.ru/<bot>?start=d_<id> */
   dealLink: string;
-  /** рейл «ссылка» показывается всегда, но в ЗАДАЧА_01 отвечает E11 */
+  /** доступность рейла «ссылка» по SPEC §9.1 (провайдер подключён, рейл включён, сумма ≥ минимума) */
   linkRailVisible: boolean;
   transferRailVisible: boolean;
+  /** предыдущая ссылка истекла или отменена — кнопка называется «🆕 Новая ссылка» и шлёт `nl` (§9.1, §14 п. 7) */
+  linkRailRetry: boolean;
 };
 
 /**
@@ -107,10 +109,17 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
       return null; // ждём исполнителя — кнопок нет
     case 'awaiting_prepayment':
     case 'awaiting_payment': {
-      const pay: Row = [];
-      if (o.linkRailVisible) pay.push(callback(BTN.payByLink, cb('pl', id)));
-      if (o.transferRailVisible) pay.push(callback(BTN.payByTransfer, cb('pt', id)));
-      if (pay.length) rows.push(pay);
+      // Живая ссылка вытесняет выбор рейла: пока она действует, клиенту нужны «Перейти» и «Проверить».
+      const live = liveFor(bundle, status === 'awaiting_prepayment' ? 'prepayment' : 'final');
+      if (live?.rail === 'link' && live.status === 'pending' && live.confirmationUrl) {
+        rows.push([link(BTN.goToPayment, live.confirmationUrl)]);
+        rows.push([callback(BTN.checkPayment, cb('pc', id, undefined, live.id))]);
+      } else {
+        const pay: Row = [];
+        if (o.linkRailVisible) pay.push(callback(o.linkRailRetry ? BTN.newLink : BTN.payByLink, cb(o.linkRailRetry ? 'nl' : 'pl', id)));
+        if (o.transferRailVisible) pay.push(callback(BTN.payByTransfer, cb('pt', id)));
+        if (pay.length) rows.push(pay);
+      }
       if (status === 'awaiting_prepayment') rows.push([callback(BTN.cancelDeal, cb('cn', id))]);
       break;
     }
@@ -125,6 +134,21 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
       return null; // ждём исполнителя
   }
   return keyboard(rows);
+}
+
+/**
+ * Ссылочный платёж (SPEC §9.1 п. 2): живая ссылка — [Перейти к оплате] [🔄 Проверить оплату];
+ * истёкшая или отменённая — [🆕 Новая ссылка]. Та же клавиатура уходит и в ответе на нажатие,
+ * и в карточке, чтобы кнопки нигде не разошлись.
+ */
+export function linkPaymentKeyboard(publicId: string, payment: Payment): AttachmentRequest {
+  if (payment.status === 'pending' && payment.confirmationUrl) {
+    return keyboard([
+      [link(BTN.goToPayment, payment.confirmationUrl)],
+      [callback(BTN.checkPayment, cb('pc', publicId, undefined, payment.id))],
+    ]);
+  }
+  return keyboard([[callback(BTN.newLink, cb('nl', publicId))]]);
 }
 
 /** Реквизиты для перевода: подтверждение факта перевода клиентом (SPEC §9.1 п. 2). */

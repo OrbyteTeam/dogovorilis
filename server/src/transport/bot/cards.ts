@@ -7,19 +7,45 @@ import type { MaxGateway } from '../../integrations/max/gateway.js';
 import { log } from '../../logger.js';
 import * as texts from '../../texts.js';
 import { livePayment, paidTotal, remaining, type CardMessage, type CardRole, type DealBundle } from '../../types.js';
+import { linkRailAvailable } from '../../domain/payment/rails.js';
 import { receiptDeadline } from '../../domain/time.js';
 import { taxModeOf } from '../../domain/deal/service.js';
 import { cardKeyboard, pendingKind } from './keyboards.js';
 
-/** Доступность рейлов в карточке клиента (SPEC §9.1). В ЗАДАЧА_01 «ссылка» видна, но отвечает E11. */
-export function railVisibility(bundle: DealBundle): { linkRailVisible: boolean; transferRailVisible: boolean } {
+/**
+ * Доступность рейлов в карточке клиента (SPEC §9.1).
+ *
+ * Кнопка «Оплатить по ссылке» остаётся видимой и при `PAYMENT_PROVIDER=none` — тогда она честно
+ * отвечает E11 «Оплата по ссылке не подключена». Так решено в ЗАДАЧА_01 и оставлено: жюри должно
+ * видеть, что рейл предусмотрен и помечен как неподключённый (расхождение с §9.1 — в ДОПУЩЕНИЯ).
+ */
+export function railVisibility(bundle: DealBundle): {
+  linkRailVisible: boolean;
+  transferRailVisible: boolean;
+  linkRailRetry: boolean;
+} {
   const profile = bundle.sellerProfile;
+  const kind = pendingKind(bundle);
+  const sum = kind === 'prepayment' ? bundle.version.prepaymentKopecks : remaining(bundle.version);
+  const providerReady = linkRailAvailable(profile, sum);
+  const notConnected = cfg().PAYMENT_PROVIDER === 'none';
+
   return {
-    // Кнопка показывается всегда: по ЗАДАЧА_01 она должна существовать и отвечать E11,
-    // даже когда PAYMENT_PROVIDER=none (расхождение со SPEC §9.1 отмечено в docs/ДОПУЩЕНИЯ.md).
-    linkRailVisible: profile?.linkEnabled !== false,
+    linkRailVisible: profile?.linkEnabled !== false && (providerReady || notConnected),
     transferRailVisible: profile?.transferEnabled !== false,
+    linkRailRetry: providerReady && kind !== null && lastLinkAttempt(bundle, kind) !== null,
   };
+}
+
+/** Последняя ссылка этого вида, закончившаяся ничем: истекла или отменена провайдером (§14 п. 7). */
+function lastLinkAttempt(bundle: DealBundle, kind: 'prepayment' | 'final') {
+  if (livePayment(bundle.payments, kind)) return null; // есть живой платёж — предлагать «новую» нечего
+  return (
+    bundle.payments
+      .filter((p) => p.kind === kind && p.rail === 'link' && (p.status === 'expired' || p.status === 'canceled'))
+      .sort((a, b) => a.id - b.id)
+      .at(-1) ?? null
+  );
 }
 
 function paymentLineFor(bundle: DealBundle): string | null {
@@ -28,9 +54,25 @@ function paymentLineFor(bundle: DealBundle): string | null {
     const live = livePayment(bundle.payments, kind);
     const sum = kind === 'prepayment' ? bundle.version.prepaymentKopecks : remaining(bundle.version);
     if (!live || live.status === 'pending') {
-      return live?.rail === 'link'
-        ? texts.paymentLine({ kind, state: 'link_issued', sumKopecks: sum, at: null, rail: 'link', provider: live.provider, linkExpiresAt: live.expiresAt })
-        : texts.paymentLine({ kind, state: 'awaiting', sumKopecks: sum, at: null, rail: null, provider: null, linkExpiresAt: null });
+      if (live?.rail === 'link') {
+        return texts.paymentLine({ kind, state: 'link_issued', sumKopecks: sum, at: null, rail: 'link', provider: live.provider, linkExpiresAt: live.expiresAt });
+      }
+      // Живого платежа нет. Если предыдущая ссылка истекла или её отменил провайдер — говорим об этом
+      // прямо в карточке, иначе клиент не поймёт, почему кнопка называется «Новая ссылка» (§9.2, §14 п. 7).
+      const failed = !live ? lastLinkAttempt(bundle, kind) : null;
+      if (failed) {
+        return texts.paymentLine({
+          kind,
+          state: failed.status === 'expired' ? 'link_expired' : 'link_canceled',
+          sumKopecks: sum,
+          at: failed.canceledAt,
+          rail: 'link',
+          provider: failed.provider,
+          linkExpiresAt: failed.expiresAt,
+          cancelReason: failed.cancellationReason,
+        });
+      }
+      return texts.paymentLine({ kind, state: 'awaiting', sumKopecks: sum, at: null, rail: null, provider: null, linkExpiresAt: null });
     }
     if (live.status === 'claimed') {
       return texts.paymentLine({ kind, state: 'claimed', sumKopecks: live.amountKopecks, at: live.claimedAt, rail: live.rail, provider: live.provider, linkExpiresAt: null });

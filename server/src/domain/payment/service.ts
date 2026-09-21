@@ -1,6 +1,6 @@
 // Платежи. Рейл «перевод» — настоящий (стороны подтверждают факт перевода, SPEC §9.1 «[модель]»).
-// Рейл «ссылка» в ЗАДАЧА_01 — заглушка: createLinkPayment бросает RailUnavailable, транспорт отвечает E11.
-// Провайдеры (ЮKassa, Т-Банк) подключаются в ЗАДАЧА_02 — здесь для них уже есть место и типы.
+// Рейл «ссылка» — в соседнем rails.ts (ЮKassa, SPEC §9.2). Общее для обоих — здесь:
+// expectedPayment (какой платёж уместен в текущем статусе) и PaymentContext.
 import { ForbiddenError, InvalidTransition, NotFoundError, RailUnavailable } from '../../errors.js';
 import { inTx, type DbClient } from '../../db/pool.js';
 import * as dealsRepo from '../../db/repos/deals.js';
@@ -28,10 +28,8 @@ export function expectedPayment(deal: Deal, version: DealVersion): { kind: Payme
   return null;
 }
 
-/** Рейл «ссылка»: провайдер не подключён — в ЗАДАЧА_01 это ожидаемый отказ, а не сбой. */
-export async function createLinkPayment(_publicId: string, _actor: Actor): Promise<never> {
-  throw new RailUnavailable('link', 'провайдер оплаты по ссылке не подключён (PAYMENT_PROVIDER=none)');
-}
+// Рейл «ссылка» живёт в соседнем модуле rails.ts: там же клиент провайдера и applyProviderStatus.
+// Здесь он не переэкспортируется, чтобы не появилось кольцо импортов (rails → service за expectedPayment).
 
 /**
  * Клиент выбрал перевод по реквизитам. Идемпотентно: если живой платёж этого вида уже есть переводом —

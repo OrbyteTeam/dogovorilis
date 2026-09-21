@@ -173,6 +173,8 @@ export type Payment = {
   providerStatus: string | null;
   confirmationUrl: string | null;
   qrPayload: string | null;
+  /** cancellation_details.reason провайдера; человеческий текст — texts.cancelReasonText (SPEC §9.2). */
+  cancellationReason: string | null;
   claimedAt: Date | null;
   succeededAt: Date | null;
   canceledAt: Date | null;
