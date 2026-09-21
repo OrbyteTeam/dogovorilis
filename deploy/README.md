@@ -195,7 +195,59 @@ scp -i ~/.ssh/dogovorilis_vps root@<IP>:/opt/backups/dogovorilis-*.sql.gz ./
 
 ---
 
-## 8. Чего нельзя делать
+## 8. Панель через API (Timeweb Cloud)
+
+В панель хостинга ходить не нужно: сервер создан и администрируется через официальный API.
+
+**Токен** лежит в `../.env.timeweb` (вне репозитория) — это JWT, начинается с `eyJ`.
+Читать только так, чтобы он не попал в историю команд и в логи:
+
+```bash
+set -a; . ../.env.timeweb; set +a
+tw() { curl -sS --max-time 30 -H "Authorization: Bearer $TIMEWEB_TOKEN" -H "Accept: application/json" "https://api.timeweb.cloud$1"; }
+```
+Никогда не запускать `curl -v` с этим заголовком и не вставлять токен в отчёты, `VPS.md` и коммиты.
+`npm run check:secrets` ловит и JWT, и строку `TIMEWEB_TOKEN=` — но проще не давать ему повода.
+
+### Что смотреть
+
+```bash
+tw /api/v1/account/finances            # баланс, monthly_fee, hours_left — сколько осталось жить
+tw /api/v1/servers                     # список серверов: status, IP, пресет
+tw /api/v1/servers/<id>                # один сервер целиком, включая networks
+tw /api/v1/floating-ips                # публичные IP и к чему привязаны
+tw /api/v1/domains                     # домены аккаунта
+tw /api/v2/domains/<fqdn>/dns-records  # DNS-записи
+```
+
+**Баланс — это срок жизни сервера.** Timeweb списывает почасово; когда деньги кончатся, сервер выключат,
+и это будет ноль за работоспособность. Смотреть `hours_left` в `account/finances` хотя бы раз в пару дней.
+
+### Что можно менять
+
+```bash
+# Перезагрузка (модель тела — сверить в docs SDK перед вызовом)
+tw_post() { curl -sS -X POST -H "Authorization: Bearer $TIMEWEB_TOKEN" -H "Content-Type: application/json" \
+  -d "$2" "https://api.timeweb.cloud$1"; }
+# tw_post /api/v1/servers/<id>/action '{"action":"reboot"}'
+```
+Из `action` допустимы только `reboot`, `start`, `shutdown`. Перезагрузка сервера — почти всегда не то,
+что нужно: сначала `docker compose restart app`, это быстрее и безопаснее.
+
+### Что запрещено без прямого слова владельца аккаунта
+
+- любой `DELETE` — сервера, IP, домена, DNS-записи, SSH-ключа;
+- переустановка ОС, смена тарифа, изменение `bandwidth`;
+- создание **второго** сервера или второго публичного IP;
+- включение платных опций: бэкапы Timeweb, DDoS-защита, сетевые диски, локация Москва (`msk-1` вдвое дороже);
+- любые действия с другими ресурсами аккаунта.
+
+Каждое платное действие — сначала точная цена в чат, потом подтверждение, потом вызов. Одно подтверждение —
+одно действие.
+
+---
+
+## 9. Чего нельзя делать
 
 - **Запускать второй экземпляр с тем же токеном.** Локальный `docker compose up` с `MAX_MODE=polling`
   убьёт webhook-подписку сервера, и бот в MAX замолчит. Для локальной работы над кодом —
