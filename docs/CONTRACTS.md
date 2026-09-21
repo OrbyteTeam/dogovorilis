@@ -542,6 +542,14 @@ bot.use(async (ctx, next) => {
     видимости: парсер содержимого, который не трогает поток (`done(null, undefined)`), и `reply.hijack()`.
     Разбор JSON для `/api` и `/webhooks/yookassa` остаётся обычным, потому что парсер в Fastify инкапсулирован.
 
+11. **`?access_token=` в query больше не работает — только заголовок `Authorization`.** Проверено вживую
+    21.09.2026 на `platform-api2.max.ru`: `GET /subscriptions?access_token=<токен>` отвечает
+    `401 {"code":"verify.token","message":"Query parameter access_token is deprecated, use Authorization header"}`,
+    а `GET /me?access_token=<токен>` возвращает пустой объект вместо ошибки. С заголовком
+    `Authorization: <токен>` (без префикса `Bearer`) оба метода работают. На код проекта это не влияет —
+    SDK всегда слал заголовок, — но ручная диагностика по документации ломается, поэтому зафиксировано здесь
+    и в `deploy/README.md` §5.
+
 ### 1.15. Не удалось проверить (раздел 1)
 
 - Максимальная длина `payload` callback-кнопки и `text` кнопки — в документации не описаны.

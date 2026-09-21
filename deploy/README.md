@@ -119,7 +119,10 @@ ssh -i ~/.ssh/dogovorilis_vps root@<IP> 'cat /opt/dogovorilis/.deployed-commit'
    с тем же токеном в режиме `polling` — SDK при старте polling **удаляет все webhook-подписки**
    (CONTRACTS §1.3). Проверка:
    ```bash
-   curl -s "https://platform-api2.max.ru/subscriptions?access_token=<MAX_BOT_TOKEN>"
+   # Токен идёт ЗАГОЛОВКОМ: query-параметр ?access_token= MAX больше не принимает
+   # («Query parameter access_token is deprecated, use Authorization header», HTTP 401).
+   TOKEN=$(grep '^MAX_BOT_TOKEN=' /opt/dogovorilis/.env | cut -d= -f2-)
+   curl -s -H "Authorization: $TOKEN" https://platform-api2.max.ru/subscriptions
    ```
    В ответе должен быть наш `https://<домен>/webhooks/max`. Нет — остановите локальный бот
    и перезапустите сервис: `docker compose restart app` (подписка ставится при старте).
