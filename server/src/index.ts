@@ -7,6 +7,7 @@ import { migrate } from './db/migrate.js';
 import { initLogger, log } from './logger.js';
 import { ALLOWED_UPDATES, createBot, explainStartupError } from './transport/bot/index.js';
 import { createHttpServer } from './transport/http/server.js';
+import { MAX_WEBHOOK_PATH, registerMaxWebhookRoute } from './transport/http/routes/max-webhook.js';
 import { startScheduler } from './scheduler/index.js';
 
 const SHUTDOWN_GRACE_MS = 10_000;
@@ -57,13 +58,13 @@ async function main(): Promise<void> {
     // Обработчик webhook встраиваем в наш Fastify: startWebhook поднял бы второй http-сервер (CONTRACTS §1.3).
     const handler = await runtime.bot.createWebhook({
       domain: new URL(config.PUBLIC_BASE_URL).host,
-      path: '/webhooks/max',
+      path: MAX_WEBHOOK_PATH,
       secret: config.MAX_WEBHOOK_SECRET,
       allowedUpdates: ALLOWED_UPDATES,
     });
-    app.post('/webhooks/max', (req, reply) => handler(req.raw, reply.raw));
+    await app.register(registerMaxWebhookRoute(handler));
     botReady = true;
-    log.info({ path: '/webhooks/max' }, 'бот: webhook зарегистрирован');
+    log.info({ path: MAX_WEBHOOK_PATH }, 'бот: webhook зарегистрирован');
   }
 
   await app.listen({ port: config.PORT, host: '0.0.0.0' });

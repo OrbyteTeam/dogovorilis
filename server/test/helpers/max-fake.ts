@@ -15,9 +15,13 @@ export type SentMessage = {
   attachmentTypes: string[];
 };
 
+export type Subscription = { url: string; secret?: string; update_types?: string[] };
+
 export type MaxFake = {
   fetch: typeof globalThis.fetch;
   sent: SentMessage[];
+  /** подписки, зарегистрированные через POST /subscriptions (режим webhook, CONTRACTS §1.3) */
+  subscriptions: Subscription[];
   /** сообщения, отправленные в конкретный чат */
   inChat(chatId: number): SentMessage[];
   /** последнее сообщение с заданным mid (после правки текст обновляется) */
@@ -40,6 +44,7 @@ const BOT_INFO = {
 
 export async function createMaxFake(): Promise<MaxFake> {
   const sent: SentMessage[] = [];
+  const subscriptions: Subscription[] = [];
   const byMidMap = new Map<string, SentMessage>();
   let midCounter = 0;
   let uploads = 0;
@@ -81,7 +86,20 @@ export async function createMaxFake(): Promise<MaxFake> {
 
     if (url.pathname === '/me' && method === 'GET') return json(BOT_INFO);
     if (url.pathname === '/me/commands') return json({ commands: body?.commands ?? [] });
-    if (url.pathname === '/subscriptions') return json(method === 'GET' ? [] : { success: true });
+    if (url.pathname === '/subscriptions') {
+      if (method === 'POST') {
+        subscriptions.push(body as Subscription);
+        return json({ success: true });
+      }
+      if (method === 'DELETE') {
+        const target = url.searchParams.get('url');
+        const i = subscriptions.findIndex((s) => s.url === target);
+        if (i >= 0) subscriptions.splice(i, 1);
+        return json({ success: true });
+      }
+      // GET /subscriptions отдаёт то, что зарегистрировано: на этом SDK строит «удалить все остальные».
+      return json({ subscriptions });
+    }
 
     if (url.pathname === '/messages' && method === 'POST') {
       const mid = `mid-${++midCounter}`;
@@ -133,6 +151,7 @@ export async function createMaxFake(): Promise<MaxFake> {
   return {
     fetch: fetchImpl,
     sent,
+    subscriptions,
     inChat: (chatId) => sent.filter((m) => m.chatId === chatId),
     byMid: (mid) => byMidMap.get(mid),
     texts: () => sent.map((m) => m.text),
