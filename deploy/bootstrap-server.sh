@@ -51,6 +51,36 @@ ufw allow 443/tcp >/dev/null
 ufw --force enable >/dev/null
 ufw status verbose | sed 's/^/    /'
 
+say "SSH: только по ключу"
+# Timeweb присылает пароль root на почту — при создании сервера через API отключить его нельзя
+# (тумблер есть только в панели). Пароль root, доступный из интернета, — это дыра, которую надо закрыть.
+#
+# Порядок важен: закрываем пароль ТОЛЬКО убедившись, что вход по ключу работает, иначе запрём себя.
+# Признак: этот скрипт сейчас выполняется по SSH, и подключение аутентифицировано публичным ключом.
+SSHD_DROPIN=/etc/ssh/sshd_config.d/99-dogovorilis.conf
+if [[ -z "${SSH_CONNECTION:-}" ]]; then
+  echo "    пропускаю: скрипт запущен не по SSH, проверить вход по ключу нечем"
+elif [[ ! -s /root/.ssh/authorized_keys ]]; then
+  echo "    ПРОПУСКАЮ: /root/.ssh/authorized_keys пуст — отключать пароль нельзя" >&2
+else
+  mkdir -p /etc/ssh/sshd_config.d
+  cat >"$SSHD_DROPIN" <<'SSHD'
+# Управляется deploy/bootstrap-server.sh. Вход только по ключу: пароль root от Timeweb приходит
+# на почту и подбирается ботами круглосуточно.
+PasswordAuthentication no
+PermitRootLogin prohibit-password
+KbdInteractiveAuthentication no
+SSHD
+  # Битый конфиг оставил бы сервер без SSH вообще — проверяем до применения и откатываем при ошибке.
+  if sshd -t 2>/dev/null; then
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd
+    echo "    вход по паролю отключён (ключей в authorized_keys: $(grep -c '^ssh-' /root/.ssh/authorized_keys))"
+  else
+    rm -f "$SSHD_DROPIN"
+    echo "    ОШИБКА: sshd -t отверг конфигурацию, настройки не применены" >&2
+  fi
+fi
+
 say "Каталоги"
 mkdir -p "$APP_DIR" "$BACKUP_DIR"
 chmod 700 "$APP_DIR" "$BACKUP_DIR" # в APP_DIR лежит .env с токеном бота и ключами ЮKassa

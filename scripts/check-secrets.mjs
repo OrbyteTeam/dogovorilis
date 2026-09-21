@@ -9,8 +9,11 @@ const ALWAYS = [
   { name: 'Приватный ключ', re: /-----BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----/ },
   {
     name: 'Присвоение секрета в env',
-    re: /^\+\s*(MAX_BOT_TOKEN|YOOKASSA_SECRET_KEY|YOOKASSA_SHOP_ID|TBANK_TERMINAL_PASSWORD|MAX_WEBHOOK_SECRET)\s*=\s*\S+/,
+    re: /^\+\s*(MAX_BOT_TOKEN|YOOKASSA_SECRET_KEY|YOOKASSA_SHOP_ID|TBANK_TERMINAL_PASSWORD|MAX_WEBHOOK_SECRET|TIMEWEB_TOKEN|GH_TOKEN|GITHUB_TOKEN)\s*=\s*\S+/,
   },
+  // Токен API Timeweb Cloud — JWT: три части через точку, первая всегда начинается с eyJ
+  // (base64url от `{"`). Ловится в любом файле, включая сертификаты: в .pem JWT делать нечего.
+  { name: 'JWT (токен Timeweb и подобные)', re: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./ },
 ];
 
 /** Правила для кода и конфигов (не для публичных сертификатов). */
