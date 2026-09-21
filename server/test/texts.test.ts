@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { CancelRule, CardRole, DealStatus, ReminderKind } from '../src/types.js';
 import { formatDateTime, formatDayMonth, formatDateTimeShort } from '../src/domain/time.js';
 import { formatMoney } from '../src/domain/money.js';
+import { receiptFileName } from '../src/domain/receipt/pdf.js';
 import {
   ALREADY_DONE,
   ASK_CANCEL_REASON,
@@ -633,5 +634,25 @@ describe('меню, ошибки, кнопки', () => {
     expect(BTN.accept).toBe('👍 Принимаю');
     expect(BTN.transferDone).toBe('✅ Я перевёл(а)');
     expect(BTN.transferReceived).toBe('✅ Получил(а)');
+  });
+});
+
+/**
+ * Имя файла квитанции — это то, что видит получатель в MAX, и одновременно мина:
+ * SDK 0.3.1 кладёт его в `Content-Disposition` без кодирования по RFC 5987, поэтому любой
+ * не-ASCII символ роняет ЗАГРУЗКУ ЦЕЛИКОМ («Invalid character in header content») — квитанция
+ * не уходит ни одной из сторон. Поймано вживую 21.09.2026 при попытке назвать файл по-русски.
+ * Тест держит инвариант: если кто-то снова захочет «Квитанция_…», он узнает об этом здесь,
+ * а не в день проверки.
+ */
+describe('имя файла квитанции', () => {
+  it('состоит только из ASCII — иначе загрузка в MAX падает', () => {
+    const name = receiptFileName('AbC123xyZ0');
+    // eslint-disable-next-line no-control-regex
+    expect(/^[\x20-\x7E]+$/.test(name)).toBe(true);
+  });
+
+  it('содержит public_id и расширение .pdf, без таймстампов и мусора', () => {
+    expect(receiptFileName('AbC123xyZ0')).toBe('Kvitanciya-AbC123xyZ0.pdf');
   });
 });

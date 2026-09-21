@@ -115,9 +115,17 @@ function railText(rail: PaymentRail, provider: PaymentProvider): string {
   return 'оплата по ссылке (тестовая среда)';
 }
 
-/** Имя файла для вложения: «Квитанция_<publicId>.pdf» (SPEC §11). */
+/**
+ * Имя файла квитанции — именно оно показывается получателю в MAX (CONTRACTS §1.8: клиент берёт
+ * базовое имя из пути загружаемого файла).
+ *
+ * **Только ASCII.** SDK 0.3.1 подставляет имя в заголовок `Content-Disposition` без кодирования
+ * по RFC 5987, поэтому кириллица роняет загрузку целиком: `Invalid character in header content`,
+ * квитанция не уходит вообще (проверено 21.09.2026, CONTRACTS §1.14 п. 11). Отсюда транслит,
+ * а не «Квитанция_…». Инвариант закреплён тестом в `server/test/texts.test.ts`.
+ */
 export function receiptFileName(publicId: string): string {
-  return `Квитанция_${publicId}.pdf`;
+  return `Kvitanciya-${publicId}.pdf`;
 }
 
 // ——— шрифты ———

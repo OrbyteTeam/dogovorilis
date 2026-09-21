@@ -1,5 +1,5 @@
 // Сборка и отправка квитанции PDF (SPEC §11). Рендер — domain/receipt/pdf.ts; здесь только данные и доставка.
-import { unlink } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { cfg } from '../../config.js';
@@ -78,7 +78,13 @@ export function buildReceiptData(bundle: DealBundle, now = new Date()): ReceiptD
  */
 export async function renderAndSendReceipt(max: MaxGateway, bundle: DealBundle): Promise<void> {
   const fileName = receiptFileName(bundle.deal.publicId);
-  const outPath = path.join(tmpdir(), `dogovorilis-${bundle.deal.publicId}-${Date.now()}.pdf`);
+  // Получателю MAX показывает БАЗОВОЕ ИМЯ ФАЙЛА ПО ПУТИ, который мы загрузили (CONTRACTS §1.8) —
+  // а не какое-то имя из метаданных. Поэтому временный файл называем ровно так, как должен
+  // увидеть пользователь, а уникальность обеспечиваем отдельным каталогом, а не мусором в имени.
+  // Проверено вживую 21.09.2026: раньше в чат приходило «dogovorilis-<id>-<таймстамп>.pdf»,
+  // потому что имя собиралось из пути, а receiptFileName() уходил только в лог.
+  const outDir = await mkdtemp(path.join(tmpdir(), 'dogovorilis-receipt-'));
+  const outPath = path.join(outDir, fileName);
   try {
     await renderReceiptPdf(buildReceiptData(bundle), outPath);
     const attachment = await max.uploadFile(outPath);
@@ -103,6 +109,6 @@ export async function renderAndSendReceipt(max: MaxGateway, bundle: DealBundle):
     log.error({ deal: bundle.deal.publicId, err: (e as Error).message }, 'квитанция не сформирована');
     throw e;
   } finally {
-    await unlink(outPath).catch(() => undefined);
+    await rm(outDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
