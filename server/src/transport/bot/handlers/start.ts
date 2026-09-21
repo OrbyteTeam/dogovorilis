@@ -75,9 +75,15 @@ async function joinByLink(
   const deal = bundle.deal;
 
   // 2. Исполнитель открыл свою же ссылку — показываем его карточку (а в демо ещё и клиентскую).
+  // Если карточки уже есть, ensureCard правит их НА МЕСТЕ — в чате не появляется ничего нового,
+  // и человек, нажавший ссылку, остаётся без ответа. Поэтому в этом случае отвечаем строкой S4
+  // (найдено живым прогоном 21.09: проверяющий открывает ссылку сам, а не шлёт её второму аккаунту).
   if (deal.sellerUserId === userId) {
-    await ensureCard(deps, bundle, 'seller', userId, chatId);
-    if (deal.demo) await ensureCard(deps, bundle, 'client_demo', userId, chatId);
+    const sentSeller = await ensureCard(deps, bundle, 'seller', userId, chatId);
+    const sentClient = deal.demo ? await ensureCard(deps, bundle, 'client_demo', userId, chatId) : false;
+    if (!sentSeller && !sentClient && chatId) {
+      await deps.max.send({ chatId }, texts.S4(publicId, deal.demo));
+    }
     return;
   }
 

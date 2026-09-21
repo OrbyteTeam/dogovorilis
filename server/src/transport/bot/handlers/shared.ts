@@ -124,20 +124,32 @@ async function isCardMid(dealId: number, mid: string): Promise<boolean> {
   return cards.some((card) => card.mid === mid);
 }
 
-/** Отправить карточку роли, если её ещё нет; иначе обновить существующую. */
-export async function ensureCard(deps: Deps, bundle: DealBundle, role: CardRole, userId: number, chatId: number | null): Promise<void> {
+/**
+ * Отправить карточку роли, если её ещё нет; иначе обновить существующую.
+ * Возвращает `true`, если в чате появилось НОВОЕ сообщение: правка на месте пользователю
+ * не видна, и вызывающий должен сам решить, чем отчитаться о нажатии.
+ */
+export async function ensureCard(
+  deps: Deps,
+  bundle: DealBundle,
+  role: CardRole,
+  userId: number,
+  chatId: number | null,
+): Promise<boolean> {
   const cards = await inTx((c) => cardsRepo.byDeal(c, bundle.deal.id));
   const existing = cards.find((card) => card.role === role && card.userId === userId);
   if (!existing) {
-    await sendCard(deps.max, bundle, role, { userId, chatId });
-    return;
+    const mid = await sendCard(deps.max, bundle, role, { userId, chatId });
+    return mid !== null;
   }
   const { text, attachments } = renderCard(bundle, role);
   const ok = await deps.max.edit(existing.mid, text, attachments as AttachmentRequest[]);
   if (!ok && chatId) {
     const mid = await deps.max.send({ chatId }, text, attachments as AttachmentRequest[]);
     await inTx((c) => cardsRepo.updateMid(c, existing.id, mid));
+    return true;
   }
+  return false;
 }
 
 /** Ошибка → текст для пользователя (SPEC §6.7). Любая неизвестная ошибка — E10, процесс не падает. */
