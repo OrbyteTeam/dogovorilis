@@ -16,6 +16,37 @@ export function keyboard(rows: Row[]): AttachmentRequest {
   return Keyboard.inlineKeyboard(clean) as unknown as AttachmentRequest;
 }
 
+/**
+ * Ширина подписи «на глаз»: латиница и кириллица — один знак, эмодзи — примерно два.
+ * Служебные невидимые символы (вариационный селектор, склейка) не занимают места.
+ */
+const INVISIBLE = /[\uFE0F\u200D]/g;
+
+export function labelWidth(text: string): number {
+  let width = 0;
+  for (const ch of text.replace(INVISIBLE, '')) {
+    const code = ch.codePointAt(0) ?? 0;
+    width += code > 0x2000 ? 2 : 1;
+  }
+  return width;
+}
+
+/**
+ * Сколько помещается в кнопку, когда в ряду их две. Клиент MAX не переносит подпись,
+ * а обрезает многоточием: «💳 Оплатить по ссы…». Проверено вживую 21.09.2026 на телефоне
+ * и на web.max.ru — обрезается в обоих.
+ */
+export const PAIR_LABEL_WIDTH = 16;
+
+/**
+ * Два действия рядом — только если обе подписи короткие; иначе каждое занимает свой ряд.
+ * Ряд целиком всегда влезает, поэтому длинную подпись достаточно оставить одну.
+ */
+export function pair(a: Button, b: Button): Row[] {
+  const fits = (btn: Button) => labelWidth((btn as { text?: string }).text ?? '') <= PAIR_LABEL_WIDTH;
+  return fits(a) && fits(b) ? [[a, b]] : [[a], [b]];
+}
+
 const callback = (text: string, payload: string) => Keyboard.button.callback(text, payload);
 const link = (text: string, url: string) => Keyboard.button.link(text, url);
 const clipboard = (text: string, payload: string) => Keyboard.button.clipboard(text, payload);
@@ -24,8 +55,8 @@ const openApp = (text: string, bot: string, payload?: string) => Keyboard.button
 /** Главное меню (SPEC §6.2). Мини-приложение открывается кнопками open_app. */
 export function menuKeyboard(a: { botUsername: string; demoMode: boolean }): AttachmentRequest {
   const rows: Row[] = [
-    [openApp(BTN.newDeal, a.botUsername, 'new'), openApp(BTN.myDeals, a.botUsername, 'deals')],
-    [openApp(BTN.settings, a.botUsername, 'settings'), callback(BTN.help, 'help')],
+    ...pair(openApp(BTN.newDeal, a.botUsername, 'new'), openApp(BTN.myDeals, a.botUsername, 'deals')),
+    ...pair(openApp(BTN.settings, a.botUsername, 'settings'), callback(BTN.help, 'help')),
   ];
   if (a.demoMode) rows.push([callback(BTN.tryDemo, 'dm:new')]);
   return keyboard(rows);
@@ -66,15 +97,15 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
     switch (status) {
       case 'awaiting_confirmation':
         if (!bundle.deal.clientUserId) {
-          rows.push([link(BTN.sendToMax, shareUrl(o.dealLink)), clipboard(BTN.copyLink, o.dealLink)]);
+          rows.push(...pair(link(BTN.sendToMax, shareUrl(o.dealLink)), clipboard(BTN.copyLink, o.dealLink)));
           rows.push([openApp(BTN.editTerms, o.botUsername, `d_${id}`)]);
           if (o.demoMode) rows.push([callback(BTN.openAsClient, cb('dm', id))]);
         } else {
-          rows.push([openApp(BTN.editTerms, o.botUsername, `d_${id}`), callback(BTN.remindClient, cb('rs', id))]);
+          rows.push(...pair(openApp(BTN.editTerms, o.botUsername, `d_${id}`), callback(BTN.remindClient, cb('rs', id))));
         }
         break;
       case 'changes_requested':
-        rows.push([openApp(BTN.editTerms, o.botUsername, `d_${id}`), callback(BTN.keepAsIs, cb('ka', id))]);
+        rows.push(...pair(openApp(BTN.editTerms, o.botUsername, `d_${id}`), callback(BTN.keepAsIs, cb('ka', id))));
         break;
       case 'awaiting_prepayment':
       case 'awaiting_payment':
@@ -103,7 +134,7 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
   switch (status) {
     case 'awaiting_confirmation':
       rows.push([callback(BTN.confirm, cb('cf', id))]);
-      rows.push([callback(BTN.requestChanges, cb('cr', id)), callback(BTN.decline, cb('dc', id))]);
+      rows.push(...pair(callback(BTN.requestChanges, cb('cr', id)), callback(BTN.decline, cb('dc', id))));
       break;
     case 'changes_requested':
       return null; // ждём исполнителя — кнопок нет
@@ -115,10 +146,9 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
         rows.push([link(BTN.goToPayment, live.confirmationUrl)]);
         rows.push([callback(BTN.checkPayment, cb('pc', id, undefined, live.id))]);
       } else {
-        const pay: Row = [];
-        if (o.linkRailVisible) pay.push(callback(o.linkRailRetry ? BTN.newLink : BTN.payByLink, cb(o.linkRailRetry ? 'nl' : 'pl', id)));
-        if (o.transferRailVisible) pay.push(callback(BTN.payByTransfer, cb('pt', id)));
-        if (pay.length) rows.push(pay);
+        // Подписи рейлов длинные, поэтому каждая занимает свой ряд — иначе MAX их обрежет.
+        if (o.linkRailVisible) rows.push([callback(o.linkRailRetry ? BTN.newLink : BTN.payByLink, cb(o.linkRailRetry ? 'nl' : 'pl', id))]);
+        if (o.transferRailVisible) rows.push([callback(BTN.payByTransfer, cb('pt', id))]);
       }
       if (status === 'awaiting_prepayment') rows.push([callback(BTN.cancelDeal, cb('cn', id))]);
       break;
@@ -127,7 +157,7 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
       rows.push([callback(BTN.cancelDeal, cb('cn', id))]);
       break;
     case 'awaiting_acceptance':
-      rows.push([callback(BTN.accept, cb('ac', id)), callback(BTN.remarks, cb('rm', id))]);
+      rows.push(...pair(callback(BTN.accept, cb('ac', id)), callback(BTN.remarks, cb('rm', id))));
       break;
     case 'remarks':
     case 'paid':
