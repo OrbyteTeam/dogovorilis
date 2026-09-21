@@ -442,7 +442,7 @@ describe.skipIf(!DB)('сквозной сценарий', () => {
       await h.start(SELLER, SELLER_CHAT, `d_${id}`);
 
       const said = h.max.texts().join('\n');
-      expect(said).toContain('вы её исполнитель');
+      expect(said).toContain('клиент в ней вы сами'); // демо-сделка: кнопок шеринга в ней нет
       expect(said).toContain(id);
       // Клиентом он при этом не стал и второй карточки не получил.
       const cards = await h.query<{ role: string }>(
