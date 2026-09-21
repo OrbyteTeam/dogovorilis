@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
-# Подготовка чистого сервера Ubuntu 24.04 под «Договорились». Запускается ОДИН раз, от root, НА СЕРВЕРЕ:
+# Подготовка чистого сервера Ubuntu 24.04 под «Договорились». Запускается ОДИН раз, от root, НА СЕРВЕРЕ.
 #
-#   ssh -i ~/.ssh/dogovorilis_vps root@<IP> 'bash -s' < deploy/bootstrap-server.sh
+# Запускать ОТВЯЗАННО от SSH-сессии, иначе потеряете вывод:
+#
+#   scp -i ~/.ssh/dogovorilis_vps deploy/bootstrap-server.sh root@<IP>:/root/
+#   ssh -i ~/.ssh/dogovorilis_vps root@<IP> \
+#     'setsid nohup bash /root/bootstrap-server.sh > /root/bootstrap.log 2>&1 </dev/null & echo запущено'
+#   ssh -i ~/.ssh/dogovorilis_vps root@<IP> 'tail -f /root/bootstrap.log'
+#
+# Почему так: `ufw --force enable` сбрасывает conntrack и рвёт ТЕКУЩЕЕ SSH-соединение, а `systemctl reload ssh`
+# может добить остаток. Проверено 21.09.2026: при запуске через `ssh 'bash -s' < скрипт` шаги выполняются
+# до конца, но хвост вывода теряется («Connection reset by peer»), и понять, чем всё кончилось, нельзя.
 #
 # Скрипт идемпотентен: повторный запуск ничего не ломает и не переустанавливает уже стоящее.
 # Код сюда НЕ клонируется: репозиторий приватный, а deploy-ключи GitHub — лишняя сущность в цепочке

@@ -28,8 +28,13 @@
 `../VPS_SSH_PUBLIC_KEY.txt`, A-запись домена указывает на IP сервера.
 
 ```bash
-# 1. Подготовить сервер (один раз): Docker, ufw, каталоги, cron бэкапа
-ssh -i ~/.ssh/dogovorilis_vps root@<IP> 'bash -s' < deploy/bootstrap-server.sh
+# 1. Подготовить сервер (один раз): Docker, ufw, только-по-ключу SSH, каталоги, cron бэкапа.
+#    Запускается ОТВЯЗАННО от сессии: `ufw --force enable` рвёт текущее SSH-соединение,
+#    и при запуске «в лоб» хвост вывода теряется, хотя шаги отрабатывают.
+scp -i ~/.ssh/dogovorilis_vps deploy/bootstrap-server.sh root@<IP>:/root/
+ssh -i ~/.ssh/dogovorilis_vps root@<IP> \
+  'setsid nohup bash /root/bootstrap-server.sh > /root/bootstrap.log 2>&1 </dev/null & echo запущено'
+sleep 5 && ssh -i ~/.ssh/dogovorilis_vps root@<IP> 'tail -f /root/bootstrap.log'   # Ctrl-C когда дойдёт до конца
 
 # 2. Положить секреты (один раз). Файл готовится локально, см. ../.env.server
 scp -i ~/.ssh/dogovorilis_vps ../.env.server root@<IP>:/opt/dogovorilis/.env
@@ -170,20 +175,22 @@ scp -i ~/.ssh/dogovorilis_vps root@<IP>:/opt/backups/dogovorilis-*.sql.gz ./
 ## 7. Docker Hub не отвечает
 
 Скачивание базовых образов (`node:22-alpine`, `postgres:16-alpine`, `caddy:2-alpine`) с `registry-1.docker.io`
-периодически отваливается по `TLS handshake timeout` — наблюдалось 21.09.2026 с рабочей машины, повторный
-`docker pull` проходил. На сервере в Москве может быть так же или хуже.
+подводит двумя разными способами:
+- с рабочей машины — `TLS handshake timeout` (21.09.2026, повторный `docker pull` проходил);
+- **с сервера — `You have reached your unauthenticated pull rate limit`** (21.09.2026, первый же деплой).
+  Лимит анонимных скачиваний Docker Hub считается на IP-адрес и сам по себе быстро не отпустит,
+  так что «просто повторить» тут не помогает.
 
-Что делать:
+**На этом сервере зеркало уже прописано** — `/etc/docker/daemon.json`:
+```json
+{ "registry-mirrors": ["https://mirror.gcr.io"] }
+```
+Через него все три образа скачались с первой попытки. Если файл потеряется (переустановка ОС, новый сервер) —
+создать заново и `systemctl restart docker`.
+
+Что делать, если и зеркало не отвечает:
 1. Повторить: `docker pull caddy:2-alpine && docker pull postgres:16-alpine && docker pull node:22-alpine`.
-   Чаще всего срабатывает со второго-третьего раза.
-2. Если не проходит совсем — прописать зеркало в `/etc/docker/daemon.json` и перезапустить Docker:
-   ```json
-   { "registry-mirrors": ["https://mirror.gcr.io"] }
-   ```
-   ```bash
-   systemctl restart docker
-   ```
-3. Крайний случай — перенести образы с рабочей машины:
+2. Крайний случай — перенести образы с рабочей машины:
    ```bash
    docker save node:22-alpine postgres:16-alpine caddy:2-alpine | gzip > images.tgz
    scp -i ~/.ssh/dogovorilis_vps images.tgz root@<IP>:/tmp/
