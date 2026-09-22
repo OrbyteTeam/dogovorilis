@@ -26,17 +26,35 @@ export const YOOKASSA_NETWORKS = [
   '2a02:5180::/32',
 ] as const;
 
-type Notification = { type?: string; event?: string; object?: { id?: string; status?: string } };
+type Notification = { type?: unknown; event?: unknown; object?: { id?: unknown; status?: unknown } | null };
+
+/** Сводка доставки вместо тела — для чужих и битых уведомлений (ЗАДАЧА_03 G5). */
+export type WebhookSummary = { event: string | null; object_id: string | null; size: number };
+
+/**
+ * Тело чужой или битой доставки целиком не храним: это произвольные данные от кого угодно, до 1 МБ.
+ * Оставляем то, по чему её можно опознать при разборе инцидента: событие, id объекта и размер.
+ */
+export function webhookSummary(body: unknown): WebhookSummary {
+  const b = (body !== null && typeof body === 'object' ? body : {}) as Notification;
+  const cut = (v: unknown) => (typeof v === 'string' ? v.slice(0, 64) : null);
+  const object = b.object !== null && typeof b.object === 'object' ? b.object : null;
+  return { event: cut(b.event), object_id: cut(object?.id), size: Buffer.byteLength(JSON.stringify(body ?? null)) };
+}
 
 export function registerWebhooks(app: FastifyInstance, deps: { max: MaxGateway | null }): void {
   app.post('/webhooks/yookassa', async (req, reply) => {
-    const body = req.body as Notification | null;
-    const externalId = typeof body?.object?.id === 'string' ? body.object.id : null;
+    const body = req.body as unknown;
+    const summary = webhookSummary(body);
+    const externalId = summary.object_id;
     // Идемпотентность по (provider, external_id, event) — колонку provider_status в схеме
     // заменяет `event`, договорённость зафиксирована в docs/ДОПУЩЕНИЯ.md.
-    const event = typeof body?.event === 'string' ? body.event : null;
+    const event = summary.event;
+    const malformed = !externalId || !event;
 
-    const logId = await inTx((c) => webhooksRepo.record(c, { provider: 'yookassa', externalId, event, payload: body })).catch(
+    const logId = await inTx((c) =>
+      webhooksRepo.record(c, { provider: 'yookassa', externalId, event, payload: malformed ? summary : body }),
+    ).catch(
       (e: Error) => {
         log.error({ err: e.message }, 'вебхук ЮKassa: не удалось записать доставку');
         return null;
@@ -51,16 +69,22 @@ export function registerWebhooks(app: FastifyInstance, deps: { max: MaxGateway |
     // Отвечаем немедленно: у ЮKassa на ответ 30 секунд, а GET + переход сделки могут занять дольше.
     reply.code(200).send({ ok: true });
 
-    if (!externalId || !event) {
+    if (malformed) {
       if (logId) await mark(logId, 'ignored:malformed');
       return reply;
     }
-    setImmediate(() => void handle({ externalId, event, logId, max: deps.max }));
+    setImmediate(() => void handle({ externalId, event, logId, summary, max: deps.max }));
     return reply;
   });
 }
 
-async function handle(a: { externalId: string; event: string; logId: number | null; max: MaxGateway | null }): Promise<void> {
+async function handle(a: {
+  externalId: string;
+  event: string;
+  logId: number | null;
+  summary: WebhookSummary;
+  max: MaxGateway | null;
+}): Promise<void> {
   try {
     const duplicate = await inTx((c) => webhooksRepo.alreadyProcessed(c, 'yookassa', a.externalId, a.event));
     if (duplicate) {
@@ -71,7 +95,7 @@ async function handle(a: { externalId: string; event: string; logId: number | nu
     const payment = await inTx((c) => paymentsRepo.byProviderPaymentId(c, 'yookassa', a.externalId));
     if (!payment) {
       // Уведомление от другого магазина или платёж, которого у нас нет (SPEC §14 п. 3).
-      await mark(a.logId, 'ignored:foreign');
+      await markForeign(a.logId, a.summary);
       log.warn({ provider: 'yookassa', external: a.externalId }, 'вебхук ЮKassa: платёж не наш');
       return;
     }
@@ -81,7 +105,7 @@ async function handle(a: { externalId: string; event: string; logId: number | nu
     if (fresh.metadata?.deal) {
       const bundle = await dealService.getBundleById(payment.dealId);
       if (fresh.metadata.deal !== bundle.deal.publicId) {
-        await mark(a.logId, 'ignored:foreign');
+        await markForeign(a.logId, a.summary);
         log.warn({ provider: 'yookassa', external: a.externalId }, 'вебхук ЮKassa: metadata.deal не совпадает со сделкой платежа');
         return;
       }
@@ -100,6 +124,15 @@ async function handle(a: { externalId: string; event: string; logId: number | nu
     await mark(a.logId, `error:${(e as Error).message}`.slice(0, 500));
     log.error({ err: (e as Error).message, external: a.externalId }, 'вебхук ЮKassa: обработка упала');
   }
+}
+
+/** Чужая доставка: результат ignored:foreign, а тело заменяется сводкой (G5). */
+async function markForeign(logId: number | null, summary: WebhookSummary): Promise<void> {
+  if (logId === null) return;
+  await inTx((c) => webhooksRepo.replacePayload(c, logId, summary)).catch((e: Error) =>
+    log.warn({ err: e.message }, 'вебхук: не удалось сократить тело чужой доставки'),
+  );
+  await mark(logId, 'ignored:foreign');
 }
 
 async function mark(logId: number | null, result: string): Promise<void> {

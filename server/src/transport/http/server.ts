@@ -1,10 +1,12 @@
 // Fastify: /healthz, /readyz, /api/*, /pay/return, статика мини-приложения /app/ (SPEC §4.4 п. 4).
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import fastifyRateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import type { Config } from '../../config.js';
 import { getPool } from '../../db/pool.js';
+import { PUBLIC_ID_RE } from '../../domain/ids.js';
 import { AppError, UnauthorizedError, ValidationError } from '../../errors.js';
 import type { MaxGateway } from '../../integrations/max/gateway.js';
 import { log } from '../../logger.js';
@@ -18,13 +20,43 @@ export type HttpDeps = {
   config: Config;
   max: MaxGateway | null;
   botReady: () => boolean;
+  /** Лимит на /webhooks/* с одного IP; по умолчанию WEBHOOK_RATE_LIMIT. Тесты ставят маленький. */
+  webhookRateLimit?: { max: number; timeWindowMs: number };
 };
+
+/**
+ * Кому верим в X-Forwarded-For: только прокси на этой же машине и в частной сети Docker, то есть Caddy
+ * (он ходит к app:8080 по внутренней сети compose). Любой другой отправитель — сам себе клиент, и его
+ * X-Forwarded-For игнорируется: иначе IP-фильтр ЮKassa и лимит запросов обходились бы одним заголовком.
+ * Имена — из @fastify/proxy-addr: loopback = 127.0.0.0/8, ::1; uniquelocal = 10/8, 172.16/12, 192.168/16, fc00::/7.
+ */
+export const TRUSTED_PROXIES = ['loopback', 'uniquelocal'];
+
+/**
+ * 600 запросов в минуту с одного IP на /webhooks/*: провайдер шлёт единицы уведомлений в минуту даже под
+ * нагрузкой, а каждая доставка — это запись в webhook_log и поход к провайдеру (ЗАДАЧА_03 G5).
+ */
+export const WEBHOOK_RATE_LIMIT = { max: 600, timeWindowMs: 60_000 };
+
+export const isWebhookUrl = (url: string): boolean => url.startsWith('/webhooks/');
 
 export async function createHttpServer(deps: HttpDeps): Promise<FastifyInstance> {
   const app = Fastify({
     logger: false, // логируем сами через pino, чтобы не дублировать и не потерять redact-правила
     bodyLimit: 1_048_576,
-    trustProxy: true,
+    trustProxy: TRUSTED_PROXIES,
+  });
+
+  // Лимит — до объявления маршрутов: плагин вешает свой хук на каждый маршрут при регистрации, в том числе на
+  // /webhooks/max, который index.ts добавляет позже. Считаются только /webhooks/*, остальное пропускается.
+  // Старые ключи вытесняет LRU плагина (по умолчанию 5000 IP), память не растёт.
+  const limit = deps.webhookRateLimit ?? WEBHOOK_RATE_LIMIT;
+  await app.register(fastifyRateLimit, {
+    global: true,
+    max: limit.max,
+    timeWindow: limit.timeWindowMs,
+    allowList: (req: FastifyRequest) => !isWebhookUrl(req.url),
+    onExceeded: (req: FastifyRequest) => log.warn({ ip: req.ip, url: req.url.split('?')[0] }, 'http: лимит запросов к вебхукам превышен'),
   });
 
   app.addHook('onResponse', async (req, reply) => {
@@ -55,8 +87,10 @@ export async function createHttpServer(deps: HttpDeps): Promise<FastifyInstance>
     try {
       await getPool().query('SELECT 1');
     } catch (e) {
+      // Текст ошибки БД наружу не отдаём: в нём бывают адрес и имя базы (ЗАДАЧА_03 G6) — только в лог.
+      log.warn({ err: (e as Error).message }, 'readyz: БД не отвечает');
       reply.code(503);
-      return { ok: false, db: false, error: (e as Error).message };
+      return { ok: false, db: false };
     }
     const botOk = deps.config.MAX_MODE === 'off' || deps.botReady();
     if (!botOk) {
@@ -72,10 +106,16 @@ export async function createHttpServer(deps: HttpDeps): Promise<FastifyInstance>
   // Страница возврата с оплаты (SPEC §9.2). Провайдеры подключаются в ЗАДАЧА_02, страница нужна уже сейчас:
   // её адрес уходит в return_url и должен быть стабильным.
   app.get('/pay/return', async (req, reply) => {
-    const q = req.query as { d?: string; fail?: string };
-    const link = `https://max.ru/${deps.config.MAX_BOT_USERNAME || 'bot'}${q.d ? `?start=d_${q.d}` : ''}`;
-    const title = q.fail ? 'Оплата не прошла' : 'Спасибо! Оплата обрабатывается';
+    const q = req.query as { d?: unknown; fail?: unknown };
+    // d — это public_id сделки из return_url; всё, что на него не похоже, — ссылка на бота без payload (G2).
+    const publicId = typeof q.d === 'string' && PUBLIC_ID_RE.test(q.d) ? q.d : null;
+    const bot = encodeURIComponent(deps.config.MAX_BOT_USERNAME || 'bot');
+    const link = escapeHtml(`https://max.ru/${bot}${publicId ? `?start=d_${publicId}` : ''}`);
+    const title = escapeHtml(q.fail ? 'Оплата не прошла' : 'Спасибо! Оплата обрабатывается');
     reply.type('text/html; charset=utf-8');
+    // Страница статическая: скриптов в ней нет и быть не должно — даже если что-то проскочит мимо экранирования.
+    reply.header('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'");
+    reply.header('x-content-type-options', 'nosniff');
     return `<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
 <style>body{font:16px/1.5 -apple-system,system-ui,Roboto,sans-serif;margin:0;padding:24px;background:#edeef2;color:#060708}
@@ -93,6 +133,11 @@ a{display:inline-block;margin-top:16px;padding:12px 16px;background:#007aff;colo
   // любой путь внутри /app/ — это /app/index.html + #/…
 
   return app;
+}
+
+/** Всё, что подставляется в HTML страницы, экранируется (G2): & < > " ' . */
+export function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!);
 }
 
 /** Ошибка домена → код и статус HTTP по таблице SPEC §7.8. */
@@ -116,6 +161,7 @@ function describeError(err: unknown): { status: number; code: string; message: s
   }
   // Ошибки самого Fastify (например, битый JSON в теле) — это тоже валидация входа.
   const fastifyStatus = (err as { statusCode?: number })?.statusCode;
+  if (fastifyStatus === 429) return { status: 429, code: 'rate_limited', message: 'Слишком много запросов, повторите позже' };
   if (fastifyStatus && fastifyStatus < 500) {
     return {
       status: fastifyStatus,

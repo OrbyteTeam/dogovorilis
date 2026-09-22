@@ -17,6 +17,14 @@ export async function record(
   return res.rows[0]!.id;
 }
 
+/**
+ * Заменить сохранённое тело доставки — для чужих и битых уведомлений храним не всё тело, а сводку
+ * (ЗАДАЧА_03 G5): незачем держать в базе произвольные данные, присланные кем угодно.
+ */
+export async function replacePayload(q: Queryable, id: number, payload: unknown): Promise<void> {
+  await q.query(`UPDATE webhook_log SET payload = $2::jsonb WHERE id = $1`, [id, JSON.stringify(payload ?? null)]);
+}
+
 /** result: ok | ignored:<reason> | error:<text> (SPEC §9.6). */
 export async function markResult(q: Queryable, id: number, result: string): Promise<void> {
   await q.query(`UPDATE webhook_log SET result = $2, processed_at = now() WHERE id = $1`, [id, result]);

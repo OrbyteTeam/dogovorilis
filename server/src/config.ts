@@ -47,6 +47,14 @@ const schema = z
       if (!v.PUBLIC_BASE_URL.startsWith('https://'))
         ctx.addIssue({ code: 'custom', path: ['PUBLIC_BASE_URL'], message: 'при MAX_MODE=webhook нужен https:// (MAX не принимает http и самоподписанные сертификаты)' });
     }
+    // Подмена пользователя мини-приложения — только для локального стенда. На https:// это публичный сервер,
+    // и одна забытая переменная открыла бы /api от имени чужого пользователя без initData (ЗАДАЧА_03 G6).
+    if (v.DEV_FAKE_USER_ID && v.PUBLIC_BASE_URL.startsWith('https://'))
+      ctx.addIssue({
+        code: 'custom',
+        path: ['DEV_FAKE_USER_ID'],
+        message: 'запрещён при https:// в PUBLIC_BASE_URL — подмена пользователя только для локального стенда',
+      });
     if (v.PAYMENT_PROVIDER === 'yookassa') {
       need('YOOKASSA_SHOP_ID', 'обязателен при PAYMENT_PROVIDER=yookassa');
       need('YOOKASSA_SECRET_KEY', 'обязателен при PAYMENT_PROVIDER=yookassa');
