@@ -108,13 +108,11 @@ export function noticesFor(bundle: DealBundle, event: DealEvent): Notice[] {
     case 'deal.fixed':
       return [{ to: 'client', text: texts.N12({ id }), keyboard: openKeyboard(id) }];
 
-    case 'deal.closed': {
-      const text = texts.N14({ id, withReceipt: Boolean(bundle.receipt) });
-      return [
-        { to: 'seller', text },
-        { to: 'client', text },
-      ];
-    }
+    // N14 уходит ОДИН раз — подписью к квитанции PDF (transport/bot/receipt.ts), после пересланного чека.
+    // Отдельным сообщением отсюда он дублировался и говорил «чек — выше» раньше, чем чек был переслан
+    // (найдено прогоном 1, S7). Все пути закрытия сделки отправляют квитанцию.
+    case 'deal.closed':
+      return [];
 
     case 'deal.cancelled': {
       const by = (event.payload.by as 'seller' | 'client' | 'system') ?? 'system';

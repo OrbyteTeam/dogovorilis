@@ -160,6 +160,30 @@ describe.skipIf(!DB)('ответ на кнопку карточки — карт
     expect(texts.CANCEL_CONSEQUENCE({ by: 'client', prepaymentKopecks: 50_000, expected: false })).toContain('не вернётся');
   }, TIMEOUT);
 
+  it('закрытие: N14 приходит каждой стороне один раз — подписью к квитанции', async () => {
+    const { id, sellerCard, clientCard } = await realDeal();
+    await h.press(CLIENT, CLIENT_CHAT, `cf:${id}`, clientCard);
+    for (const kind of ['prepayment', 'final'] as const) {
+      await h.press(CLIENT, CLIENT_CHAT, `pt:${id}`, clientCard);
+      const pid = await livePaymentId(h, id, kind);
+      await h.press(CLIENT, CLIENT_CHAT, `tr:c:${id}:${pid}`, clientCard);
+      await h.press(SELLER, SELLER_CHAT, `tr:g:${id}:${pid}`, sellerCard);
+      if (kind === 'prepayment') {
+        await h.press(SELLER, SELLER_CHAT, `dn:${id}`, sellerCard);
+        await h.press(CLIENT, CLIENT_CHAT, `ac:${id}`, clientCard);
+      }
+    }
+    expect(await dealStatus(h, id)).toBe('paid');
+    await h.press(SELLER, SELLER_CHAT, `nc:y:${id}`, sellerCard);
+    expect(await dealStatus(h, id)).toBe('closed');
+
+    for (const chat of [SELLER_CHAT, CLIENT_CHAT]) {
+      const n14 = h.max.inChat(chat).filter((m) => m.kind === 'send' && m.text.includes('закрыта. Квитанция'));
+      expect(n14, `чат ${chat}`).toHaveLength(1);
+      expect(n14[0].attachmentTypes).toContain('file');
+    }
+  }, TIMEOUT);
+
   it('запрос ввода с карточки не стирает её: подсказка сверху, условия и кнопки на месте', async () => {
     const { id, clientCard } = await realDeal();
     await h.press(CLIENT, CLIENT_CHAT, `cr:${id}`, clientCard);
