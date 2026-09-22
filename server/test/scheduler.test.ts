@@ -360,6 +360,28 @@ describe.skipIf(!DB)('планировщик и ожидание ввода', ()
     });
   });
 
+  it('тик зовёт сторожа подписки MAX первым; его сбой не мешает напоминаниям', async () => {
+    const id = await realDeal();
+    await h.press(CLIENT, CLIENT_CHAT, `cf:${id}`, await cardMid(h, id, 'client'));
+    await makeDue(id, 'prepayment_due');
+    const seen: Date[] = [];
+    const now = new Date();
+
+    await tick({
+      max: h.gateway,
+      sendReminders: true,
+      subscription: {
+        check: async (at) => {
+          seen.push(at!);
+          throw new Error('MAX недоступен');
+        },
+      },
+    }, now);
+
+    expect(seen).toEqual([now]); // интервал 5 минут сторож отмеряет сам — тик передаёт ему своё «сейчас»
+    expect((await reminder(id, 'prepayment_due')).status).toBe('sent');
+  });
+
   it('просроченное ожидание ввода → E8, ввод сбрасывается', async () => {
     const id = await demoDeal();
     const clientCard = await cardMid(h, id, 'client_demo');

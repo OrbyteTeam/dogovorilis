@@ -22,6 +22,8 @@ export type MaxFake = {
   sent: SentMessage[];
   /** подписки, зарегистрированные через POST /subscriptions (режим webhook, CONTRACTS §1.3) */
   subscriptions: Subscription[];
+  /** журнал запросов к /subscriptions: кто, когда и что снимал или ставил */
+  subscriptionCalls: { method: 'GET' | 'POST' | 'DELETE'; url?: string }[];
   /** сообщения, отправленные в конкретный чат */
   inChat(chatId: number): SentMessage[];
   /** последнее сообщение с заданным mid (после правки текст обновляется) */
@@ -50,6 +52,7 @@ const BOT_INFO = {
 export async function createMaxFake(): Promise<MaxFake> {
   const sent: SentMessage[] = [];
   const subscriptions: Subscription[] = [];
+  const subscriptionCalls: MaxFake['subscriptionCalls'] = [];
   const byMidMap = new Map<string, SentMessage>();
   const callbackMid = new Map<string, string>();
   let midCounter = 0;
@@ -94,15 +97,22 @@ export async function createMaxFake(): Promise<MaxFake> {
     if (url.pathname === '/me/commands') return json({ commands: body?.commands ?? [] });
     if (url.pathname === '/subscriptions') {
       if (method === 'POST') {
-        subscriptions.push(body as Subscription);
+        const sub = body as Subscription;
+        subscriptionCalls.push({ method: 'POST', url: sub.url });
+        // Повторная подписка на тот же url заменяет прежнюю, а не добавляет вторую
+        const same = subscriptions.findIndex((s) => s.url === sub.url);
+        if (same >= 0) subscriptions.splice(same, 1);
+        subscriptions.push(sub);
         return json({ success: true });
       }
       if (method === 'DELETE') {
         const target = url.searchParams.get('url');
+        subscriptionCalls.push({ method: 'DELETE', url: target ?? undefined });
         const i = subscriptions.findIndex((s) => s.url === target);
         if (i >= 0) subscriptions.splice(i, 1);
         return json({ success: true });
       }
+      subscriptionCalls.push({ method: 'GET' });
       // GET /subscriptions отдаёт то, что зарегистрировано: на этом SDK строит «удалить все остальные».
       return json({ subscriptions });
     }
@@ -162,6 +172,7 @@ export async function createMaxFake(): Promise<MaxFake> {
     fetch: fetchImpl,
     sent,
     subscriptions,
+    subscriptionCalls,
     inChat: (chatId) => sent.filter((m) => m.chatId === chatId),
     byMid: (mid) => byMidMap.get(mid),
     texts: () => sent.map((m) => m.text),

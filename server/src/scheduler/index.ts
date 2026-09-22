@@ -1,6 +1,7 @@
 // Планировщик: один setInterval на 30 с, задания из SPEC §10. Защита от наложения — флаг «выполняется».
 // Напоминания уходят нужной стороне с кнопкой «Открыть» (карточка сделки). confirmation_expired не отправляется,
 // а выполняет переход T8. Режим sendReminders=false оставлен для тестов и отладки: напоминание только логируется.
+// В режиме webhook здесь же живёт сторож подписки MAX (раз в 5 минут, transport/bot/webhook.ts).
 import { inTx } from '../db/pool.js';
 import * as inputsRepo from '../db/repos/inputs.js';
 import * as remindersRepo from '../db/repos/reminders.js';
@@ -13,6 +14,7 @@ import { isDemoAccelerated, isSystemAction } from '../domain/reminder/plan.js';
 import { syncCards } from '../transport/bot/cards.js';
 import { openKeyboard } from '../transport/bot/keyboards.js';
 import { deliver, notifyForEvents } from '../transport/bot/notify.js';
+import type { SubscriptionKeeper } from '../transport/bot/webhook.js';
 import { pollLinkPayments } from './jobs/payments-poll.js';
 
 export const TICK_MS = 30_000;
@@ -23,6 +25,8 @@ export type SchedulerOptions = {
   max: MaxGateway | null;
   /** true — напоминания отправляются (боевой режим); false — только логируются и гасятся (`sending_disabled`). */
   sendReminders: boolean;
+  /** Сторож подписки MAX — только в режиме webhook (transport/bot/webhook.ts). Сам решает, пора ли проверять. */
+  subscription?: Pick<SubscriptionKeeper, 'check'> | null;
 };
 
 export function startScheduler(opts: SchedulerOptions): { stop: () => void } {
@@ -46,6 +50,10 @@ export function startScheduler(opts: SchedulerOptions): { stop: () => void } {
 
 export async function tick(opts: SchedulerOptions, now = new Date()): Promise<void> {
   const started = Date.now();
+  // Первым и отдельно от БД: если база легла, подписка MAX всё равно должна вернуться. Раз в 5 минут, не каждый тик.
+  if (opts.subscription) {
+    await opts.subscription.check(now).catch((e) => log.warn({ err: (e as Error).message }, 'планировщик: сторож подписки упал'));
+  }
   await runDueReminders(opts, now);
   // Страховка на случай, когда вебхук провайдера не доходит (локальный запуск без HTTPS) — SPEC §10.3.
   await pollLinkPayments(opts.max, now).catch((e) => log.error({ err: (e as Error).message }, 'планировщик: опрос платежей упал'));

@@ -6,9 +6,11 @@ import { closeDb, connectDb } from './db/pool.js';
 import { migrate } from './db/migrate.js';
 import { initLogger, log } from './logger.js';
 import { ALLOWED_UPDATES, createBot, explainStartupError } from './transport/bot/index.js';
+import { mountWebhook, type SubscriptionKeeper } from './transport/bot/webhook.js';
 import { createHttpServer } from './transport/http/server.js';
-import { MAX_WEBHOOK_PATH, registerMaxWebhookRoute } from './transport/http/routes/max-webhook.js';
+import { MAX_WEBHOOK_PATH } from './transport/http/routes/max-webhook.js';
 import { startScheduler } from './scheduler/index.js';
+import { stopServices } from './shutdown.js';
 
 const SHUTDOWN_GRACE_MS = 10_000;
 
@@ -52,23 +54,27 @@ async function main(): Promise<void> {
     log.warn('MAX_MODE=off — бот не запускается, работают только API и мини-приложение');
   }
 
-  const app = await createHttpServer({ config, max: runtime?.max ?? null, botReady: () => botReady });
+  let subscription: SubscriptionKeeper | null = null;
+  const app = await createHttpServer({
+    config,
+    max: runtime?.max ?? null,
+    botReady: () => botReady,
+    subscription: config.MAX_MODE === 'webhook' ? () => subscription?.state() ?? null : undefined,
+  });
 
   if (runtime && config.MAX_MODE === 'webhook') {
-    // Обработчик webhook встраиваем в наш Fastify: startWebhook поднял бы второй http-сервер (CONTRACTS §1.3).
-    const handler = await runtime.bot.createWebhook({
-      domain: new URL(config.PUBLIC_BASE_URL).host,
-      path: MAX_WEBHOOK_PATH,
-      secret: config.MAX_WEBHOOK_SECRET,
-      allowedUpdates: ALLOWED_UPDATES,
-    });
-    await app.register(registerMaxWebhookRoute(handler));
+    // Шаг 1: обработчик встраиваем в наш Fastify (startWebhook поднял бы второй http-сервер, CONTRACTS §1.3),
+    // но БЕЗ подписки — MAX начнёт слать, только когда мы подпишемся, а это после app.listen.
+    subscription = await mountWebhook(app, runtime.bot, config);
     botReady = true;
-    log.info({ path: MAX_WEBHOOK_PATH }, 'бот: webhook зарегистрирован');
+    log.info({ path: MAX_WEBHOOK_PATH }, 'бот: обработчик webhook встроен, подписка — после старта HTTP');
   }
 
   await app.listen({ port: config.PORT, host: '0.0.0.0' });
   log.info({ port: config.PORT, base: config.PUBLIC_BASE_URL }, 'http слушает');
+
+  // Шаг 2: HTTP слушает — подписываемся. Сбой не фатален: сторож в планировщике повторит в течение 5 минут.
+  if (subscription) await subscription.register();
 
   if (runtime && config.MAX_MODE === 'polling') {
     // ВНИМАНИЕ: polling удаляет все webhook-подписки этого токена (CONTRACTS §1.3) — один токен = один экземпляр.
@@ -81,7 +87,8 @@ async function main(): Promise<void> {
     log.info({ bot: `https://max.ru/${runtime.username}` }, 'бот: polling запущен');
   }
 
-  const scheduler = startScheduler({ max: runtime?.max ?? null, sendReminders: true });
+  const scheduler = startScheduler({ max: runtime?.max ?? null, sendReminders: true, subscription });
+  const pollingBot = runtime && config.MAX_MODE === 'polling' ? runtime.bot : null;
 
   const shutdown = async (signal: string) => {
     log.info({ signal }, 'остановка');
@@ -90,13 +97,13 @@ async function main(): Promise<void> {
       process.exit(1);
     }, SHUTDOWN_GRACE_MS);
     try {
-      scheduler.stop();
-      if (runtime) {
-        if (config.MAX_MODE === 'polling') runtime.bot.stopPolling();
-        else await runtime.bot.stopWebhook().catch(() => undefined);
-      }
-      await app.close();
-      await closeDb();
+      // Подписку MAX не снимаем: рестарт не должен оставлять бота глухим (server/src/shutdown.ts).
+      await stopServices({
+        scheduler,
+        stopPolling: pollingBot ? () => pollingBot.stopPolling() : undefined,
+        app,
+        closeDb,
+      });
       clearTimeout(timer);
       log.info('остановлено');
       process.exit(0);
