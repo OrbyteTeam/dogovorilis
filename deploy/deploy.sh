@@ -81,7 +81,7 @@ say "Синхронизация файлов (rsync)"
 rsync -az --delete \
   --exclude node_modules --exclude '**/node_modules' \
   --exclude .git --exclude .env --exclude '**/dist' \
-  --exclude '*.log' \
+  --exclude '*.log' --exclude '.*/' \
   -e "ssh -i $VPS_SSH_KEY -o StrictHostKeyChecking=accept-new" \
   "$REPO_ROOT/" "$TARGET"
 
