@@ -24,6 +24,7 @@ export async function onPaymentCallback(
   await touchUser(ctx, chatIdOf(ctx));
 
   const bundle = await dealService.getBundle(parsed.publicId);
+  dealService.ensureParticipant(bundle.deal, userId); // посторонний дальше не проходит (G1)
   // tr:g и tr:n нажимает исполнитель, остальное — клиент.
   const fallback: 'seller' | 'client' = parsed.sub === 'g' || parsed.sub === 'n' ? 'seller' : 'client';
   const { role, cardRole } = await actingRole(bundle.deal.id, userId, pressedMid(ctx), fallback);
@@ -37,7 +38,7 @@ export async function onPaymentCallback(
       return;
 
     case 'pc':
-      await checkLink(ctx, deps, parsed, viewRole);
+      await checkLink(ctx, deps, bundle, parsed, viewRole);
       return;
 
     case 'pe': // эмуляция оплаты — только DEMO-терминал Т-Банка (SPEC §9.3); терминал не подключён
@@ -82,11 +83,13 @@ async function offerLink(ctx: Context, deps: Deps, publicId: string, actor: Acto
 async function checkLink(
   ctx: Context,
   deps: Deps,
+  bundle: DealBundle,
   parsed: Extract<ParsedCallback, { kind: 'deal' }>,
   viewRole: CardRole,
 ): Promise<void> {
   const paymentId = Number(parsed.arg);
-  if (!Number.isFinite(paymentId)) {
+  // Платёж обязан принадлежать этой сделке: иначе по чужому id можно было бы опросить и провести чужую оплату (G1).
+  if (!Number.isFinite(paymentId) || !bundle.payments.some((p) => p.id === paymentId)) {
     await answerAndSync(ctx, deps, parsed.publicId, viewRole, texts.E1);
     return;
   }

@@ -3,7 +3,14 @@
 // с записью события (§5.4) и пересозданием набора напоминаний (§10.1).
 // Транспорт (бот, HTTP) не знает про SQL, а домен не знает про SDK MAX: сервис возвращает список
 // добавленных событий, а какие уведомления N1–N15 из них следуют — решает transport/bot/notify.
-import { ForbiddenError, InvalidTransition, NotFoundError, TrialLimitError, ValidationError } from '../../errors.js';
+import {
+  ForbiddenError,
+  InvalidTransition,
+  NotFoundError,
+  NotYourDealError,
+  TrialLimitError,
+  ValidationError,
+} from '../../errors.js';
 import { inTx, type DbClient } from '../../db/pool.js';
 import * as cardsRepo from '../../db/repos/cards.js';
 import * as dealsRepo from '../../db/repos/deals.js';
@@ -98,6 +105,14 @@ export function participantRole(deal: Deal, userId: number): Array<'seller' | 'c
   if (deal.sellerUserId === userId) roles.push('seller');
   if (deal.clientUserId === userId) roles.push('client');
   return roles;
+}
+
+/**
+ * Кнопку чужой сделки нажал посторонний (пересланная карточка, подобранный payload): дальше этой проверки
+ * он не проходит — ни карточки, ни действия, ни строки card_messages (ЗАДАЧА_03 G1).
+ */
+export function ensureParticipant(deal: Deal, userId: number): void {
+  if (participantRole(deal, userId).length === 0) throw new NotYourDealError();
 }
 
 export function actorRoleFor(deal: Deal, actor: Actor): ActorRole {

@@ -5,7 +5,7 @@ import { cfg } from '../../../config.js';
 import { inTx } from '../../../db/pool.js';
 import * as cardsRepo from '../../../db/repos/cards.js';
 import * as usersRepo from '../../../db/repos/users.js';
-import { AppError, ForbiddenError, InvalidTransition } from '../../../errors.js';
+import { AppError, ForbiddenError, InvalidTransition, NotYourDealError } from '../../../errors.js';
 import type { AttachmentRequest, MaxGateway } from '../../../integrations/max/gateway.js';
 import { log } from '../../../logger.js';
 import * as texts from '../../../texts.js';
@@ -188,6 +188,7 @@ export function errorText(e: unknown): string {
     if (e.reason === 'already_done') return texts.ALREADY_DONE;
     return texts.E1;
   }
+  if (e instanceof NotYourDealError) return texts.NOT_YOUR_DEAL;
   if (e instanceof ForbiddenError) {
     if (e.message === 'other_client') return texts.E3;
     if (e.message === 'self_is_seller') return texts.E1;
@@ -231,7 +232,9 @@ export async function answerError(ctx: Context, deps: Deps, e: unknown): Promise
   const text = errorText(e);
   log.warn({ err: (e as Error).message, update: ctx.update.update_type }, 'обработчик ответил ошибкой');
   if (ctx.update.update_type === 'message_callback') {
-    await answerCallbackProblem(ctx, deps, text);
+    // Постороннему — только текст: ни карточки чужой сделки, ни её кнопок (G1).
+    if (e instanceof NotYourDealError) await deps.max.answer(ctx.callback!.callback_id, text).catch(() => undefined);
+    else await answerCallbackProblem(ctx, deps, text);
   } else {
     const chatId = chatIdOf(ctx);
     if (chatId) await deps.max.send({ chatId }, text).catch(() => undefined);

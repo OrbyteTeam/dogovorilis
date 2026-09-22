@@ -42,6 +42,7 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
   await touchUser(ctx, chatId);
 
   const bundle = await dealService.getBundle(parsed.publicId);
+  dealService.ensureParticipant(bundle.deal, userId); // посторонний дальше не проходит (G1)
   const fallback = CODE_ROLE[parsed.code] ?? (bundle.deal.sellerUserId === userId ? 'seller' : 'client');
   const { role, cardRole } = await actingRole(bundle.deal.id, userId, pressedMid(ctx), fallback);
   const actor = actorOf(userId, role);

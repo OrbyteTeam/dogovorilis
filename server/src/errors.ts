@@ -107,6 +107,17 @@ export class ForbiddenError extends AppError {
   }
 }
 
+/**
+ * Нажатие кнопки чужой сделки: пользователь не исполнитель и не клиент (ЗАДАЧА_03 G1). Отдельный класс,
+ * потому что ответ на него особый: только текст «Это не ваша сделка», без карточки и без её кнопок.
+ */
+export class NotYourDealError extends ForbiddenError {
+  constructor() {
+    super('not_your_deal');
+    this.name = 'NotYourDealError';
+  }
+}
+
 /** Невалидный или устаревший initData мини-приложения (SPEC §9.4) → HTTP 401. */
 export class UnauthorizedError extends AppError {
   constructor(message: string, code: 'init_data_invalid' | 'phone_hash_invalid' = 'init_data_invalid') {
