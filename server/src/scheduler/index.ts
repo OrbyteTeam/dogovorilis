@@ -18,6 +18,8 @@ import type { SubscriptionKeeper } from '../transport/bot/webhook.js';
 import { pollLinkPayments } from './jobs/payments-poll.js';
 
 export const TICK_MS = 30_000;
+/** Сколько держать истёкшее ожидание ввода ради ответа E8 (SPEC §6.6). */
+export const INPUT_KEEP_AFTER_EXPIRY_MS = 24 * 60 * 60 * 1000;
 const BATCH = 50;
 const MAX_ATTEMPTS = 3;
 
@@ -57,7 +59,9 @@ export async function tick(opts: SchedulerOptions, now = new Date()): Promise<vo
   await runDueReminders(opts, now);
   // Страховка на случай, когда вебхук провайдера не доходит (локальный запуск без HTTPS) — SPEC §10.3.
   await pollLinkPayments(opts.max, now).catch((e) => log.error({ err: (e as Error).message }, 'планировщик: опрос платежей упал'));
-  await inTx((c) => inputsRepo.deleteExpired(c, now));
+  // Истёкшее ожидание ввода удаляем не сразу, а через сутки: пока запись есть, вернувшийся человек получит E8
+  // «Время ожидания истекло. Нажмите кнопку ещё раз», а не S3 «понимаю только кнопки» (найдено прогоном 23.09).
+  await inTx((c) => inputsRepo.deleteExpired(c, new Date(now.getTime() - INPUT_KEEP_AFTER_EXPIRY_MS)));
   const ms = Date.now() - started;
   if (ms > 5000) log.warn({ ms }, 'планировщик: тик дольше 5 с');
 }

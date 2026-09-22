@@ -399,16 +399,24 @@ describe.skipIf(!DB)('планировщик и ожидание ввода', ()
     expect(left[0].n).toBe(0);
   });
 
-  it('тик чистит просроченные ожидания ввода', async () => {
+  it('тик чистит ожидания ввода, истёкшие больше суток назад, а недавно истёкшие оставляет ради E8', async () => {
     const id = await demoDeal();
     const clientCard = await cardMid(h, id, 'client_demo');
     await h.press(SELLER, SELLER_CHAT, `cr:${id}`, clientCard);
+
+    // Истекло час назад: запись остаётся — вернувшийся человек получит E8, а не S3 (найдено прогоном 23.09)
     await h.query(`UPDATE user_inputs SET expires_at = now() - interval '1 hour' WHERE user_id = $1`, [SELLER]);
-
     await tick({ max: null, sendReminders: false });
+    expect((await h.query<{ n: number }>('SELECT count(*)::int AS n FROM user_inputs'))[0].n).toBe(1);
+    h.max.reset();
+    await h.say(SELLER, SELLER_CHAT, 'давайте 15:00');
+    expect(h.max.texts().join('\n')).toContain(texts.E8);
 
-    const left = await h.query<{ n: number }>('SELECT count(*)::int AS n FROM user_inputs');
-    expect(left[0].n).toBe(0);
+    // Истекло больше суток назад — тик удаляет
+    await h.press(SELLER, SELLER_CHAT, `cr:${id}`, clientCard);
+    await h.query(`UPDATE user_inputs SET expires_at = now() - interval '25 hours' WHERE user_id = $1`, [SELLER]);
+    await tick({ max: null, sendReminders: false });
+    expect((await h.query<{ n: number }>('SELECT count(*)::int AS n FROM user_inputs'))[0].n).toBe(0);
   });
 
   it('/cancel сбрасывает ожидание ввода', async () => {
