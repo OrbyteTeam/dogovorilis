@@ -10,11 +10,13 @@ export interface SegmentedProps<T extends string> {
   value: T;
   onChange: (value: T) => void;
   ariaLabel: string;
+  /** Узкие поля по краям: четыре подписи на экране 375 px иначе обрезаются многоточием. */
+  compact?: boolean;
 }
 
-export function Segmented<T extends string>({ options, value, onChange, ariaLabel }: SegmentedProps<T>) {
+export function Segmented<T extends string>({ options, value, onChange, ariaLabel, compact = false }: SegmentedProps<T>) {
   return (
-    <div className="dg-segmented" role="group" aria-label={ariaLabel}>
+    <div className={compact ? 'dg-segmented dg-segmented_compact' : 'dg-segmented'} role="group" aria-label={ariaLabel}>
       {options.map((option) => {
         const active = option.value === value;
         return (

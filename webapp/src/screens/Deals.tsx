@@ -8,17 +8,19 @@ import { ErrorScreen } from '../components/StateScreen';
 import { formatDateTime, formatKopecks, statusEmoji } from '../format';
 import type { DealListItem, DealsFilter } from '../types';
 
+// Подписи короче, чем в SPEC §7.4: четыре полных не помещаются на 375 px и обрезаются многоточием.
+// «Закрытые» заодно точнее «Завершённых» — в этот фильтр попадают и отменённые, и отклонённые.
 const FILTERS: { value: DealsFilter; label: string }[] = [
   { value: 'active', label: 'Активные' },
-  { value: 'awaiting_payment', label: 'Ждут оплаты' },
-  { value: 'done', label: 'Завершённые' },
+  { value: 'awaiting_payment', label: 'К оплате' },
+  { value: 'done', label: 'Закрытые' },
   { value: 'all', label: 'Все' },
 ];
 
 const EMPTY_TEXT: Record<DealsFilter, string> = {
   active: 'Пока нет активных сделок. Создайте первую — это займёт полминуты.',
   awaiting_payment: 'Сейчас никто ничего не должен: сделок, ждущих оплаты, нет.',
-  done: 'Завершённых сделок пока нет.',
+  done: 'Закрытых сделок пока нет.',
   all: 'Пока нет сделок. Создайте первую — это займёт полминуты.',
 };
 
@@ -80,7 +82,7 @@ export function DealsScreen({ onNewDeal }: DealsScreenProps) {
           <h1>Мои сделки</h1>
         </Typography.Headline>
 
-        <Segmented options={FILTERS} value={filter} onChange={setFilter} ariaLabel="Фильтр сделок" />
+        <Segmented options={FILTERS} value={filter} onChange={setFilter} ariaLabel="Фильтр сделок" compact />
 
         {items === null ? (
           // Спиннер внутри экрана, а не LoadingScreen: тот разворачивает свою Panel во весь экран,

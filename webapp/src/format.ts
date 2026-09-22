@@ -2,14 +2,16 @@
 import type { CancelRule, DealStatus, DealView, TaxMode } from './types';
 
 const RUB = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
+/** Перед «₽» — неразрывный пробел, как в domain/money.ts: иначе в узкой строке списка знак уезжает на вторую строку. */
+const NBSP = '\u00A0';
 
 /** Суммы в контракте — целые копейки (domain/money.ts на сервере). */
 export function formatKopecks(kopecks: number): string {
-  return `${RUB.format(Math.round(kopecks / 100))} ₽`;
+  return `${RUB.format(Math.round(kopecks / 100))}${NBSP}₽`;
 }
 
 export function formatRub(rub: number): string {
-  return `${RUB.format(rub)} ₽`;
+  return `${RUB.format(rub)}${NBSP}₽`;
 }
 
 const DATE_TIME = new Intl.DateTimeFormat('ru-RU', {

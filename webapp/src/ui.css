@@ -148,6 +148,10 @@
   border-radius: var(--size-border-radius-action-medium);
 }
 
+.dg-segmented_compact .dg-segment {
+  padding: 0 var(--spacing-size2xs);
+}
+
 .dg-segment {
   min-height: 40px;
   padding: 0 var(--spacing-size-s);
