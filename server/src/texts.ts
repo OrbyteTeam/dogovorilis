@@ -151,7 +151,7 @@ const STATUS_TEXT: Record<DealStatus, (a: StatusArgs) => { seller: string; clien
     client: 'Подтвердите условия',
   }),
   changes_requested: () => ({
-    seller: 'Клиент предложил изменения — обновите условия',
+    seller: 'Клиент предложил изменения — оставьте как есть или создайте новую сделку',
     client: 'Ждём новые условия от исполнителя',
   }),
   declined: () => ({
@@ -399,7 +399,8 @@ export function N2(a: { client: string; id: string; prepaymentKopecks: number; s
 }
 
 export function N3(a: { client: string; id: string; text: string }): string {
-  return `✏️ ${esc(a.client)} предлагает изменения по #${a.id}:\n${quote(esc(a.text))}`;
+  // Экрана правки условий (T5) пока нет — честно говорим, как поступить (ЗАДАЧА_03 S4).
+  return `✏️ ${esc(a.client)} предлагает изменения по #${a.id}:\n${quote(esc(a.text))}\n\nСогласны с изменениями — создайте новую сделку с нужными условиями («${BTN.newDeal}» или «${BTN.exampleDeal}») и отмените эту. Не согласны — «${BTN.keepAsIs}».`;
 }
 
 export function N4(a: { id: string; version: number }): string {

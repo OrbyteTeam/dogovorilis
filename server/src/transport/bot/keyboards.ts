@@ -96,17 +96,18 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
 
   if (isSeller) {
     switch (status) {
+      // «✏️ Изменить условия» (T5) скрыта, пока нет экрана редактирования в мини-приложении (ЗАДАЧА_04):
+      // open_app с `d_<id>` открывал экран «Готово», то есть кнопка вела в никуда (ЗАДАЧА_03 S4).
       case 'awaiting_confirmation':
         if (!bundle.deal.clientUserId) {
           rows.push(...pair(link(BTN.sendToMax, shareUrl(o.dealLink)), clipboard(BTN.copyLink, o.dealLink)));
-          rows.push([openApp(BTN.editTerms, o.botUsername, `d_${id}`)]);
           if (o.demoMode) rows.push([callback(BTN.openAsClient, cb('dm', id))]);
         } else {
-          rows.push(...pair(openApp(BTN.editTerms, o.botUsername, `d_${id}`), callback(BTN.remindClient, cb('rs', id))));
+          rows.push([callback(BTN.remindClient, cb('rs', id))]);
         }
         break;
       case 'changes_requested':
-        rows.push(...pair(openApp(BTN.editTerms, o.botUsername, `d_${id}`), callback(BTN.keepAsIs, cb('ka', id))));
+        rows.push([callback(BTN.keepAsIs, cb('ka', id))]);
         break;
       case 'awaiting_prepayment':
       case 'awaiting_payment': {
@@ -239,11 +240,11 @@ export function cancelReasonKeyboard(publicId: string): AttachmentRequest {
   ]);
 }
 
-/** Кнопки уведомлений N3 (предложены изменения) и N11 (замечания). */
-export function n3Keyboard(publicId: string, botUsername: string): AttachmentRequest {
+/** Кнопки уведомлений N3 (предложены изменения) и N11 (замечания). «Изменить условия» — после ЗАДАЧА_04 (T5). */
+export function n3Keyboard(publicId: string): AttachmentRequest {
   return keyboard([
-    [openApp(BTN.editTerms, botUsername, `d_${publicId}`)],
     [Keyboard.button.callback(BTN.keepAsIs, cb('ka', publicId))],
+    [Keyboard.button.callback(BTN.cancelDeal, cb('cn', publicId))],
   ]);
 }
 

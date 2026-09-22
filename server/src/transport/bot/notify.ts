@@ -26,7 +26,6 @@ function clientName(bundle: DealBundle): string {
 /** Что отправить по каждому событию. Пустой массив — событие уведомления не порождает. */
 export function noticesFor(bundle: DealBundle, event: DealEvent): Notice[] {
   const id = bundle.deal.publicId;
-  const bot = cfg().MAX_BOT_USERNAME || 'bot';
   const client = clientName(bundle);
 
   switch (event.type) {
@@ -52,7 +51,7 @@ export function noticesFor(bundle: DealBundle, event: DealEvent): Notice[] {
         {
           to: 'seller',
           text: texts.N3({ client, id, text: String(event.payload.text ?? '') }),
-          keyboard: n3Keyboard(id, bot),
+          keyboard: n3Keyboard(id),
         },
       ];
 
