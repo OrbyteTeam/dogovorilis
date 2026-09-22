@@ -15,8 +15,8 @@ export type Template = {
 };
 
 export const TEMPLATES: readonly Template[] = [
-  { key: 'beauty', label: '💅 Красота', title: 'Маникюр с покрытием', prepaymentPercent: 30, cancelRule: 'free_24h', dateRequired: true, hint: null },
-  { key: 'lesson', label: '📚 Занятие', title: 'Занятие 60 минут', prepaymentPercent: 100, cancelRule: 'free_24h', dateRequired: true, hint: null },
+  { key: 'beauty', label: '💅 Красота', title: 'Маникюр с покрытием', prepaymentPercent: 30, cancelRule: 'free_24h', dateRequired: true, hint: 'Дата обязательна — клиент увидит время визита' },
+  { key: 'lesson', label: '📚 Занятие', title: 'Занятие 60 минут', prepaymentPercent: 100, cancelRule: 'free_24h', dateRequired: true, hint: 'Предоплата 100 % — занятие оплачивается заранее' },
   { key: 'repair', label: '🔧 Ремонт/выезд', title: 'Ремонт / выезд мастера', prepaymentPercent: 0, cancelRule: 'free_24h', dateRequired: false, hint: 'В уточнениях укажите адрес и стоимость диагностики' },
   { key: 'custom_order', label: '🎂 На заказ', title: 'Изделие на заказ', prepaymentPercent: 50, cancelRule: 'nonrefundable', dateRequired: true, hint: 'Дата — это выдача заказа' },
   { key: 'freelance', label: '💻 Работа под ключ', title: 'Работа под ключ', prepaymentPercent: 50, cancelRule: 'full_refund', dateRequired: true, hint: 'Дата — срок сдачи' },

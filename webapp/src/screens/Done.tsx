@@ -113,9 +113,11 @@ export function DoneScreen({ publicId, me, result, onNewDeal }: DoneScreenProps)
           </Button>
         </div>
 
-        <Typography.Text variant="description" color="tertiary">
-          Карточка уже в вашем чате с ботом — там вы увидите, когда клиент откроет ссылку.
-        </Typography.Text>
+        {result && !result.card_sent ? null : (
+          <Typography.Text variant="description" color="tertiary">
+            Карточка уже в вашем чате с ботом — там вы увидите, когда клиент откроет ссылку.
+          </Typography.Text>
+        )}
       </div>
     </Panel>
   );
