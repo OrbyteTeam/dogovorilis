@@ -55,6 +55,16 @@ describe.skipIf(!DB)('сделка-пример из чата', () => {
     expect(card.buttons.map((b) => b.text)).toEqual(expect.arrayContaining([texts.BTN.sendToMax, texts.BTN.copyLink]));
   }, TIMEOUT);
 
+  it('у отменённой сделки без клиента ссылки для клиента в карточке больше нет', async () => {
+    await h.start(SELLER, SELLER_CHAT);
+    await h.press(SELLER, SELLER_CHAT, 'ex:new', null);
+    const id = await onlyDealPublicId(h);
+    const sellerCard = await cardMid(h, id, 'seller');
+    await h.press(SELLER, SELLER_CHAT, `cn:y:${id}:none`, sellerCard);
+    expect(await dealStatus(h, id)).toBe('cancelled');
+    expect(h.max.byMid(sellerCard)!.text).not.toContain('Ссылка для клиента');
+  }, TIMEOUT);
+
   it('второй аккаунт проходит по ссылке сделки-примера и подтверждает', async () => {
     await h.start(SELLER, SELLER_CHAT);
     await h.press(SELLER, SELLER_CHAT, 'ex:new', null);

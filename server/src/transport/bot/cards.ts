@@ -122,7 +122,8 @@ function receiptLineFor(bundle: DealBundle): string | null {
 
 export function buildCardView(bundle: DealBundle, role: CardRole): texts.CardView {
   const { deal, version, seller, client } = bundle;
-  const showLink = role === 'seller' && deal.clientUserId === null;
+  // Ссылка нужна, только пока клиента ждут: у отменённой или истёкшей сделки звать по ней некого (прогон 1, S5).
+  const showLink = role === 'seller' && deal.clientUserId === null && deal.status === 'awaiting_confirmation';
   return {
     publicId: deal.publicId,
     status: deal.status,
