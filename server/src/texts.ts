@@ -497,7 +497,7 @@ export function P3_DISPUTE(a: { sumKopecks: number; linkAvailable: boolean }): s
 }
 
 export function P3(a: { sumKopecks: number }): string {
-  return `Исполнитель пока не видит перевод ${formatMoney(a.sumKopecks)}. Проверьте операцию и нажмите «Я перевёл(а)» ещё раз или выберите оплату по ссылке.`;
+  return `Исполнитель пока не видит перевод ${formatMoney(a.sumKopecks)}. Проверьте операцию и нажмите «Я перевёл(а)» ещё раз (не раньше чем через 10 минут после прошлого) — или «↩️ Отмена перевода» и оплата по ссылке.`;
 }
 
 /**
@@ -536,9 +536,8 @@ export function paymentStillPending(status: PaymentStatus): string {
 
 /** Сообщение клиенту при выдаче ссылки (SPEC §9.1 п. 2, §9.2 п. 4). */
 export function linkIssued(a: { sumKopecks: number; expiresAt: Date | null; provider: PaymentProvider }): string {
-  const sum = formatMoney(a.sumKopecks);
-  const until = a.expiresAt ? ` действует до ${formatDateTimeShort(a.expiresAt)}` : '';
-  return `Ссылка на оплату ${sum}${until}.\n${testRailNotice(a.provider)}`;
+  // Срок и сумма уже в строке оплаты карточки под заметкой — здесь только что делать и пометка теста.
+  return `💳 Ссылка готова — нажмите «${BTN.goToPayment}». После оплаты карточка обновится сама.\n${testRailNotice(a.provider)}`;
 }
 
 /** Строка про тестовую среду провайдера для карточки и сообщения об оплате по ссылке (§9.2 п.4, §18). */
@@ -584,7 +583,7 @@ export const E9 =
 export const E10 = 'Что-то пошло не так, мы уже разбираемся. Попробуйте ещё раз через минуту.';
 export const E11 = 'Оплата по ссылке не подключена. Доступен перевод по реквизитам.';
 export const E12 = 'Исполнитель не указал реквизиты для перевода. Попросите его заполнить их в Настройках.';
-export const E13 = 'Подождите — исполнитель ещё проверяет предыдущее сообщение о переводе.';
+export const E13 = 'Подождите: повторно сообщить о переводе можно через 10 минут после прошлого раза — за это время исполнитель проверит поступление.';
 
 /** Идемпотентный повтор: карточка уже в целевом состоянии (SPEC §5.2, конкурентность). */
 export const ALREADY_DONE = 'Это уже сделано — карточка актуальна.';
