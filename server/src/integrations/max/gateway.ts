@@ -63,6 +63,66 @@ class ChatQueue {
   }
 }
 
+// ─────────────────────── таймаут и повтор на уровне HTTP ───────────────────────
+
+export type ResilientFetchOptions = {
+  /** Таймаут обычного вызова Bot API. */
+  timeoutMs: number;
+  /** Таймаут long-poll `GET /updates`: SDK держит его открытым до 30 с (CONTRACTS §1.7), ждём с запасом. */
+  longPollTimeoutMs: number;
+  /** Пауза перед единственным повтором. */
+  retryDelayMs: number;
+};
+
+export const MAX_FETCH_DEFAULTS: ResilientFetchOptions = { timeoutMs: 10_000, longPollTimeoutMs: 45_000, retryDelayMs: 1_000 };
+
+/**
+ * Обёртка над `fetch` для `clientOptions.fetch` SDK (CONTRACTS §1.2, §1.12): у SDK нет своего таймаута,
+ * поэтому зависший запрос к platform-api2.max.ru держал бы обработчик кнопки бесконечно.
+ * Каждый вызов — с таймаутом (10 с; `/updates` — 45 с) и одним повтором через 1 с, если сеть не ответила
+ * (`fetch failed`) или вышел таймаут. HTTP-ответы с ошибкой (429/5xx) здесь не повторяются — это делает
+ * withRetry шлюза по MaxError. Отмена вызывающим (stopPolling) не повторяется.
+ * После двух неудач — TypeError с понятным текстом: SDK считает его сетевой ошибкой (polling повторит сам),
+ * а bot.catch ответит пользователю E10.
+ */
+export function resilientFetch(base: typeof globalThis.fetch, opts: ResilientFetchOptions = MAX_FETCH_DEFAULTS): typeof globalThis.fetch {
+  return async (input, init) => {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+    const method = (init?.method ?? 'GET').toUpperCase();
+    // В лог — только метод и путь: в query бывают user_id/chat_id, токен идёт заголовком и не логируется.
+    const op = `${method} ${url.pathname}`;
+    const timeoutMs = url.pathname === '/updates' ? opts.longPollTimeoutMs : opts.timeoutMs;
+
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const timeout = AbortSignal.timeout(timeoutMs);
+      const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+      try {
+        return await base(input, { ...init, signal });
+      } catch (e) {
+        lastError = e;
+        if (init?.signal?.aborted) throw e; // вызывающий сам отменил (stopPolling) — это не сбой
+        const reason = timeout.aborted ? 'timeout' : isNetworkError(e) ? 'network' : null;
+        if (!reason) throw e;
+        if (attempt === 1) {
+          log.warn({ op, reason, timeoutMs }, 'max: запрос не прошёл, повтор через 1 с');
+          await sleep(opts.retryDelayMs);
+          continue;
+        }
+        log.warn({ op, reason, timeoutMs, attempts: 2 }, 'max: запрос не прошёл и после повтора');
+        const why = reason === 'timeout' ? `нет ответа за ${timeoutMs / 1000} с` : 'сеть недоступна';
+        throw new TypeError(`MAX API ${op}: ${why} (2 попытки)`, { cause: e });
+      }
+    }
+    throw lastError;
+  };
+}
+
+/** `fetch failed` от undici: соединение не установилось или оборвалось — ответа нет. */
+function isNetworkError(e: unknown): boolean {
+  return e instanceof TypeError && /fetch failed|network|socket|ECONN|ETIMEDOUT|EAI_AGAIN/i.test(`${e.message} ${String((e as { cause?: unknown }).cause ?? '')}`);
+}
+
 /** 429 и 5xx — повторяем; остальное пробрасываем сразу (CONTRACTS §1.11). */
 async function withRetry<T>(op: string, fn: () => Promise<T>): Promise<T> {
   let lastError: unknown;

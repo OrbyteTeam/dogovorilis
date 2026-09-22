@@ -3,7 +3,7 @@
 import { Bot, MaxError } from '@maxhub/max-bot-api';
 import type { UpdateType } from '@maxhub/max-bot-api/types';
 import type { Config } from '../../config.js';
-import { createMaxGateway, type MaxGateway } from '../../integrations/max/gateway.js';
+import { createMaxGateway, resilientFetch, type MaxGateway } from '../../integrations/max/gateway.js';
 import { log } from '../../logger.js';
 import * as texts from '../../texts.js';
 import { parseCallback } from './callbacks.js';
@@ -57,9 +57,13 @@ export function createErrorHandler(max: MaxGateway): BotErrorHandler {
   };
 }
 
-/** `fetch` подменяется только в тестах (CONTRACTS §1.12): загрузка файлов идёт мимо него, отдельным транспортом. */
+/**
+ * `fetch` подменяется только в тестах (CONTRACTS §1.12): загрузка файлов идёт мимо него, отдельным транспортом.
+ * Любой `fetch` — и настоящий, и тестовый — оборачивается таймаутом и повтором (resilientFetch, ЗАДАЧА_03 G4).
+ */
 export async function createBot(config: Config, opts?: { fetch?: typeof globalThis.fetch }): Promise<BotRuntime> {
-  const bot = opts?.fetch ? new Bot(config.MAX_BOT_TOKEN, { clientOptions: { fetch: opts.fetch } }) : new Bot(config.MAX_BOT_TOKEN);
+  const base = opts?.fetch ?? ((input, init) => globalThis.fetch(input, init));
+  const bot = new Bot(config.MAX_BOT_TOKEN, { clientOptions: { fetch: resilientFetch(base) } });
   const max = createMaxGateway(bot.api);
   const deps: Deps = { max };
 
