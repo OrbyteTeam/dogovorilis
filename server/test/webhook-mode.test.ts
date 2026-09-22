@@ -7,7 +7,7 @@
 //   3) остановка процесса подписку не снимает (и SDK-шный stopWebhook после createWebhook её не снимал);
 //   4) сторож раз в 5 минут возвращает снятую подписку и не дублирует живую; его сбой не бросает;
 //   5) /readyz показывает subscription, а ok от неё не зависит.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { loadConfig, setConfig, type Config } from '../src/config.js';
 import { closeDb, connectDb } from '../src/db/pool.js';
@@ -81,8 +81,8 @@ describe('webhook: обработчик и подписка MAX', () => {
   });
 
   /**
-   * Бот на поддельном MAX. `failSubscriptions` — отвечать 503 на /subscriptions (MAX недоступен).
-   * `listening` — был ли HTTP-сервер уже поднят в момент каждого POST /subscriptions.
+   * Бот на поддельном MAX. `breakSubscriptions('error')` — /subscriptions отвечает 503, `'hang'` — не отвечает вовсе.
+   * `listeningAtSubscribe` — был ли HTTP-сервер уже поднят в момент каждого POST /subscriptions.
    */
   async function setup(): Promise<{
     cfg: Config;
@@ -90,18 +90,19 @@ describe('webhook: обработчик и подписка MAX', () => {
     app: FastifyInstance;
     runtime: Awaited<ReturnType<typeof createBot>>;
     listeningAtSubscribe: boolean[];
-    breakSubscriptions: (broken: boolean) => void;
+    breakSubscriptions: (mode: false | 'error' | 'hang') => void;
   }> {
     const cfg = config();
     const max = await createMaxFake();
     const app = Fastify({ logger: false });
     const listeningAtSubscribe: boolean[] = [];
-    let broken = false;
+    let broken: false | 'error' | 'hang' = false;
     const fetchSpy: typeof globalThis.fetch = async (input, init) => {
       const url = new URL(String(input));
       const method = (init?.method ?? 'GET').toUpperCase();
       if (url.pathname === '/subscriptions') {
-        if (broken) {
+        if (broken === 'hang') return new Promise<Response>(() => undefined);
+        if (broken === 'error') {
           return new Response(JSON.stringify({ code: 'service.unavailable', message: 'MAX недоступен' }), {
             status: 503,
             headers: { 'content-type': 'application/json' },
@@ -117,7 +118,7 @@ describe('webhook: обработчик и подписка MAX', () => {
       await app.close().catch(() => undefined); // тест остановки уже мог закрыть его сам
       await max.close();
     });
-    return { cfg, max, app, runtime, listeningAtSubscribe, breakSubscriptions: (b) => void (broken = b) };
+    return { cfg, max, app, runtime, listeningAtSubscribe, breakSubscriptions: (m) => void (broken = m) };
   }
 
   it('обработчик встраивается без подписки; подписка ставится, когда HTTP уже слушает', async () => {
@@ -151,7 +152,7 @@ describe('webhook: обработчик и подписка MAX', () => {
   it('MAX недоступен при старте — процесс не падает, state=false, сторож потом возвращает подписку', async () => {
     const { cfg, max, app, runtime, breakSubscriptions } = await setup();
     const keeper = await mountWebhook(app, runtime.bot, cfg);
-    breakSubscriptions(true);
+    breakSubscriptions('error');
     const t0 = new Date('2026-09-23T10:00:00Z');
 
     await expect(keeper.register(t0)).resolves.toBeUndefined();
@@ -251,7 +252,7 @@ describe('webhook: обработчик и подписка MAX', () => {
     const t0 = new Date('2026-09-23T10:00:00Z');
     await keeper.register(t0);
     max.subscriptions.length = 0;
-    breakSubscriptions(true);
+    breakSubscriptions('error');
 
     await expect(keeper.check(new Date(t0.getTime() + SUBSCRIPTION_CHECK_MS))).resolves.toBe('failed');
     expect(keeper.state()).toBe(true); // проверить не удалось — последнее известное состояние не выдумываем
@@ -259,6 +260,22 @@ describe('webhook: обработчик и подписка MAX', () => {
     breakSubscriptions(false);
     expect(await keeper.check(new Date(t0.getTime() + SUBSCRIPTION_CHECK_MS + 30_000))).toBe('skipped');
     expect(await keeper.check(new Date(t0.getTime() + 2 * SUBSCRIPTION_CHECK_MS))).toBe('restored');
+  });
+
+  it('сторож: MAX завис — через 10 с проверка отпускает тик', async () => {
+    const { cfg, app, runtime, breakSubscriptions } = await setup();
+    const keeper = await mountWebhook(app, runtime.bot, cfg);
+    const t0 = new Date('2026-09-23T10:00:00Z');
+    await keeper.register(t0);
+    breakSubscriptions('hang');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const pending = keeper.check(new Date(t0.getTime() + SUBSCRIPTION_CHECK_MS));
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(pending).resolves.toBe('failed');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   describe.skipIf(!DB)('/readyz', () => {
@@ -287,7 +304,7 @@ describe('webhook: обработчик и подписка MAX', () => {
       await connectDb(DB!, 3, 500);
       cleanup.push(() => closeDb());
       const keeper = await mountWebhook(app, runtime.bot, cfg);
-      breakSubscriptions(true);
+      breakSubscriptions('error');
       await keeper.register();
       const http = await createHttpServer({ config: cfg, max: null, botReady: () => true, subscription: () => keeper.state() });
       cleanup.push(() => http.close());

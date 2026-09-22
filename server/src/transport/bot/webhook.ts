@@ -17,6 +17,21 @@ import { ALLOWED_UPDATES } from './index.js';
 
 /** Как часто сторож сверяет подписку с MAX: тик планировщика — 30 с, столько запросов к MAX не нужно. */
 export const SUBSCRIPTION_CHECK_MS = 5 * 60_000;
+/** Сторож работает внутри тика планировщика: зависший запрос к MAX не должен держать напоминания. */
+const CALL_TIMEOUT_MS = 10_000;
+
+/** Внешний вызов с таймаутом: сам запрос не отменяется, но тик дальше не ждёт. */
+async function withTimeout<T>(op: string, call: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`max: ${op} — нет ответа за ${CALL_TIMEOUT_MS / 1000} с`)), CALL_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([call, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export type SubscriptionCheck = 'skipped' | 'present' | 'restored' | 'failed';
 
@@ -39,7 +54,8 @@ export function createSubscriptionKeeper(
 ): SubscriptionKeeper {
   let present: boolean | null = null;
   let lastCheckAt = Number.NEGATIVE_INFINITY;
-  const subscribe = () => api.subscribe(opts.url, opts.secret || undefined, opts.updateTypes);
+  const subscribe = () => withTimeout('POST /subscriptions', api.subscribe(opts.url, opts.secret || undefined, opts.updateTypes));
+  const list = () => withTimeout('GET /subscriptions', api.getSubscriptions());
 
   return {
     url: opts.url,
@@ -48,8 +64,8 @@ export function createSubscriptionKeeper(
     async register(now = new Date()) {
       lastCheckAt = now.getTime();
       try {
-        const foreign = (await api.getSubscriptions()).filter((s) => s.url !== opts.url);
-        for (const s of foreign) await api.unsubscribe(s.url);
+        const foreign = (await list()).filter((s) => s.url !== opts.url);
+        for (const s of foreign) await withTimeout('DELETE /subscriptions', api.unsubscribe(s.url));
         if (foreign.length) log.warn({ removed: foreign.length }, 'сняты чужие подписки этого токена');
       } catch (e) {
         log.warn({ err: (e as Error).message }, 'не удалось проверить чужие подписки MAX — продолжаем');
@@ -68,7 +84,7 @@ export function createSubscriptionKeeper(
       if (now.getTime() - lastCheckAt < SUBSCRIPTION_CHECK_MS) return 'skipped';
       lastCheckAt = now.getTime();
       try {
-        const subs = await api.getSubscriptions();
+        const subs = await list();
         if (subs.some((s) => s.url === opts.url)) {
           present = true;
           return 'present';
