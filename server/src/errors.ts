@@ -10,6 +10,7 @@ export type AppErrorCode =
   | 'payout_details_empty' // E12
   | 'claim_too_soon'       // E13
   | 'provider_failed'      // E9
+  | 'link_in_progress'     // «Ссылка формируется» — двойной тап «Оплатить по ссылке»
   | 'input_expired'        // E8
   | 'input_too_long'       // E5
   | 'input_not_a_file'     // E6
@@ -57,6 +58,17 @@ export class RailUnavailable extends AppError {
   constructor(readonly rail: 'link' | 'transfer', reason: string) {
     super(rail === 'link' ? 'rail_unavailable' : 'payout_details_empty', `рейл ${rail} недоступен: ${reason}`, { rail, reason });
     this.name = 'RailUnavailable';
+  }
+}
+
+/**
+ * Ссылка на оплату этого вида уже создаётся у провайдера: первый тап «Оплатить по ссылке» ещё ждёт ответа.
+ * Второй платёж создавать нельзя — у провайдера появились бы две ссылки на одну сумму (ЗАДАЧА_03 F3).
+ */
+export class LinkInProgressError extends AppError {
+  constructor() {
+    super('link_in_progress', 'ссылка на оплату ещё создаётся у провайдера');
+    this.name = 'LinkInProgressError';
   }
 }
 

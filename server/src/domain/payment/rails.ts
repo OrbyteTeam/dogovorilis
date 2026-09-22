@@ -10,7 +10,14 @@ import * as eventsRepo from '../../db/repos/events.js';
 import * as paymentsRepo from '../../db/repos/payments.js';
 import * as usersRepo from '../../db/repos/users.js';
 import * as versionsRepo from '../../db/repos/versions.js';
-import { ForbiddenError, IntegrationError, InvalidTransition, NotFoundError, RailUnavailable } from '../../errors.js';
+import {
+  ForbiddenError,
+  IntegrationError,
+  InvalidTransition,
+  LinkInProgressError,
+  NotFoundError,
+  RailUnavailable,
+} from '../../errors.js';
 import {
   createYooKassaClient,
   MIN_AMOUNT_KOPECKS,
@@ -30,6 +37,23 @@ export const LINK_TTL_MS = HOUR_MS;
 
 /** Заголовок в описании платежа: SPEC §9.2 — «Сделка #<id>: <title до 100 симв.>». */
 export const TITLE_IN_DESCRIPTION_MAX = 100;
+
+/**
+ * Сколько ждём ответа провайдера на создание ссылки, прежде чем счесть попытку сбойной.
+ * Таймаут клиента ЮKassa — 10 с плюс один повтор (SPEC §9.2), то есть живой запрос укладывается в ~21 с;
+ * 30 с — с запасом. Старше и без confirmation_url — процесс упал между шагами, слот можно освобождать.
+ */
+export const LINK_CREATION_GRACE_MS = 30_000;
+
+/** Ссылочный платёж занял слот, но ответа провайдера (confirmation_url) ещё нет и ждать его ещё разумно. */
+export function isLinkInProgress(p: Payment, now: Date): boolean {
+  return (
+    p.rail === 'link' &&
+    p.status === 'pending' &&
+    p.confirmationUrl === null &&
+    now.getTime() - p.createdAt.getTime() < LINK_CREATION_GRACE_MS
+  );
+}
 
 /**
  * Результат применения статуса провайдера. `changed` отличает первое применение от повтора:
@@ -124,6 +148,10 @@ export async function createLinkPayment(
     if (live) {
       // Оплачено — второй платёж того же вида создавать нечего.
       if (live.status === 'succeeded') return { step: 'reuse', deal, version, payment: live } as const;
+      // Первый тап ещё ждёт ответа провайдера (платёж уже занял слот, а ссылки пока нет). Второй платёж
+      // у провайдера здесь не создаём: две ссылки на одну сумму — это риск двойной оплаты. Строка сделки
+      // заблокирована, поэтому параллельные тапы проходят эту проверку строго по очереди.
+      if (isLinkInProgress(live, now)) throw new LinkInProgressError();
       // Ссылка ещё жива и клиент не просил новую — отдаём ту же (идемпотентность двойного нажатия).
       const usable =
         live.rail === 'link' &&
@@ -134,7 +162,8 @@ export async function createLinkPayment(
     }
 
     if (live) {
-      // Старая ссылка истекла / клиент передумал / нажал «Новая ссылка»: у провайдера она догорит сама.
+      // Старая ссылка истекла / клиент передумал / нажал «Новая ссылка» / создание зависло дольше
+      // LINK_CREATION_GRACE_MS (процесс упал между шагами): у провайдера она догорит сама.
       await paymentsRepo.update(c, live.id, {
         status: live.expiresAt && live.expiresAt.getTime() <= now.getTime() ? 'expired' : 'canceled',
         canceledAt: now,
@@ -144,7 +173,10 @@ export async function createLinkPayment(
         type: 'payment.canceled',
         actorUserId: actor.userId,
         actorRole: actorRoleFor(deal, actor),
-        payload: { payment_id: live.id, reason: live.rail === 'link' ? 'link_renewed' : 'rail_switch' },
+        payload: {
+          payment_id: live.id,
+          reason: live.rail !== 'link' ? 'rail_switch' : live.confirmationUrl === null ? 'link_creation_stale' : 'link_renewed',
+        },
       });
     }
 

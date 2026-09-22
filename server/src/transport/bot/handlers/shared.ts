@@ -203,6 +203,8 @@ export function errorText(e: unknown): string {
         return texts.E13;
       case 'provider_failed':
         return texts.E9;
+      case 'link_in_progress':
+        return texts.LINK_IN_PROGRESS;
       case 'deal_not_found':
         return texts.E2;
       case 'demo_deal':
