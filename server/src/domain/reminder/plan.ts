@@ -18,6 +18,8 @@ export type PlannedReminder = {
  * они привязаны к дате визита или к 72 ч на подтверждение, и ускорять их — значит закрывать демо-сделку раньше, чем её пройдут.
  */
 export const DEMO_REMINDER_DELAY_MINUTES = 2;
+/** Напоминание вернуть предоплату по отменённой сделке — через 48 ч без отметки «Вернул(а)» (ЗАДАЧА_03 H1). */
+export const REFUND_REMINDER_HOURS = 48;
 const DEMO_ACCELERATED: readonly ReminderKind[] = ['acceptance_due', 'receipt_due'];
 
 export function isDemoAccelerated(kind: ReminderKind): boolean {
@@ -35,7 +37,10 @@ function dedupeKey(dealId: number, kind: ReminderKind, role: 'seller' | 'client'
 
 /** Набор напоминаний для текущего статуса сделки. Прошедшие сроки не планируем — отправлять их поздно. */
 export function planReminders(input: {
-  deal: Pick<Deal, 'id' | 'status' | 'statusChangedAt' | 'clientUserId' | 'expiresAt' | 'paidAt' | 'demo'>;
+  deal: Pick<
+    Deal,
+    'id' | 'status' | 'statusChangedAt' | 'clientUserId' | 'expiresAt' | 'paidAt' | 'demo' | 'cancelRefundExpected' | 'refundSentAt' | 'refundReceivedAt'
+  >;
   version: Pick<DealVersion, 'scheduledAt' | 'prepaymentKopecks' | 'totalKopecks' | 'cancelRule'>;
   taxMode: TaxMode;
   now: Date;
@@ -120,7 +125,15 @@ export function planReminders(input: {
       break;
     }
 
-    // Терминальные статусы (declined, expired, closed, cancelled) и remarks напоминаний не имеют:
+    // Отменённая сделка, где предоплату надо вернуть: через 48 ч без отметки «Вернул(а)» напомнить исполнителю
+    // (SPEC §5.3, ЗАДАЧА_03 H1). Клиент уже подтвердил получение — напоминать не о чем.
+    case 'cancelled':
+      if (deal.cancelRefundExpected === true && !deal.refundSentAt && !deal.refundReceivedAt) {
+        add('refund_due', 'seller', addHours(base, REFUND_REMINDER_HOURS));
+      }
+      break;
+
+    // Остальные терминальные статусы (declined, expired, closed) и remarks напоминаний не имеют:
     // в remarks мяч на стороне исполнителя, и SPEC §10.2 для него строки не задаёт.
     default:
       break;

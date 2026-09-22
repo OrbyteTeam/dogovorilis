@@ -391,11 +391,32 @@ export function claimedTransferOnCancel(a: { sumKopecks: number; at: Date | null
   return `Клиент сообщал о переводе ${formatMoney(a.sumKopecks)}${when} — проверьте поступление и верните при необходимости`;
 }
 
-export function refundLine(a: { prepaymentKopecks: number; expected: boolean | null }): string | null {
+export function refundLine(a: {
+  prepaymentKopecks: number;
+  expected: boolean | null;
+  /** «Вернул(а)» исполнителя и «Возврат получил(а)» клиента (SPEC §5.3, ЗАДАЧА_03 H1) */
+  sentAt?: Date | null;
+  receivedAt?: Date | null;
+}): string | null {
   if (a.prepaymentKopecks <= 0 || a.expected === null) return null;
   const sum = formatMoney(a.prepaymentKopecks);
-  return a.expected ? `Предоплата ${sum}: ожидается возврат` : `Предоплата ${sum} не возвращается по правилу отмены`;
+  if (!a.expected) return `Предоплата ${sum} не возвращается по правилу отмены`;
+  if (a.receivedAt) return `Возврат ${sum} получен клиентом ${formatDateTimeShort(a.receivedAt)}`;
+  if (a.sentAt) return `Исполнитель вернул ${sum} ${formatDateTimeShort(a.sentAt)} — ждём подтверждения клиента`;
+  return `Предоплата ${sum}: ожидается возврат`;
 }
+
+/** Уведомления второй стороне об отметке возврата (H1). */
+export function REFUND_SENT_NOTICE(a: { id: string; sumKopecks: number }): string {
+  return `💸 Исполнитель сообщает, что вернул ${formatMoney(a.sumKopecks)} по отменённой #${a.id}. Проверьте поступление и нажмите «${BTN.refundReceived}».`;
+}
+
+export function REFUND_RECEIVED_NOTICE(a: { client: string; id: string; sumKopecks: number }): string {
+  return `✅ ${esc(a.client)} подтвердил(а) возврат ${formatMoney(a.sumKopecks)} по #${a.id}.`;
+}
+
+export const REFUND_SENT_ACK = 'Отметили возврат — клиенту ушло уведомление.';
+export const REFUND_RECEIVED_ACK = 'Спасибо — возврат отмечен, исполнитель получил уведомление.';
 
 // --- уведомления второй стороне (§6.5). id = public_id сделки ---
 
@@ -692,6 +713,8 @@ function reminderBody(
       return `Не забудьте чек по #${a.id}: сформируйте в «Мой налог» и приложите.`;
     case 'receipt_deadline':
       return `До 9-го числа осталось 2 дня: чек по #${a.id} ещё не приложен (ст. 14 422-ФЗ).`;
+    case 'refund_due':
+      return `Сделка #${a.id} отменена двое суток назад, возврат ${sum} клиенту не отмечен. Верните тем же способом, каким получили, и нажмите «${BTN.refundSent}» в карточке.`;
   }
 }
 
@@ -735,6 +758,8 @@ export const BTN = {
   cancelYes: 'Да, отменить',
   noReason: 'Без причины',
   receiptPdf: '📄 Квитанция PDF',
+  refundSent: '✅ Вернул(а)',
+  refundReceived: '✅ Возврат получил(а)',
   open: 'Открыть',
   back: '↩️ Назад',
   keepDeal: '↩️ Не отменять',

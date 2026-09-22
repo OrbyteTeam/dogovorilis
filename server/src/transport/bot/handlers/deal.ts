@@ -43,7 +43,8 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
 
   const bundle = await dealService.getBundle(parsed.publicId);
   dealService.ensureParticipant(bundle.deal, userId); // посторонний дальше не проходит (G1)
-  const fallback = CODE_ROLE[parsed.code] ?? (bundle.deal.sellerUserId === userId ? 'seller' : 'client');
+  const byCode = parsed.code === 'rf' ? (parsed.sub === 's' ? 'seller' : 'client') : CODE_ROLE[parsed.code];
+  const fallback = byCode ?? (bundle.deal.sellerUserId === userId ? 'seller' : 'client');
   const { role, cardRole } = await actingRole(bundle.deal.id, userId, pressedMid(ctx), fallback);
   const actor = actorOf(userId, role);
   const viewRole: CardRole = cardRole ?? (role === 'client' && bundle.deal.demo ? 'client_demo' : role);
@@ -130,6 +131,13 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
     case 'pdf':
       await sendReceiptOnDemand(ctx, deps, bundle, viewRole);
       return;
+
+    case 'rf': {
+      // «Вернул(а)» / «Возврат получил(а)» у отменённой сделки (SPEC §5.3, ЗАДАЧА_03 H1).
+      const result = await dealService.confirmRefund(parsed.publicId, actor);
+      await publishResult(ctx, deps, result, viewRole, role === 'seller' ? texts.REFUND_SENT_ACK : texts.REFUND_RECEIVED_ACK);
+      return;
+    }
 
     default:
       await reply(ctx, deps, bundle, { role: viewRole, note: texts.E1 });

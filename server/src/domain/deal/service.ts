@@ -248,9 +248,8 @@ async function runTransition(spec: TransitionSpec, now = new Date()): Promise<Se
  * и настоящая сделка не истекала никогда (аудит 22.09 п. 3). Уже зависшие строки поднимает миграция 0003.
  */
 async function replanReminders(c: DbClient, bundle: DealBundle, now: Date): Promise<void> {
-  const items = isTerminal(bundle.deal.status)
-    ? []
-    : planReminders({ deal: bundle.deal, version: bundle.version, taxMode: taxModeOf(bundle), now });
+  // Терминальные статусы план возвращает пустым, кроме отменённой сделки с ожидаемым возвратом (refund_due, H1).
+  const items = planReminders({ deal: bundle.deal, version: bundle.version, taxMode: taxModeOf(bundle), now });
   await remindersRepo.cancelPendingExcept(c, bundle.deal.id, items.map((i) => i.dedupeKey), 'replanned');
   if (items.length) await remindersRepo.planMany(c, bundle.deal.id, items);
 }
@@ -760,6 +759,41 @@ export function cancel(publicId: string, actor: Actor, reason: string | null, no
     },
     now,
   );
+}
+
+// ─────────────────────── возврат после отмены (SPEC §5.3, ЗАДАЧА_03 H1) ───────────────────────
+
+/**
+ * «✅ Вернул(а)» (исполнитель) и «✅ Возврат получил(а)» (клиент) у отменённой сделки с ожидаемым возвратом.
+ * Статус не меняется (машина состояний тут ни при чём) — фиксируется факт: время в сделке и событие
+ * refund.confirmed {by}. Повторное нажатие — «уже сделано». Напоминание refund_due перепланируется.
+ */
+export async function confirmRefund(publicId: string, actor: Actor, now = new Date()): Promise<ServiceResult> {
+  return inTx(async (c) => {
+    const deal = await dealsRepo.lockByPublicId(c, publicId);
+    if (!deal) throw new NotFoundError(`сделка ${publicId}`);
+    assertParticipant(deal, actor);
+    if (deal.status !== 'cancelled' || deal.cancelRefundExpected !== true) {
+      throw new InvalidTransition(deal.status, 'cancel', actor.role, 'forbidden');
+    }
+    const field = actor.role === 'seller' ? 'refundSentAt' : 'refundReceivedAt';
+    if (deal[field]) {
+      const bundle = await loadBundle(c, deal);
+      return { bundle, previousStatus: deal.status, statusChanged: false, events: [], alreadyDone: true };
+    }
+    const updated = await dealsRepo.update(c, deal.id, { [field]: now });
+    const event = await eventsRepo.append(c, {
+      dealId: deal.id,
+      type: 'refund.confirmed',
+      actorUserId: actor.userId,
+      actorRole: actorRoleFor(deal, actor),
+      payload: { by: actor.role },
+    });
+    const bundle = await loadBundle(c, updated);
+    await replanReminders(c, bundle, now);
+    log.info({ deal: deal.publicId, by: actor.role }, 'возврат отмечен');
+    return { bundle, previousStatus: deal.status, statusChanged: false, events: [event], alreadyDone: false };
+  });
 }
 
 /**

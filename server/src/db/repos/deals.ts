@@ -5,7 +5,8 @@ import { TERMINAL_STATUSES } from '../../types.js';
 
 const COLS = `id, public_id, seller_user_id, client_user_id, demo, template, current_version, status,
   status_changed_at, client_joined_at, confirmed_at, done_at, accepted_at, paid_at, closed_at,
-  cancelled_at, cancelled_by_role, cancel_reason, cancel_refund_expected, expires_at, created_at, updated_at`;
+  cancelled_at, cancelled_by_role, cancel_reason, cancel_refund_expected, refund_sent_at, refund_received_at,
+  expires_at, created_at, updated_at`;
 
 type DealRow = {
   id: number;
@@ -27,6 +28,8 @@ type DealRow = {
   cancelled_by_role: 'seller' | 'client' | 'system' | null;
   cancel_reason: string | null;
   cancel_refund_expected: boolean | null;
+  refund_sent_at: Date | null;
+  refund_received_at: Date | null;
   expires_at: Date | null;
   created_at: Date;
   updated_at: Date;
@@ -66,6 +69,8 @@ function mapDeal(r: DealRow): Deal {
     cancelledByRole: r.cancelled_by_role,
     cancelReason: r.cancel_reason,
     cancelRefundExpected: r.cancel_refund_expected,
+    refundSentAt: r.refund_sent_at,
+    refundReceivedAt: r.refund_received_at,
     expiresAt: r.expires_at,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -125,6 +130,8 @@ export type DealPatch = Partial<
     | 'cancelledByRole'
     | 'cancelReason'
     | 'cancelRefundExpected'
+    | 'refundSentAt'
+    | 'refundReceivedAt'
     | 'expiresAt'
   >
 >;
@@ -146,6 +153,8 @@ const PATCH_COLUMNS: { readonly [K in keyof Required<DealPatch>]: string } = {
   cancelledByRole: 'cancelled_by_role',
   cancelReason: 'cancel_reason',
   cancelRefundExpected: 'cancel_refund_expected',
+  refundSentAt: 'refund_sent_at',
+  refundReceivedAt: 'refund_received_at',
   expiresAt: 'expires_at',
 };
 

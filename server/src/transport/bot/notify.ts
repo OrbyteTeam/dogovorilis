@@ -129,6 +129,13 @@ export function noticesFor(bundle: DealBundle, event: DealEvent): Notice[] {
     case 'deal.closed':
       return [];
 
+    case 'refund.confirmed': {
+      const sum = refundSumOf(bundle);
+      return event.payload.by === 'seller'
+        ? [{ to: 'client', text: texts.REFUND_SENT_NOTICE({ id, sumKopecks: sum }), keyboard: openKeyboard(id) }]
+        : [{ to: 'seller', text: texts.REFUND_RECEIVED_NOTICE({ client, id, sumKopecks: sum }), keyboard: openKeyboard(id) }];
+    }
+
     case 'deal.cancelled': {
       const by = (event.payload.by as 'seller' | 'client' | 'system') ?? 'system';
       const { refund, claim } = refundLinesFor(bundle);
@@ -150,6 +157,14 @@ export function noticesFor(bundle: DealBundle, event: DealEvent): Notice[] {
     default:
       return [];
   }
+}
+
+/** Сумма к возврату: полученная предоплата, иначе заявленный клиентом перевод (отмена при claimed, F7). */
+function refundSumOf(bundle: DealBundle): number {
+  const received = bundle.payments.find((p) => p.kind === 'prepayment' && p.status === 'succeeded');
+  if (received) return received.amountKopecks;
+  const claimed = bundle.payments.filter((p) => p.rail === 'transfer' && p.claimedAt).sort((a, b) => b.id - a.id)[0];
+  return claimed?.amountKopecks ?? bundle.version.prepaymentKopecks;
 }
 
 /** Отправить уведомления по списку событий одного перехода. */

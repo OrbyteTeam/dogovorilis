@@ -68,6 +68,8 @@ export function buildReceiptData(bundle: DealBundle, now = new Date(), transferL
       cancelledByRole: deal.cancelledByRole,
       cancelReason: deal.cancelReason,
       cancelRefundExpected: deal.cancelRefundExpected,
+      refundSentAt: deal.refundSentAt,
+      refundReceivedAt: deal.refundReceivedAt,
     },
     timezone: cfg().APP_TIMEZONE,
   };

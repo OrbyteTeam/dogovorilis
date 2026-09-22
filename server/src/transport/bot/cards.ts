@@ -137,11 +137,19 @@ export function refundLinesFor(bundle: DealBundle): { refund: string | null; cla
   const claimed = claimedTransferAtCancel(bundle.payments);
   const claim = claimed ? texts.claimedTransferOnCancel({ sumKopecks: claimed.amountKopecks, at: claimed.claimedAt }) : null;
   const prepaymentReceived = bundle.payments.some((p) => p.kind === 'prepayment' && p.status === 'succeeded');
+  const { refundSentAt: sentAt, refundReceivedAt: receivedAt } = bundle.deal;
+  const marked = Boolean(sentAt || receivedAt);
+  // Как только кто-то отметил возврат (H1), строка возврата показывает это — и для заявленного перевода.
   const refund =
-    claim && !prepaymentReceived
+    claim && !prepaymentReceived && !marked
       ? null
-      : texts.refundLine({ prepaymentKopecks: bundle.version.prepaymentKopecks, expected: bundle.deal.cancelRefundExpected });
-  return { refund, claim };
+      : texts.refundLine({
+          prepaymentKopecks: prepaymentReceived ? bundle.version.prepaymentKopecks : (claimed?.amountKopecks ?? bundle.version.prepaymentKopecks),
+          expected: bundle.deal.cancelRefundExpected,
+          sentAt,
+          receivedAt,
+        });
+  return { refund, claim: marked ? null : claim };
 }
 
 export function buildCardView(bundle: DealBundle, role: CardRole): texts.CardView {

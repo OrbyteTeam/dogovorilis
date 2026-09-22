@@ -90,6 +90,7 @@ const ALL_REMINDERS = Object.keys({
   payment_overdue: true,
   receipt_due: true,
   receipt_deadline: true,
+  refund_due: true,
 } satisfies Record<ReminderKind, true>) as ReminderKind[];
 
 const ALL_RULES = Object.keys({

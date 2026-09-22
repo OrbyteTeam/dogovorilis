@@ -91,7 +91,13 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
   const rows: Row[] = [];
 
   if (status === 'closed' || status === 'declined' || status === 'expired' || status === 'cancelled') {
-    return keyboard([[callback(BTN.receiptPdf, cb('pdf', id))]]);
+    // Отменённая сделка с ожидаемым возвратом: каждая сторона отмечает свой шаг (SPEC §5.3, ЗАДАЧА_03 H1).
+    const d = bundle.deal;
+    const refundOpen = status === 'cancelled' && d.cancelRefundExpected === true && !d.refundReceivedAt;
+    if (refundOpen && isSeller && !d.refundSentAt) rows.push([callback(BTN.refundSent, cb('rf', id, 's'))]);
+    if (refundOpen && !isSeller) rows.push([callback(BTN.refundReceived, cb('rf', id, 'c'))]);
+    rows.push([callback(BTN.receiptPdf, cb('pdf', id))]);
+    return keyboard(rows);
   }
 
   if (isSeller) {

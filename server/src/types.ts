@@ -49,7 +49,8 @@ export type ReminderKind =
   | 'payment_due'
   | 'payment_overdue'
   | 'receipt_due'
-  | 'receipt_deadline';
+  | 'receipt_deadline'
+  | 'refund_due';
 
 /** Типы событий сделки (SPEC §5.4). */
 export type DealEventType =
@@ -77,7 +78,8 @@ export type DealEventType =
   | 'deal.cancelled'
   | 'reminder.sent'
   | 'reminder.skipped'
-  | 'demo.opened';
+  | 'demo.opened'
+  | 'refund.confirmed';
 
 /** Действия над сделкой = триггеры переходов T2–T17 (SPEC §5.2). */
 export type DealAction =
@@ -154,6 +156,9 @@ export type Deal = {
   cancelledByRole: 'seller' | 'client' | 'system' | null;
   cancelReason: string | null;
   cancelRefundExpected: boolean | null;
+  /** Исполнитель отметил «Вернул(а)» / клиент — «Возврат получил(а)» (SPEC §5.3, ЗАДАЧА_03 H1). */
+  refundSentAt: Date | null;
+  refundReceivedAt: Date | null;
   expiresAt: Date | null;
   createdAt: Date;
   updatedAt: Date;

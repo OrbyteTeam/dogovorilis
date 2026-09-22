@@ -51,6 +51,9 @@ export type ReceiptData = {
     cancelledByRole: 'seller' | 'client' | 'system' | null;
     cancelReason: string | null;
     cancelRefundExpected: boolean | null;
+    /** отметки возврата сторонами (SPEC §5.3, ЗАДАЧА_03 H1) */
+    refundSentAt?: Date | null;
+    refundReceivedAt?: Date | null;
   };
   /** часовой пояс показа; по умолчанию Europe/Moscow */
   timezone?: string;
@@ -398,6 +401,8 @@ function drawClosing(doc: Doc, data: ReceiptData, tz: string): void {
           : 'Предоплата: не возвращается по правилу отмены',
       );
     }
+    if (c.refundSentAt) line(doc, `Исполнитель отметил возврат ${formatFull(c.refundSentAt, tz)}`);
+    if (c.refundReceivedAt) line(doc, `Клиент подтвердил получение возврата ${formatFull(c.refundReceivedAt, tz)}`);
   } else {
     line(doc, `Текущий статус: ${STATUS_TEXT[data.status]}`);
   }

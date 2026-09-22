@@ -27,6 +27,7 @@ export const DEAL_CODES = [
   'dm', // открыть как клиент (демо)
   'op', // открыть карточку
   'pdf', // квитанция
+  'rf', // rf:s — исполнитель «Вернул(а)», rf:c — клиент «Возврат получил(а)» (SPEC §5.3)
 ] as const;
 
 export type DealCode = (typeof DEAL_CODES)[number];
@@ -37,7 +38,7 @@ export type ParsedCallback =
   | { kind: 'example_new' }
   | { kind: 'deal'; code: DealCode; sub: string | null; publicId: string; arg: string | null };
 
-const SUBS = new Set(['y', 'c', 'g', 'n', 'x']);
+const SUBS = new Set(['y', 'c', 'g', 'n', 'x', 's']);
 
 export function parseCallback(payload: string | undefined | null): ParsedCallback | null {
   if (!payload) return null;
