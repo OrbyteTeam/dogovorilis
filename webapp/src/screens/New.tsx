@@ -9,7 +9,7 @@ import { Field } from '../components/Field';
 import { Segmented } from '../components/Segmented';
 import { TemplateChips } from '../components/TemplateChips';
 import { useToast } from '../components/Toast';
-import { CANCEL_RULE_LABEL, CANCEL_RULE_TEXT, CANCEL_RULES, formatRub, TAX_MODE_LABEL, TAX_MODES } from '../format';
+import { CANCEL_RULE_LABEL, CANCEL_RULE_TEXT, CANCEL_RULES, formatRub, isoToMoscowInput, moscowInputToIso, TAX_MODE_LABEL, TAX_MODES } from '../format';
 import type {
   CancelRule,
   CreateDealRequest,
@@ -48,12 +48,6 @@ function toInt(value: string): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
-function toLocalInputValue(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(
-    date.getMinutes(),
-  )}`;
-}
 
 export interface NewScreenProps {
   me: MeResponse;
@@ -91,7 +85,7 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
   const [submitted, setSubmitted] = useState(false);
   const [sending, setSending] = useState(false);
 
-  const minDateValue = useMemo(() => toLocalInputValue(new Date(Date.now() + LEAD_TIME_MS)), []);
+  const minDateValue = useMemo(() => isoToMoscowInput(new Date(Date.now() + LEAD_TIME_MS)), []);
 
   const totalRub = toInt(totalRaw);
 
@@ -133,7 +127,8 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
     } else if (!scheduledLocal) {
       next.scheduled_at = 'Укажите дату и время или выберите «Без даты»';
     } else {
-      const at = new Date(scheduledLocal).getTime();
+      const iso = moscowInputToIso(scheduledLocal);
+      const at = iso ? new Date(iso).getTime() : Number.NaN;
       if (Number.isNaN(at)) next.scheduled_at = 'Укажите дату и время или выберите «Без даты»';
       else if (at < Date.now() + LEAD_TIME_MS - 60_000) next.scheduled_at = 'Дата не раньше чем через 30 минут';
     }
@@ -236,7 +231,7 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
     const payload: CreateDealRequest = {
       template: templateKey ?? 'free',
       title: title.trim(),
-      scheduled_at: noDate ? null : new Date(scheduledLocal).toISOString(),
+      scheduled_at: noDate ? null : moscowInputToIso(scheduledLocal),
       total_rub: totalRub,
       prepayment_rub: prepaymentRub,
       cancel_rule: cancelRule,
@@ -382,7 +377,7 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
             />
           </Field>
 
-          <Field label="Когда" htmlFor="deal-date" error={shown('scheduled_at')}>
+          <Field label="Когда" htmlFor="deal-date" hint="Время по Москве (МСК)" error={shown('scheduled_at')}>
             <div className="dg-field">
               <input
                 id="deal-date"

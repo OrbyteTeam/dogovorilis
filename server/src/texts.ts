@@ -371,7 +371,7 @@ export function paymentLine(a: {
 }
 
 export function receiptLine(a: { attachedAt: Date | null; deadline: Date | null; taxModeNone: boolean }): string {
-  if (a.attachedAt) return `Чек приложен ${formatDateShort(a.attachedAt)}`;
+  if (a.attachedAt) return `Файл чека приложен ${formatDateShort(a.attachedAt)} (содержимое не проверялось)`;
   if (a.taxModeNone) return 'Чек не требуется (исполнитель работает без чека)';
   return a.deadline ? `Чек: до ${formatDayMonth(a.deadline)}` : 'Чек: ждём от исполнителя';
 }
@@ -440,7 +440,7 @@ export function N12(a: { id: string }): string {
 }
 
 export function N13(a: { id: string; deadline: Date }): string {
-  return `🧾 #${a.id} оплачена полностью. Сформируйте чек в «Мой налог» и приложите его сюда — до ${formatDayMonth(a.deadline)}.`;
+  return `🧾 #${a.id} оплачена полностью. Сформируйте чек в «Мой налог» сейчас и приложите его сюда. Для безналичных расчётов закон допускает до ${formatDayMonth(a.deadline)}.`;
 }
 
 export function N14(a: { id: string; withReceipt: boolean }): string {
@@ -481,6 +481,18 @@ export function P1(a: { sumKopecks: number; payoutDetails: string }): string {
 
 export function P2(a: { client: string; sumKopecks: number; id: string }): string {
   return `${esc(a.client)} сообщает о переводе ${formatMoney(a.sumKopecks)} по #${a.id}. Проверьте поступление.`;
+}
+
+/**
+ * Второе «Не вижу перевода» подряд: дальше пинг-понг бесполезен. Предлагаем оплату по ссылке — там
+ * подтверждение приходит от провайдера — и честно говорим, что продукт не арбитр (аудит 22.09 §4.3).
+ */
+export function P3_DISPUTE(a: { sumKopecks: number; linkAvailable: boolean }): string {
+  const next = a.linkAvailable
+    ? 'Если перевод не находится — оплатите по ссылке: там подтверждение приходит от платёжного сервиса.'
+    : 'Если перевод не находится — договоритесь с исполнителем в чате.';
+  return `Исполнитель снова не видит перевод ${formatMoney(a.sumKopecks)}. ${next}
+Продукт не арбитр: спор решают стороны, хронология «перевёл / не вижу» — в квитанции.`;
 }
 
 export function P3(a: { sumKopecks: number }): string {
@@ -585,6 +597,7 @@ export const RECEIPT_NOT_YET = 'Квитанция формируется пос
 export const TRANSFER_CLAIMED = '📨 Сообщили исполнителю о переводе. Ждём его подтверждения.';
 export const TRANSFER_NOT_SEEN_ACK = 'Отметили, что перевода не видно. Клиент получил подсказку.';
 export const RAIL_CANCELLED = 'Способ оплаты отменён. Выберите другой.';
+export const RECEIPT_FORWARDED = 'Файл чека от исполнителя (содержимое не проверялось):';
 export const RECEIPT_PREPARING = '📄 Готовлю квитанцию — пришлю отдельным сообщением.';
 
 // --- напоминания (§10.2) ---

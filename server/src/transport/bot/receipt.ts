@@ -11,6 +11,7 @@ import * as texts from '../../texts.js';
 import { paidTotal, remaining, type DealBundle } from '../../types.js';
 import { renderReceiptPdf, receiptFileName, type ReceiptData } from '../../domain/receipt/pdf.js';
 import { taxModeOf } from '../../domain/deal/service.js';
+import { transferHistory, type TransferStep } from '../../domain/payment/service.js';
 import { displayName } from './cards.js';
 
 /** Телефон в квитанции — маской (SPEC §9.5): «+7 ••• ••• 12-34». */
@@ -22,7 +23,7 @@ export function maskPhone(phone: string | null): string | null {
   return `+${digits[0]} ••• ••• ${tail.slice(0, 2)}-${tail.slice(2)}`;
 }
 
-export function buildReceiptData(bundle: DealBundle, now = new Date()): ReceiptData {
+export function buildReceiptData(bundle: DealBundle, now = new Date(), transferLog: TransferStep[] = []): ReceiptData {
   const { deal, version, seller, client } = bundle;
   return {
     publicId: deal.publicId,
@@ -60,6 +61,7 @@ export function buildReceiptData(bundle: DealBundle, now = new Date()): ReceiptD
     paidKopecks: paidTotal(bundle.payments),
     remainingKopecks: Math.max(0, remaining(version) - paidTotal(bundle.payments.filter((p) => p.kind === 'final'))),
     receipt: { attachedAt: bundle.receipt?.createdAt ?? null, taxMode: taxModeOf(bundle) },
+    transferLog,
     closing: {
       closedAt: deal.closedAt,
       cancelledAt: deal.cancelledAt,
@@ -86,7 +88,7 @@ export async function renderAndSendReceipt(max: MaxGateway, bundle: DealBundle):
   const outDir = await mkdtemp(path.join(tmpdir(), 'dogovorilis-receipt-'));
   const outPath = path.join(outDir, fileName);
   try {
-    await renderReceiptPdf(buildReceiptData(bundle), outPath);
+    await renderReceiptPdf(buildReceiptData(bundle, new Date(), await transferHistory(bundle.deal.id)), outPath);
     const attachment = await max.uploadFile(outPath);
     const text = texts.N14({ id: bundle.deal.publicId, withReceipt: Boolean(bundle.receipt) });
 
@@ -98,7 +100,7 @@ export async function renderAndSendReceipt(max: MaxGateway, bundle: DealBundle):
       if (!user?.dialogChatId) continue;
       // Чек исполнителя пересылаем первым — квитанция ссылается на него («чек — выше»).
       if (bundle.receipt) {
-        await max.send({ chatId: user.dialogChatId }, 'Чек от исполнителя:', [
+        await max.send({ chatId: user.dialogChatId }, texts.RECEIPT_FORWARDED, [
           max.attachmentFromToken(bundle.receipt.attachmentType, bundle.receipt.maxToken),
         ]);
       }

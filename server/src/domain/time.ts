@@ -78,14 +78,22 @@ export function zonedToUtc(
   return new Date(guess - offset);
 }
 
-/** «сб, 27 сен, 14:00»; год добавляется, если он не текущий (SPEC §6). */
+/**
+ * Метка пояса у каждого времени, которое видит человек: «(МСК)». Без неё исполнитель из другого пояса читает
+ * московское время как своё (аудит 22.09 §4.5). Даты без времени метку не получают.
+ */
+export function zoneLabel(tz: string = DEFAULT_TZ): string {
+  return tz === DEFAULT_TZ ? 'МСК' : tz;
+}
+
+/** «сб, 27 сен, 14:00 (МСК)»; год добавляется, если он не текущий (SPEC §6). */
 export function formatDateTime(date: Date, tz: string = DEFAULT_TZ, now: Date = new Date()): string {
   const p = partsIn(date, tz);
   const cur = partsIn(now, tz);
   const year = p.year === cur.year ? '' : ` ${p.year}`;
   const hh = String(p.hour).padStart(2, '0');
   const mm = String(p.minute).padStart(2, '0');
-  return `${WEEKDAYS[p.weekday]}, ${p.day} ${MONTHS_SHORT[p.month - 1]}${year}, ${hh}:${mm}`;
+  return `${WEEKDAYS[p.weekday]}, ${p.day} ${MONTHS_SHORT[p.month - 1]}${year}, ${hh}:${mm} (${zoneLabel(tz)})`;
 }
 
 /** «27.09» — короткая дата для строк оплаты и чека. */
@@ -94,10 +102,10 @@ export function formatDateShort(date: Date, tz: string = DEFAULT_TZ): string {
   return `${String(p.day).padStart(2, '0')}.${String(p.month).padStart(2, '0')}`;
 }
 
-/** «27.09 14:03» — дата и время без дня недели. */
+/** «27.09 14:03 (МСК)» — дата и время без дня недели. */
 export function formatDateTimeShort(date: Date, tz: string = DEFAULT_TZ): string {
   const p = partsIn(date, tz);
-  return `${formatDateShort(date, tz)} ${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`;
+  return `${formatDateShort(date, tz)} ${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')} (${zoneLabel(tz)})`;
 }
 
 /** «9 октября» — для текста про дедлайн чека. */
@@ -110,8 +118,7 @@ export function formatDayMonth(date: Date, tz: string = DEFAULT_TZ): string {
 export function formatFull(date: Date, tz: string = DEFAULT_TZ): string {
   const p = partsIn(date, tz);
   const pad = (n: number) => String(n).padStart(2, '0');
-  const zone = tz === DEFAULT_TZ ? 'МСК' : tz;
-  return `${pad(p.day)}.${pad(p.month)}.${p.year} ${pad(p.hour)}:${pad(p.minute)} (${zone})`;
+  return `${pad(p.day)}.${pad(p.month)}.${p.year} ${pad(p.hour)}:${pad(p.minute)} (${zoneLabel(tz)})`;
 }
 
 /** 9-е число месяца, следующего за оплатой — крайний срок чека НПД (ст. 14 422-ФЗ). */

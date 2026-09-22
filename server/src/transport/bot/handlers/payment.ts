@@ -8,7 +8,7 @@ import * as paymentService from '../../../domain/payment/service.js';
 import * as rails from '../../../domain/payment/rails.js';
 import type { Actor } from '../../../domain/deal/service.js';
 import { syncCards } from '../cards.js';
-import { transferCheckKeyboard, transferKeyboard } from '../keyboards.js';
+import { transferCheckKeyboard, transferDisputeKeyboard, transferKeyboard } from '../keyboards.js';
 import { deliver, notifyForEvents } from '../notify.js';
 import { renderAndSendReceipt } from '../receipt.js';
 import type { ParsedCallback } from '../callbacks.js';
@@ -157,12 +157,16 @@ async function onTransferStep(
 
     case 'n': {
       // Исполнитель: «Не вижу перевода» → платёж снова pending, клиенту уходит P3.
+      // Со второго «не вижу» подряд — P3_DISPUTE: оплата по ссылке и «продукт не арбитр» (аудит 22.09 §4.3).
       const pay = await paymentService.markNotReceived({ publicId, paymentId, actor });
       const bundle = await answerAndSync(ctx, deps, publicId, viewRole, texts.TRANSFER_NOT_SEEN_ACK);
+      const sum = pay.payment.amountKopecks;
+      const disputed = (await paymentService.notReceivedCount(bundle.deal.id, pay.payment.id)) >= 2;
+      const linkAvailable = rails.linkRailAvailable(bundle.sellerProfile, sum);
       await deliver(deps.max, bundle, {
         to: 'client',
-        text: texts.P3({ sumKopecks: pay.payment.amountKopecks }),
-        keyboard: transferKeyboard(publicId, pay.payment.id),
+        text: disputed ? texts.P3_DISPUTE({ sumKopecks: sum, linkAvailable }) : texts.P3({ sumKopecks: sum }),
+        keyboard: disputed ? transferDisputeKeyboard(publicId, pay.payment.id, linkAvailable) : transferKeyboard(publicId, pay.payment.id),
       });
       return;
     }

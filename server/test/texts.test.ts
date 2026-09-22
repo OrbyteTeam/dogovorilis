@@ -256,7 +256,7 @@ describe('карточка (SPEC §6.4, DESIGN §6)', () => {
         '👤 Исполнитель: Анна А.',
         '👤 Клиент: Анна А.',
         `Остаток получен ${formatDateTimeShort(paidAt)} (ссылка ЮKassa, тест)`,
-        'Чек приложен 28.09',
+        'Файл чека приложен 28.09 (содержимое не проверялось)',
       ].join('\n'),
     );
   });
@@ -452,7 +452,7 @@ describe('строки карточки', () => {
 
   it('строка чека: приложен / дедлайн / без чека', () => {
     expect(receiptLine({ attachedAt: new Date('2026-09-22T09:00:00Z'), deadline: null, taxModeNone: false })).toBe(
-      'Чек приложен 22.09',
+      'Файл чека приложен 22.09 (содержимое не проверялось)',
     );
     const deadline = new Date('2026-10-09T20:59:00Z');
     expect(receiptLine({ attachedAt: null, deadline, taxModeNone: false })).toBe(`Чек: до ${formatDayMonth(deadline)}`);
@@ -498,7 +498,7 @@ describe('уведомления (SPEC §6.5)', () => {
   it('N13 подставляет дедлайн чека словами', () => {
     const deadline = new Date('2026-10-09T20:59:00Z');
     expect(N13({ id: ID, deadline })).toBe(
-      `🧾 #${ID} оплачена полностью. Сформируйте чек в «Мой налог» и приложите его сюда — до ${formatDayMonth(deadline)}.`,
+      `🧾 #${ID} оплачена полностью. Сформируйте чек в «Мой налог» сейчас и приложите его сюда. Для безналичных расчётов закон допускает до ${formatDayMonth(deadline)}.`,
     );
     expect(N13({ id: ID, deadline })).toContain('9 октября');
   });

@@ -196,3 +196,49 @@ async function lockPayment(c: DbClient, dealId: number, paymentId: number): Prom
   if (!payment || payment.dealId !== dealId) throw new NotFoundError(`платёж ${paymentId}`);
   return payment;
 }
+
+// ─────────────────────────── хронология перевода (аудит 22.09 §4.3) ───────────────────────────
+
+/** Шаг спора «перевёл / не вижу / получил»: отметки сторон с временем — продукт сам перевод не видит. */
+export type TransferStep = {
+  at: Date;
+  step: 'claimed' | 'not_received' | 'received';
+  kind: PaymentKind;
+  amountKopecks: number;
+};
+
+/**
+ * Хронология рейла «перевод» по сделке — для квитанции PDF. Продукт не арбитр: он лишь сохраняет,
+ * кто и когда что отметил, чтобы у обеих сторон на руках была одинаковая история.
+ */
+export async function transferHistory(dealId: number): Promise<TransferStep[]> {
+  return inTx(async (c) => {
+    const payments = (await paymentsRepo.listByDeal(c, dealId)).filter((p) => p.rail === 'transfer');
+    if (!payments.length) return [];
+    const byId = new Map(payments.map((p) => [p.id, p]));
+    const steps: TransferStep[] = [];
+    for (const e of await eventsRepo.listByDeal(c, dealId)) {
+      if (e.type !== 'payment.claimed' && e.type !== 'payment.not_received') continue;
+      const payment = byId.get(Number(e.payload.payment_id));
+      if (!payment) continue;
+      steps.push({
+        at: e.createdAt,
+        step: e.type === 'payment.claimed' ? 'claimed' : 'not_received',
+        kind: payment.kind,
+        amountKopecks: payment.amountKopecks,
+      });
+    }
+    for (const p of payments) {
+      if (p.status === 'succeeded' && p.succeededAt) {
+        steps.push({ at: p.succeededAt, step: 'received', kind: p.kind, amountKopecks: p.amountKopecks });
+      }
+    }
+    return steps.sort((a, b) => a.at.getTime() - b.at.getTime());
+  });
+}
+
+/** Сколько раз исполнитель ответил «Не вижу перевода» по этому платежу — после двух предлагаем оплату по ссылке. */
+export async function notReceivedCount(dealId: number, paymentId: number): Promise<number> {
+  const events = await inTx((c) => eventsRepo.listByDeal(c, dealId));
+  return events.filter((e) => e.type === 'payment.not_received' && Number(e.payload.payment_id) === paymentId).length;
+}

@@ -204,6 +204,14 @@ export function transferKeyboard(publicId: string, paymentId: number): Attachmen
   ]);
 }
 
+/** Второе «Не вижу» подряд (P3_DISPUTE): оплата по ссылке — первой, повтор «перевёл» — второй. */
+export function transferDisputeKeyboard(publicId: string, paymentId: number, linkAvailable: boolean): AttachmentRequest {
+  const rows: Row[] = [];
+  if (linkAvailable) rows.push([Keyboard.button.callback(BTN.payByLink, cb('pl', publicId))]);
+  rows.push([Keyboard.button.callback(BTN.transferDone, cb('tr', publicId, 'c', paymentId))]);
+  return keyboard(rows);
+}
+
 /** Исполнителю: клиент сообщил о переводе (P2). */
 export function transferCheckKeyboard(publicId: string, paymentId: number): AttachmentRequest {
   return keyboard([

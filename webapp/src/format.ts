@@ -20,14 +20,36 @@ const DATE_TIME = new Intl.DateTimeFormat('ru-RU', {
   year: 'numeric',
   hour: '2-digit',
   minute: '2-digit',
+  timeZone: 'Europe/Moscow',
 });
 
-/** Время показываем в часовом поясе устройства исполнителя — сервер хранит UTC (SPEC §4.3, APP_TIMEZONE). */
+/**
+ * Время — по Москве с меткой «(МСК)», как в карточке бота и квитанции (APP_TIMEZONE сервера). Раньше экран
+ * показывал пояс устройства, а бот — МСК без метки: исполнитель из Новосибирска видел 14:00, клиент — 10:00.
+ */
 export function formatDateTime(iso: string | null): string {
   if (!iso) return 'без даты';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return 'без даты';
-  return DATE_TIME.format(date).replace(', ', ' ');
+  return `${DATE_TIME.format(date).replace(', ', ' ')} (МСК)`;
+}
+
+/** Москва живёт без перехода на летнее время: UTC+3 круглый год. */
+const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+/** Значение `datetime-local` («2026-09-27T14:00») — это время по Москве → момент UTC в ISO. null — строка не разобрана. */
+export function moscowInputToIso(value: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
+  if (!m) return null;
+  const utc = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])) - MSK_OFFSET_MS;
+  return new Date(utc).toISOString();
+}
+
+/** Момент → значение для `datetime-local` по Москве (для атрибута min). */
+export function isoToMoscowInput(date: Date): string {
+  const msk = new Date(date.getTime() + MSK_OFFSET_MS);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${msk.getUTCFullYear()}-${pad(msk.getUTCMonth() + 1)}-${pad(msk.getUTCDate())}T${pad(msk.getUTCHours())}:${pad(msk.getUTCMinutes())}`;
 }
 
 export const CANCEL_RULE_LABEL: Record<CancelRule, string> = {

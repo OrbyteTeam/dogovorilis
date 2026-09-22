@@ -43,6 +43,8 @@ export type ReceiptData = {
   paidKopecks: number;
   remainingKopecks: number;
   receipt: { attachedAt: Date | null; taxMode: TaxMode };
+  /** Отметки сторон по рейлу «перевод»: кто и когда сообщил, не увидел, подтвердил (аудит 22.09 §4.3). */
+  transferLog?: Array<{ at: Date; step: 'claimed' | 'not_received' | 'received'; kind: PaymentKind; amountKopecks: number }>;
   closing: {
     closedAt: Date | null;
     cancelledAt: Date | null;
@@ -348,12 +350,31 @@ function drawPayments(doc: Doc, data: ReceiptData, tz: string): void {
   hairline(doc);
 }
 
+const TRANSFER_STEP_TEXT: Record<'claimed' | 'not_received' | 'received', string> = {
+  claimed: 'клиент сообщил о переводе',
+  not_received: 'исполнитель не видит перевода',
+  received: 'исполнитель подтвердил получение',
+};
+
+/** Хронология «перевёл / не вижу / получил» — продукт не арбитр, он сохраняет отметки сторон с временем. */
+function drawTransferLog(doc: Doc, data: ReceiptData, tz: string): void {
+  const log = data.transferLog ?? [];
+  if (log.length === 0) return;
+  heading(doc, 'Подтверждения перевода');
+  for (const s of log) {
+    const what = `${PAYMENT_KIND_TEXT[s.kind].toLowerCase()} ${formatMoney(s.amountKopecks)}`;
+    line(doc, `${formatFull(s.at, tz)} — ${TRANSFER_STEP_TEXT[s.step]}: ${what}`);
+  }
+  line(doc, 'Банковский перевод продукт не видит: строки выше — отметки сторон кнопками в MAX.', { size: 9, color: MUTED });
+  hairline(doc);
+}
+
 function drawReceiptLine(doc: Doc, data: ReceiptData, tz: string): void {
   heading(doc, 'Чек');
   if (data.receipt.taxMode === 'none') {
     line(doc, 'Чек не требуется (режим без чека)');
   } else if (data.receipt.attachedAt !== null) {
-    line(doc, `Чек НПД приложен исполнителем ${formatFull(data.receipt.attachedAt, tz)}`);
+    line(doc, `Файл чека приложен исполнителем ${formatFull(data.receipt.attachedAt, tz)} (содержимое не проверялось)`);
   } else {
     line(doc, 'Чек не приложен');
   }
@@ -435,6 +456,7 @@ export async function renderReceiptPdf(data: ReceiptData, outPath: string): Prom
   drawTerms(doc, data, tz);
   drawConfirmations(doc, data, tz);
   drawPayments(doc, data, tz);
+  drawTransferLog(doc, data, tz);
   drawReceiptLine(doc, data, tz);
   drawClosing(doc, data, tz);
   drawFooter(doc);
