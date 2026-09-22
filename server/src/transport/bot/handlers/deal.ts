@@ -42,6 +42,7 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
   await touchUser(ctx, chatId);
 
   const bundle = await dealService.getBundle(parsed.publicId);
+  dealService.ensureParticipant(bundle.deal, userId); // посторонний дальше не проходит (G1)
   const fallback = CODE_ROLE[parsed.code] ?? (bundle.deal.sellerUserId === userId ? 'seller' : 'client');
   const { role, cardRole } = await actingRole(bundle.deal.id, userId, pressedMid(ctx), fallback);
   const actor = actorOf(userId, role);
@@ -76,13 +77,9 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
       await publishResult(ctx, deps, await dealService.markDone(parsed.publicId, actor), viewRole);
       return;
 
-    case 'ac': {
-      const result = await dealService.accept(parsed.publicId, actor);
-      await publishResult(ctx, deps, result, viewRole);
-      // Остатка не было — сделка сразу оплачена; при tax_mode=none закрываем её и отправляем квитанцию (T15).
-      await finishIfFullyPaid(deps, result.bundle);
+    case 'ac': // остатка нет и tax_mode=none — домен сразу закрывает сделку, квитанцию шлёт publishResult (T15)
+      await publishResult(ctx, deps, await dealService.accept(parsed.publicId, actor), viewRole);
       return;
-    }
 
     case 'rm':
       await askInput(ctx, deps, bundle, viewRole, { userId, kind: 'remarks', prompt: texts.ASK_REMARKS });
@@ -98,9 +95,7 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
 
     case 'nc':
       if (parsed.sub === 'y') {
-        const result = await dealService.closeWithoutReceipt(parsed.publicId, actor);
-        await publishResult(ctx, deps, result, viewRole);
-        if (!result.alreadyDone) await renderAndSendReceipt(deps.max, result.bundle);
+        await publishResult(ctx, deps, await dealService.closeWithoutReceipt(parsed.publicId, actor), viewRole);
       } else {
         await reply(ctx, deps, bundle, {
           role: viewRole,
@@ -239,19 +234,3 @@ async function sendReceiptOnDemand(ctx: Context, deps: Deps, bundle: DealBundle,
   await reply(ctx, deps, bundle, { role, note: texts.RECEIPT_PREPARING });
   await renderAndSendReceipt(deps.max, bundle);
 }
-
-/**
- * Полностью оплаченная сделка: при tax_mode='none' чек не нужен — закрываем сразу (SPEC §5.2 T14 → T15)
- * и отправляем квитанцию обеим сторонам.
- */
-export async function finishIfFullyPaid(deps: Deps, bundle: DealBundle): Promise<void> {
-  if (bundle.deal.status !== 'paid') return;
-  if (dealService.taxModeOf(bundle) !== 'none') return;
-  const closed = await dealService.closeAutomatically(bundle.deal.id);
-  const { syncCards } = await import('../cards.js');
-  await syncCards(deps.max, closed.bundle);
-  const { notifyForEvents } = await import('../notify.js');
-  await notifyForEvents(deps.max, closed.bundle, closed.events);
-  await renderAndSendReceipt(deps.max, closed.bundle);
-}
-

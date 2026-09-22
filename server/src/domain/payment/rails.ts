@@ -1,8 +1,12 @@
 // Рейл «ссылка» (SPEC §9.1 п. 1–4, §9.2, §10.3). Здесь живёт вся логика ссылочного платежа:
 // создание у провайдера, единая идемпотентная реакция на его статус и истечение срока.
 //
+// Главное правило (ЗАДАЧА_03 F): провайдер — источник истины. Наши локальные `expired` / `canceled`
+// означают «мы перестали ждать», а не «денег не будет»: если провайдер потом скажет succeeded, оплата
+// учитывается, а если сделка принять её уже не может — обе стороны узнают, что деньги надо вернуть.
+//
 // Слои: этот модуль — единственный, кто вызывает integrations/yookassa.
-// Переход сделки (T9/T14) делает domain/deal/service.ts — здесь только деньги.
+// Переход сделки (T9/T14/T15) делает domain/deal/service.ts — здесь только деньги.
 import { cfg } from '../../config.js';
 import { inTx, type DbClient } from '../../db/pool.js';
 import * as dealsRepo from '../../db/repos/deals.js';
@@ -10,7 +14,14 @@ import * as eventsRepo from '../../db/repos/events.js';
 import * as paymentsRepo from '../../db/repos/payments.js';
 import * as usersRepo from '../../db/repos/users.js';
 import * as versionsRepo from '../../db/repos/versions.js';
-import { ForbiddenError, IntegrationError, InvalidTransition, NotFoundError, RailUnavailable } from '../../errors.js';
+import {
+  ForbiddenError,
+  IntegrationError,
+  InvalidTransition,
+  LinkInProgressError,
+  NotFoundError,
+  RailUnavailable,
+} from '../../errors.js';
 import {
   createYooKassaClient,
   MIN_AMOUNT_KOPECKS,
@@ -18,7 +29,7 @@ import {
   type YooKassaPayment,
 } from '../../integrations/yookassa/client.js';
 import { log } from '../../logger.js';
-import type { Deal, DealVersion, Payment, PaymentKind, SellerProfile } from '../../types.js';
+import { isTerminal, type Deal, type DealEvent, type DealVersion, type Payment, type PaymentKind, type SellerProfile } from '../../types.js';
 import * as dealService from '../deal/service.js';
 import { actorRoleFor, type Actor, type ServiceResult } from '../deal/service.js';
 import { newIdempotenceKey } from '../ids.js';
@@ -32,14 +43,40 @@ export const LINK_TTL_MS = HOUR_MS;
 export const TITLE_IN_DESCRIPTION_MAX = 100;
 
 /**
+ * Сколько ждём ответа провайдера на создание ссылки, прежде чем счесть попытку сбойной.
+ * Таймаут клиента ЮKassa — 10 с плюс один повтор (SPEC §9.2), то есть живой запрос укладывается в ~21 с;
+ * 30 с — с запасом. Старше и без confirmation_url — процесс упал между шагами, слот можно освобождать.
+ */
+export const LINK_CREATION_GRACE_MS = 30_000;
+
+/** Ссылочный платёж занял слот, но ответа провайдера (confirmation_url) ещё нет и ждать его ещё разумно. */
+export function isLinkInProgress(p: Payment, now: Date): boolean {
+  return (
+    p.rail === 'link' &&
+    p.status === 'pending' &&
+    p.confirmationUrl === null &&
+    now.getTime() - p.createdAt.getTime() < LINK_CREATION_GRACE_MS
+  );
+}
+
+/**
  * Результат применения статуса провайдера. `changed` отличает первое применение от повтора:
  * вебхук, опрос и кнопка «Проверить оплату» приходят к одной и той же функции (SPEC §9.1 п. 3).
  */
 export type ApplyResult = {
   payment: Payment;
+  /** Изменилось хоть что-то: платёж, сделка или появилось событие, о котором надо сказать сторонам. */
   changed: boolean;
-  /** Переход сделки, если он произошёл именно сейчас (T9 или T14). */
+  /**
+   * Переход сделки (T9 или T14, при tax_mode='none' — вместе с T15). Есть при любом succeeded, в том числе
+   * повторном: тогда `alreadyDone = true` — сделка была сдвинута раньше (F4, самовосстановление).
+   */
   transition: ServiceResult | null;
+  /**
+   * События этого применения помимо перехода: отмена провайдером, поздняя оплата, вытесненный ею платёж.
+   * Транспорт отдаёт их в notify: уведомление порождает только поздняя оплата, которую надо вернуть.
+   */
+  events: DealEvent[];
 };
 
 /** Нормализованный ответ провайдера — чтобы Т-Банк подключался тем же путём (ЗАДАЧА_03). */
@@ -124,6 +161,10 @@ export async function createLinkPayment(
     if (live) {
       // Оплачено — второй платёж того же вида создавать нечего.
       if (live.status === 'succeeded') return { step: 'reuse', deal, version, payment: live } as const;
+      // Первый тап ещё ждёт ответа провайдера (платёж уже занял слот, а ссылки пока нет). Второй платёж
+      // у провайдера здесь не создаём: две ссылки на одну сумму — это риск двойной оплаты. Строка сделки
+      // заблокирована, поэтому параллельные тапы проходят эту проверку строго по очереди.
+      if (isLinkInProgress(live, now)) throw new LinkInProgressError();
       // Ссылка ещё жива и клиент не просил новую — отдаём ту же (идемпотентность двойного нажатия).
       const usable =
         live.rail === 'link' &&
@@ -134,7 +175,8 @@ export async function createLinkPayment(
     }
 
     if (live) {
-      // Старая ссылка истекла / клиент передумал / нажал «Новая ссылка»: у провайдера она догорит сама.
+      // Старая ссылка истекла / клиент передумал / нажал «Новая ссылка» / создание зависло дольше
+      // LINK_CREATION_GRACE_MS (процесс упал между шагами): у провайдера она догорит сама.
       await paymentsRepo.update(c, live.id, {
         status: live.expiresAt && live.expiresAt.getTime() <= now.getTime() ? 'expired' : 'canceled',
         canceledAt: now,
@@ -144,7 +186,10 @@ export async function createLinkPayment(
         type: 'payment.canceled',
         actorUserId: actor.userId,
         actorRole: actorRoleFor(deal, actor),
-        payload: { payment_id: live.id, reason: live.rail === 'link' ? 'link_renewed' : 'rail_switch' },
+        payload: {
+          payment_id: live.id,
+          reason: live.rail !== 'link' ? 'rail_switch' : live.confirmationUrl === null ? 'link_creation_stale' : 'link_renewed',
+        },
       });
     }
 
@@ -214,21 +259,27 @@ export async function createLinkPayment(
 
 // ─────────────────────────── применение статуса ───────────────────────────
 
+/** Что решила транзакция применения статуса; переход сделки — отдельной транзакцией после неё. */
+type Step = { payment: Payment; changed: boolean; events: DealEvent[]; moveDeal: boolean };
+
 /**
  * Единая точка для всех трёх путей подтверждения (SPEC §9.1 п. 3): вебхук, опрос планировщика,
- * кнопка «Проверить оплату». Идемпотентна: повторный `succeeded` не делает второго перехода.
+ * кнопка «Проверить оплату». Идемпотентна: повторный `succeeded` не делает второго перехода,
+ * но и не пропускает его, если прошлый раз процесс упал между транзакциями (ЗАДАЧА_03 F4).
  */
 export async function applyProviderStatus(paymentId: number, outcome: ProviderOutcome, now = new Date()): Promise<ApplyResult> {
-  const step = await inTx(async (c) => {
+  const step = await inTx(async (c): Promise<Step> => {
+    // Порядок блокировок тот же, что у переходов и отмены сделки: сначала сделка, потом платёж.
+    // Иначе поздняя оплата (ей нужна сделка) и cancel() (он отменяет платежи) могли бы сцепиться насмерть.
+    const peek = await paymentsRepo.byId(c, paymentId);
+    if (!peek) throw new NotFoundError(`платёж ${paymentId}`);
+    const deal = await dealsRepo.lockById(c, peek.dealId);
     const payment = await paymentsRepo.lockById(c, paymentId);
-    if (!payment) throw new NotFoundError(`платёж ${paymentId}`);
-
-    // Терминальные статусы не переигрываются ни в какую сторону.
-    if (payment.status === 'succeeded' || payment.status === 'canceled' || payment.status === 'expired') {
-      return { payment, changed: false, succeeded: false } as const;
-    }
+    if (!deal || !payment) throw new NotFoundError(`платёж ${paymentId}`);
+    const live = payment.status === 'pending' || payment.status === 'claimed';
 
     if (outcome.status === 'pending') {
+      if (!live) return { payment, changed: false, events: [], moveDeal: false };
       // Статус не поменялся, но отметка опроса нужна: по updated_at планировщик держит паузу в 60 с.
       // updatedAt ставим явно тем же «сейчас», по которому считается выборка (§10.3).
       const touched = await paymentsRepo.update(c, payment.id, {
@@ -236,48 +287,138 @@ export async function applyProviderStatus(paymentId: number, outcome: ProviderOu
         raw: outcome.raw,
         updatedAt: now,
       });
-      return { payment: touched, changed: false, succeeded: false } as const;
+      return { payment: touched, changed: false, events: [], moveDeal: false };
     }
 
-    if (outcome.status === 'succeeded') {
+    if (outcome.status === 'canceled') {
+      // Наш expired/canceled провайдерский canceled только подтверждает; succeeded он не отменяет (финальный).
+      if (!live) return { payment, changed: false, events: [], moveDeal: false };
+      const updated = await paymentsRepo.update(c, payment.id, {
+        status: 'canceled',
+        providerStatus: outcome.providerStatus,
+        cancellationReason: outcome.cancellationReason,
+        canceledAt: now,
+        raw: outcome.raw,
+      });
+      const event = await eventsRepo.append(c, {
+        dealId: payment.dealId,
+        type: 'payment.canceled',
+        actorUserId: null,
+        actorRole: 'system',
+        payload: { payment_id: payment.id, reason: outcome.cancellationReason ?? outcome.providerStatus },
+      });
+      return { payment: updated, changed: true, events: [event], moveDeal: false };
+    }
+
+    // succeeded
+    if (payment.status === 'succeeded') return { payment, changed: false, events: [], moveDeal: true };
+    if (live) {
       const updated = await paymentsRepo.update(c, payment.id, {
         status: 'succeeded',
         providerStatus: outcome.providerStatus,
         succeededAt: now,
         raw: outcome.raw,
       });
-      return { payment: updated, changed: true, succeeded: true } as const;
+      return { payment: updated, changed: true, events: [], moveDeal: true };
     }
-
-    const updated = await paymentsRepo.update(c, payment.id, {
-      status: 'canceled',
-      providerStatus: outcome.providerStatus,
-      cancellationReason: outcome.cancellationReason,
-      canceledAt: now,
-      raw: outcome.raw,
-    });
-    await eventsRepo.append(c, {
-      dealId: payment.dealId,
-      type: 'payment.canceled',
-      actorUserId: null,
-      actorRole: 'system',
-      payload: { payment_id: payment.id, reason: outcome.cancellationReason ?? outcome.providerStatus },
-    });
-    return { payment: updated, changed: true, succeeded: false } as const;
+    return applyLateSuccess(c, deal, payment, outcome, now);
   });
 
-  if (!step.succeeded) return { payment: step.payment, changed: step.changed, transition: null };
+  if (!step.moveDeal) return { payment: step.payment, changed: step.changed, transition: null, events: step.events };
 
-  // Переход сделки — своей транзакцией (runTransition берёт сделку под FOR UPDATE сам).
+  // Переход сделки — своей транзакцией (runTransition берёт сделку под FOR UPDATE сам). Вызывается при
+  // каждом succeeded: если сделка уже сдвинута, вернётся alreadyDone без побочных эффектов.
   const transition = await dealService.applyPaymentSucceeded(
     { dealId: step.payment.dealId, paymentId: step.payment.id, kind: step.payment.kind },
     now,
   );
-  log.info(
-    { deal: transition.bundle.deal.publicId, payment: step.payment.id, kind: step.payment.kind, status: transition.bundle.deal.status },
-    'платёж по ссылке подтверждён',
+  if (!transition.alreadyDone) {
+    log.info(
+      { deal: transition.bundle.deal.publicId, payment: step.payment.id, kind: step.payment.kind, status: transition.bundle.deal.status },
+      step.changed ? 'платёж по ссылке подтверждён' : 'платёж был подтверждён раньше — сделка доведена сейчас',
+    );
+  }
+  return {
+    payment: step.payment,
+    changed: step.changed || !transition.alreadyDone,
+    transition,
+    events: step.events,
+  };
+}
+
+/**
+ * Провайдер сказал succeeded про платёж, который мы локально уже закрыли (истёк / сменили рейл / отменили
+ * сделку). Деньги у исполнителя — это факт, и продукт обязан его отразить (ЗАДАЧА_03 F1):
+ *  - сделка всё ещё ждёт этот вид платежа → оплата учитывается как обычная: живой платёж того же вида
+ *    (новая ссылка, перевод) вытесняется, чтобы не нарушить «один живой платёж на (сделку, вид)»,
+ *    затем обычный T9/T14;
+ *  - сделка отменена или этот этап уже оплачен другим платежом → сделку не двигаем, сторонам —
+ *    «Поступила оплата … — верните её клиенту», у отменённой сделки ожидается возврат.
+ */
+async function applyLateSuccess(c: DbClient, deal: Deal, payment: Payment, outcome: ProviderOutcome, now: Date): Promise<Step> {
+  const version = await versionsRepo.byVersion(c, deal.id, deal.currentVersion);
+  const sameKind = (await paymentsRepo.listByDeal(c, deal.id)).filter((p) => p.kind === payment.kind && p.id !== payment.id);
+  const alreadyPaid = sameKind.some((p) => p.status === 'succeeded');
+  const expected = version ? expectedPayment(deal, version) : null;
+  const dealTakesIt = !isTerminal(deal.status) && !alreadyPaid && expected?.kind === payment.kind;
+  const late = { payment_id: payment.id, kind: payment.kind, amount: payment.amountKopecks, was: payment.status };
+
+  if (dealTakesIt) {
+    const events: DealEvent[] = [];
+    for (const other of sameKind.filter((p) => p.status === 'pending' || p.status === 'claimed')) {
+      await paymentsRepo.update(c, other.id, { status: 'canceled', canceledAt: now, cancellationReason: 'superseded_by_late_success' });
+      events.push(
+        await eventsRepo.append(c, {
+          dealId: deal.id,
+          type: 'payment.canceled',
+          actorUserId: null,
+          actorRole: 'system',
+          payload: { payment_id: other.id, reason: 'superseded_by_late_success' },
+        }),
+      );
+    }
+    const updated = await paymentsRepo.update(c, payment.id, {
+      status: 'succeeded',
+      providerStatus: outcome.providerStatus,
+      succeededAt: now,
+      raw: outcome.raw,
+    });
+    events.push(
+      await eventsRepo.append(c, { dealId: deal.id, type: 'payment.succeeded_late', actorUserId: null, actorRole: 'system', payload: late }),
+    );
+    log.warn({ deal: deal.publicId, payment: payment.id, was: payment.status }, 'оплата пришла после локального закрытия ссылки — учтена');
+    return { payment: updated, changed: true, events, moveDeal: true };
+  }
+
+  // Сделка оплату принять не может. Сообщаем сторонам один раз: повтор вебхука или опрос не должны слать
+  // «верните деньги» снова.
+  const reported = (await eventsRepo.listByDeal(c, deal.id)).some(
+    (e) => e.type === 'payment.succeeded_late' && e.payload.payment_id === payment.id,
   );
-  return { payment: step.payment, changed: true, transition };
+  if (reported) return { payment, changed: false, events: [], moveDeal: false };
+
+  // Платёж честно помечаем succeeded — если индекс «один живой на (сделку, вид)» это позволяет. При двойной
+  // оплате этапа succeeded уже занят первым платежом: тогда статус оставляем, а факт — в provider_status и событии.
+  const slotTaken = sameKind.some((p) => p.status === 'pending' || p.status === 'claimed' || p.status === 'succeeded');
+  const updated = await paymentsRepo.update(
+    c,
+    payment.id,
+    slotTaken
+      ? { providerStatus: outcome.providerStatus, raw: outcome.raw }
+      : { status: 'succeeded', providerStatus: outcome.providerStatus, succeededAt: now, raw: outcome.raw },
+  );
+  const dealCancelled = deal.status === 'cancelled';
+  if (dealCancelled) await dealsRepo.update(c, deal.id, { cancelRefundExpected: true });
+  const reason = dealCancelled ? 'deal_cancelled' : 'already_paid';
+  const event = await eventsRepo.append(c, {
+    dealId: deal.id,
+    type: 'payment.succeeded_late',
+    actorUserId: null,
+    actorRole: 'system',
+    payload: { ...late, refund_required: true, reason },
+  });
+  log.warn({ deal: deal.publicId, payment: payment.id, status: deal.status, reason }, 'оплата пришла, когда сделка её уже не ждёт — сторонам «верните деньги»');
+  return { payment: updated, changed: true, events: [event], moveDeal: false };
 }
 
 /**
@@ -288,7 +429,7 @@ export async function refreshFromProvider(paymentId: number, now = new Date()): 
   const payment = await inTx((c) => paymentsRepo.byId(c, paymentId));
   if (!payment) throw new NotFoundError(`платёж ${paymentId}`);
   if (!payment.providerPaymentId) {
-    return { payment, changed: false, transition: null };
+    return { payment, changed: false, transition: null, events: [] };
   }
   const fresh = await yookassa().getPayment(payment.providerPaymentId);
   return applyProviderStatus(paymentId, outcomeOf(fresh), now);
@@ -313,6 +454,17 @@ export async function expirePayment(paymentId: number, now = new Date()): Promis
     });
     return updated;
   });
+}
+
+/**
+ * Ссылка по нашим часам истекла. Прежде чем объявить её мёртвой, последний раз спрашиваем провайдера
+ * (ЗАДАЧА_03 F2): клиент мог заплатить в последнюю минуту, а вебхук ещё в пути или потерялся.
+ * `expired` ставится, только если провайдер не сказал ни succeeded, ни canceled.
+ */
+export async function expireUnlessPaid(paymentId: number, now = new Date()): Promise<{ applied: ApplyResult; expired: Payment | null }> {
+  const applied = await refreshFromProvider(paymentId, now);
+  if (applied.payment.status !== 'pending') return { applied, expired: null };
+  return { applied, expired: await expirePayment(paymentId, now) };
 }
 
 /** Платёж истёк, если срок вышел и оплаты не пришло. */

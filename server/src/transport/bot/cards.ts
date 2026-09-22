@@ -6,7 +6,15 @@ import { inTx } from '../../db/pool.js';
 import type { AttachmentRequest, MaxGateway } from '../../integrations/max/gateway.js';
 import { log } from '../../logger.js';
 import * as texts from '../../texts.js';
-import { livePayment, paidTotal, remaining, type CardMessage, type CardRole, type DealBundle } from '../../types.js';
+import {
+  claimedTransferAtCancel,
+  livePayment,
+  paidTotal,
+  remaining,
+  type CardMessage,
+  type CardRole,
+  type DealBundle,
+} from '../../types.js';
 import { linkRailAvailable } from '../../domain/payment/rails.js';
 import { receiptDeadline } from '../../domain/time.js';
 import { taxModeOf } from '../../domain/deal/service.js';
@@ -120,10 +128,27 @@ function receiptLineFor(bundle: DealBundle): string | null {
   });
 }
 
+/**
+ * Строки про возврат у отменённой сделки — одни и те же в карточке и в N15 (SPEC §5.3, ЗАДАЧА_03 F7).
+ * Если клиент сообщил о переводе, а подтверждения не было, строка «Предоплата …: ожидается возврат»
+ * говорила бы о деньгах, получение которых никто не подтвердил, — вместо неё строка «сверьте поступление».
+ */
+export function refundLinesFor(bundle: DealBundle): { refund: string | null; claim: string | null } {
+  const claimed = claimedTransferAtCancel(bundle.payments);
+  const claim = claimed ? texts.claimedTransferOnCancel({ sumKopecks: claimed.amountKopecks, at: claimed.claimedAt }) : null;
+  const prepaymentReceived = bundle.payments.some((p) => p.kind === 'prepayment' && p.status === 'succeeded');
+  const refund =
+    claim && !prepaymentReceived
+      ? null
+      : texts.refundLine({ prepaymentKopecks: bundle.version.prepaymentKopecks, expected: bundle.deal.cancelRefundExpected });
+  return { refund, claim };
+}
+
 export function buildCardView(bundle: DealBundle, role: CardRole): texts.CardView {
   const { deal, version, seller, client } = bundle;
   // Ссылка нужна, только пока клиента ждут: у отменённой или истёкшей сделки звать по ней некого (прогон 1, S5).
   const showLink = role === 'seller' && deal.clientUserId === null && deal.status === 'awaiting_confirmation';
+  const { refund, claim } = refundLinesFor(bundle);
   return {
     publicId: deal.publicId,
     status: deal.status,
@@ -146,7 +171,8 @@ export function buildCardView(bundle: DealBundle, role: CardRole): texts.CardVie
     paymentLine: paymentLineFor(bundle, role),
     transferLines: transferLinesFor(bundle, role),
     receiptLine: receiptLineFor(bundle),
-    refundLine: texts.refundLine({ prepaymentKopecks: version.prepaymentKopecks, expected: deal.cancelRefundExpected }),
+    refundLine: refund,
+    claimLine: claim,
     clientLink: showLink ? dealLink(deal.publicId) : null,
   };
 }

@@ -5,7 +5,7 @@ import { cfg } from '../../../config.js';
 import { inTx } from '../../../db/pool.js';
 import * as cardsRepo from '../../../db/repos/cards.js';
 import * as usersRepo from '../../../db/repos/users.js';
-import { AppError, ForbiddenError, InvalidTransition } from '../../../errors.js';
+import { AppError, ForbiddenError, InvalidTransition, NotYourDealError } from '../../../errors.js';
 import type { AttachmentRequest, MaxGateway } from '../../../integrations/max/gateway.js';
 import { log } from '../../../logger.js';
 import * as texts from '../../../texts.js';
@@ -13,9 +13,9 @@ import type { CardMessage, CardRole, DealBundle, User } from '../../../types.js'
 import * as dealService from '../../../domain/deal/service.js';
 import type { Actor, ServiceResult } from '../../../domain/deal/service.js';
 import { parseCallback } from '../callbacks.js';
-import { renderCard, sendCard, syncCards } from '../cards.js';
+import { renderCard, sendCard } from '../cards.js';
 import { menuKeyboard } from '../keyboards.js';
-import { notifyForEvents } from '../notify.js';
+import { publishOutcome } from '../outcome.js';
 
 export type Deps = { max: MaxGateway };
 
@@ -131,7 +131,8 @@ export async function reply(
 
 /**
  * Довести результат перехода до обеих сторон: обновить нажатую карточку ответом, остальные — правкой,
- * затем отправить уведомления. Порядок важен: пользователь сначала видит реакцию на своё нажатие.
+ * затем уведомления и, если сделка закрылась, квитанция PDF (outcome.publishOutcome).
+ * Порядок важен: пользователь сначала видит реакцию на своё нажатие.
  */
 export async function publishResult(
   ctx: Context,
@@ -145,8 +146,7 @@ export async function publishResult(
     note: result.alreadyDone ? texts.ALREADY_DONE : note,
     text: result.alreadyDone ? texts.ALREADY_DONE : (note ?? shortAck(result)),
   });
-  await syncCards(deps.max, result.bundle, skip);
-  if (!result.alreadyDone) await notifyForEvents(deps.max, result.bundle, result.events);
+  await publishOutcome(deps.max, result, skip);
 }
 
 function shortAck(result: ServiceResult): string {
@@ -188,6 +188,7 @@ export function errorText(e: unknown): string {
     if (e.reason === 'already_done') return texts.ALREADY_DONE;
     return texts.E1;
   }
+  if (e instanceof NotYourDealError) return texts.NOT_YOUR_DEAL;
   if (e instanceof ForbiddenError) {
     if (e.message === 'other_client') return texts.E3;
     if (e.message === 'self_is_seller') return texts.E1;
@@ -203,6 +204,8 @@ export function errorText(e: unknown): string {
         return texts.E13;
       case 'provider_failed':
         return texts.E9;
+      case 'link_in_progress':
+        return texts.LINK_IN_PROGRESS;
       case 'deal_not_found':
         return texts.E2;
       case 'demo_deal':
@@ -229,7 +232,9 @@ export async function answerError(ctx: Context, deps: Deps, e: unknown): Promise
   const text = errorText(e);
   log.warn({ err: (e as Error).message, update: ctx.update.update_type }, 'обработчик ответил ошибкой');
   if (ctx.update.update_type === 'message_callback') {
-    await answerCallbackProblem(ctx, deps, text);
+    // Постороннему — только текст: ни карточки чужой сделки, ни её кнопок (G1).
+    if (e instanceof NotYourDealError) await deps.max.answer(ctx.callback!.callback_id, text).catch(() => undefined);
+    else await answerCallbackProblem(ctx, deps, text);
   } else {
     const chatId = chatIdOf(ctx);
     if (chatId) await deps.max.send({ chatId }, text).catch(() => undefined);

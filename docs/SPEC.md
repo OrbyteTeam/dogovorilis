@@ -240,7 +240,9 @@ pino JSON; каждый входящий update/запрос — `request_id`; �
 `deal.created`, `client.joined`, `version.created`, `version.confirmed`, `version.change_requested`, `deal.declined`,
 `deal.expired`, `payment.created`, `payment.claimed`, `payment.not_received`, `payment.succeeded`, `payment.canceled`,
 `deal.done`, `deal.accepted`, `deal.remarks`, `deal.fixed`, `receipt.attached`, `deal.closed_without_receipt`,
-`deal.closed`, `deal.cancelled`, `reminder.sent`, `demo.opened`. `payload` — данные события (версия, сумма, рейл,
+`deal.closed`, `deal.cancelled`, `reminder.sent`, `demo.opened`, `payment.succeeded_late` (провайдер подтвердил оплату, которую
+мы уже считали истёкшей/отменённой — ЗАДАЧА_03 F1; если сделка ещё ждёт этот платёж, дальше обычный T9/T14, иначе обеим
+сторонам «Поступила оплата … — верните её клиенту»), `refund.confirmed` (§5.3). `payload` — данные события (версия, сумма, рейл,
 provider_payment_id, текст). `seq` — монотонный внутри сделки (в той же транзакции: `max(seq)+1`).
 
 ### 5.5. Что видит каждая сторона (сводно)

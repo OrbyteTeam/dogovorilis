@@ -9,8 +9,8 @@ import * as rails from '../../../domain/payment/rails.js';
 import type { Actor } from '../../../domain/deal/service.js';
 import { syncCards } from '../cards.js';
 import { transferCheckKeyboard, transferDisputeKeyboard, transferKeyboard } from '../keyboards.js';
-import { deliver, notifyForEvents } from '../notify.js';
-import { renderAndSendReceipt } from '../receipt.js';
+import { deliver } from '../notify.js';
+import { notifyPaymentEvents } from '../outcome.js';
 import type { ParsedCallback } from '../callbacks.js';
 import { actingRole, actorOf, chatIdOf, pressedMid, publishResult, reply, touchUser, type Deps } from './shared.js';
 
@@ -24,6 +24,7 @@ export async function onPaymentCallback(
   await touchUser(ctx, chatIdOf(ctx));
 
   const bundle = await dealService.getBundle(parsed.publicId);
+  dealService.ensureParticipant(bundle.deal, userId); // посторонний дальше не проходит (G1)
   // tr:g и tr:n нажимает исполнитель, остальное — клиент.
   const fallback: 'seller' | 'client' = parsed.sub === 'g' || parsed.sub === 'n' ? 'seller' : 'client';
   const { role, cardRole } = await actingRole(bundle.deal.id, userId, pressedMid(ctx), fallback);
@@ -37,7 +38,7 @@ export async function onPaymentCallback(
       return;
 
     case 'pc':
-      await checkLink(ctx, deps, parsed, viewRole);
+      await checkLink(ctx, deps, bundle, parsed, viewRole);
       return;
 
     case 'pe': // эмуляция оплаты — только DEMO-терминал Т-Банка (SPEC §9.3); терминал не подключён
@@ -82,22 +83,27 @@ async function offerLink(ctx: Context, deps: Deps, publicId: string, actor: Acto
 async function checkLink(
   ctx: Context,
   deps: Deps,
+  bundle: DealBundle,
   parsed: Extract<ParsedCallback, { kind: 'deal' }>,
   viewRole: CardRole,
 ): Promise<void> {
   const paymentId = Number(parsed.arg);
-  if (!Number.isFinite(paymentId)) {
+  // Платёж обязан принадлежать этой сделке: иначе по чужому id можно было бы опросить и провести чужую оплату (G1).
+  if (!Number.isFinite(paymentId) || !bundle.payments.some((p) => p.id === paymentId)) {
     await answerAndSync(ctx, deps, parsed.publicId, viewRole, texts.E1);
     return;
   }
-  const result = await rails.refreshFromProvider(paymentId);
-  if (result.transition) {
-    await publishResult(ctx, deps, result.transition, viewRole);
-    await closeIfNoReceiptNeeded(deps, result.transition.bundle);
-    return;
+  const applied = await rails.refreshFromProvider(paymentId);
+  if (applied.transition) {
+    // Оплата подтверждена сейчас — или раньше, а сделку довели только теперь (F4); закрытие при tax_mode=none
+    // и квитанция — там же (F5).
+    await publishResult(ctx, deps, applied.transition, viewRole);
+  } else {
+    // Оплаты ещё нет: карточка остаётся с «Перейти к оплате» / «Проверить» (или «Новая ссылка»), текст — заметкой.
+    const note = applied.events.length ? undefined : texts.paymentStillPending(applied.payment.status);
+    await answerAndSync(ctx, deps, parsed.publicId, viewRole, note);
   }
-  // Оплаты ещё нет: карточка остаётся с «Перейти к оплате» / «Проверить» (или «Новая ссылка»), текст — заметкой.
-  await answerAndSync(ctx, deps, parsed.publicId, viewRole, texts.paymentStillPending(result.payment.status));
+  await notifyPaymentEvents(deps.max, applied);
 }
 
 /** Клиент выбрал перевод: реквизиты и «Я перевёл(а)» рисует сама карточка (SPEC §6.4). */
@@ -139,19 +145,12 @@ async function onTransferStep(
     }
 
     case 'g': {
-      // Исполнитель: «Получил(а)» → платёж succeeded → переход сделки T9 или T14.
-      const { alreadySucceeded, ctx: pay } = await paymentService.markReceived({ publicId, paymentId, actor });
-      if (alreadySucceeded) {
-        await answerAndSync(ctx, deps, publicId, viewRole, texts.ALREADY_DONE);
-        return;
-      }
-      const transition = await dealService.applyPaymentSucceeded({
-        dealId: pay.deal.id,
-        paymentId: pay.payment.id,
-        kind: pay.payment.kind,
-      });
+      // Исполнитель: «Получил(а)» → платёж succeeded → переход сделки T9 или T14 (+ T15 при tax_mode=none).
+      // Переход применяется и к уже succeeded платежу: идемпотентно, а если прошлый раз процесс упал
+      // между транзакциями — сделка сдвинется сейчас (F4). Повтор без изменений — «уже сделано».
+      const { ctx: pay } = await paymentService.markReceived({ publicId, paymentId, actor });
+      const transition = await dealService.applyPaymentSucceeded({ dealId: pay.deal.id, paymentId: pay.payment.id, kind: pay.payment.kind });
       await publishResult(ctx, deps, transition, viewRole);
-      await closeIfNoReceiptNeeded(deps, transition.bundle);
       return;
     }
 
@@ -181,14 +180,4 @@ async function onTransferStep(
     default:
       await answerAndSync(ctx, deps, publicId, viewRole, texts.E1);
   }
-}
-
-/** Сделка оплачена полностью и чек не требуется (tax_mode='none') — закрываем и отправляем квитанцию (T15). */
-export async function closeIfNoReceiptNeeded(deps: Deps, bundle: DealBundle): Promise<void> {
-  if (bundle.deal.status !== 'paid') return;
-  if (dealService.taxModeOf(bundle) !== 'none') return;
-  const closed = await dealService.closeAutomatically(bundle.deal.id);
-  await syncCards(deps.max, closed.bundle);
-  await notifyForEvents(deps.max, closed.bundle, closed.events);
-  await renderAndSendReceipt(deps.max, closed.bundle);
 }

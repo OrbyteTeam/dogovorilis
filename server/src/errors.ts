@@ -10,6 +10,7 @@ export type AppErrorCode =
   | 'payout_details_empty' // E12
   | 'claim_too_soon'       // E13
   | 'provider_failed'      // E9
+  | 'link_in_progress'     // «Ссылка формируется» — двойной тап «Оплатить по ссылке»
   | 'input_expired'        // E8
   | 'input_too_long'       // E5
   | 'input_not_a_file'     // E6
@@ -60,6 +61,17 @@ export class RailUnavailable extends AppError {
   }
 }
 
+/**
+ * Ссылка на оплату этого вида уже создаётся у провайдера: первый тап «Оплатить по ссылке» ещё ждёт ответа.
+ * Второй платёж создавать нельзя — у провайдера появились бы две ссылки на одну сумму (ЗАДАЧА_03 F3).
+ */
+export class LinkInProgressError extends AppError {
+  constructor() {
+    super('link_in_progress', 'ссылка на оплату ещё создаётся у провайдера');
+    this.name = 'LinkInProgressError';
+  }
+}
+
 /** Ошибка внешней интеграции (SPEC §6.7 E9). */
 export class IntegrationError extends AppError {
   constructor(
@@ -92,6 +104,17 @@ export class ForbiddenError extends AppError {
   constructor(message = 'нет доступа') {
     super('forbidden', message);
     this.name = 'ForbiddenError';
+  }
+}
+
+/**
+ * Нажатие кнопки чужой сделки: пользователь не исполнитель и не клиент (ЗАДАЧА_03 G1). Отдельный класс,
+ * потому что ответ на него особый: только текст «Это не ваша сделка», без карточки и без её кнопок.
+ */
+export class NotYourDealError extends ForbiddenError {
+  constructor() {
+    super('not_your_deal');
+    this.name = 'NotYourDealError';
   }
 }
 

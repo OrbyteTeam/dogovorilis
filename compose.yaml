@@ -9,8 +9,10 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-dogovorilis}:${POSTGRES_PASSWORD:-dogovorilis}@db:5432/${POSTGRES_DB:-dogovorilis}
+    # Только на loopback хоста: снаружи сервис доступен через Caddy (80/443), который ходит к app:8080
+    # по внутренней сети compose, — прямой порт 8080 из интернета закрыт (ЗАДАЧА_03 G3).
     ports:
-      - "${PORT:-8080}:8080"
+      - "127.0.0.1:${PORT:-8080}:8080"
     depends_on:
       db:
         condition: service_healthy

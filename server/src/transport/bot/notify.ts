@@ -11,7 +11,7 @@ import * as texts from '../../texts.js';
 import { livePayment, remaining, type DealBundle, type DealEvent } from '../../types.js';
 import { receiptDeadline } from '../../domain/time.js';
 import { taxModeOf } from '../../domain/deal/service.js';
-import { displayName } from './cards.js';
+import { displayName, refundLinesFor } from './cards.js';
 import { n11Keyboard, n13Keyboard, n3Keyboard, openKeyboard } from './keyboards.js';
 
 type Side = 'seller' | 'client';
@@ -90,6 +90,21 @@ export function noticesFor(bundle: DealBundle, event: DealEvent): Notice[] {
       return [{ to: 'seller', text: texts.N13({ id, deadline }), keyboard: n13Keyboard(id) }];
     }
 
+    case 'payment.succeeded_late': {
+      // Поздняя оплата, которую сделка приняла, уведомляется обычным N8/N13 по переходу. Здесь — только
+      // оплата, которую сделка принять уже не может: вернуть её может только исполнитель (ЗАДАЧА_03 F1).
+      if (!event.payload.refund_required) return [];
+      const text = texts.LATE_PAYMENT_REFUND({
+        id,
+        sumKopecks: Number(event.payload.amount ?? 0),
+        dealCancelled: event.payload.reason === 'deal_cancelled',
+      });
+      return [
+        { to: 'seller', text, keyboard: openKeyboard(id) },
+        { to: 'client', text, keyboard: openKeyboard(id) },
+      ];
+    }
+
     case 'deal.done':
       return [{ to: 'client', text: texts.N9({ id }), keyboard: openKeyboard(id) }];
 
@@ -116,18 +131,20 @@ export function noticesFor(bundle: DealBundle, event: DealEvent): Notice[] {
 
     case 'deal.cancelled': {
       const by = (event.payload.by as 'seller' | 'client' | 'system') ?? 'system';
+      const { refund, claim } = refundLinesFor(bundle);
       const text = texts.N15({
         id,
         by,
         reason: (event.payload.reason as string | null) ?? null,
-        refundLine: texts.refundLine({
-          prepaymentKopecks: bundle.version.prepaymentKopecks,
-          expected: bundle.deal.cancelRefundExpected,
-        }),
+        refundLine: refund,
+        claimLine: claim,
       });
       // Уведомляем другую сторону. В демо обе «стороны» — один чат, поэтому отправим оба варианта с префиксами.
       const other: Side = by === 'seller' ? 'client' : 'seller';
-      return [{ to: other, text }];
+      const out: Notice[] = [{ to: other, text }];
+      // Клиент сообщал о переводе: сверить поступление должны обе стороны, в том числе отменившая (ЗАДАЧА_03 F7).
+      if (claim) out.push({ to: other === 'client' ? 'seller' : 'client', text: `${claim}.` });
+      return out;
     }
 
     default:

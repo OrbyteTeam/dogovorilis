@@ -9,9 +9,7 @@ import { log } from '../../../logger.js';
 import * as texts from '../../../texts.js';
 import type { CardRole } from '../../../types.js';
 import * as dealService from '../../../domain/deal/service.js';
-import { syncCards } from '../cards.js';
-import { notifyForEvents } from '../notify.js';
-import { renderAndSendReceipt } from '../receipt.js';
+import { publishOutcome } from '../outcome.js';
 import { actingRole, actorOf, answerError, chatIdOf, menu, touchUser, type Deps } from './shared.js';
 
 const MAX_TEXT_LENGTH = 500;
@@ -96,8 +94,7 @@ async function handleMessage(ctx: Context, deps: Deps): Promise<void> {
           ? await dealService.requestChanges(deal.publicId, actor, text)
           : await dealService.remarks(deal.publicId, actor, text);
       await deps.max.send({ chatId }, pending.kind === 'change_request' ? 'Передали исполнителю ваше предложение.' : 'Передали замечания исполнителю.');
-      await syncCards(deps.max, result.bundle);
-      await notifyForEvents(deps.max, result.bundle, result.events);
+      await publishOutcome(deps.max, result);
       return;
     }
 
@@ -110,8 +107,7 @@ async function handleMessage(ctx: Context, deps: Deps): Promise<void> {
       await inTx((c) => inputsRepo.clear(c, userId));
       const result = await dealService.cancel(deal.publicId, actor, text || null);
       await deps.max.send({ chatId }, `Сделка #${deal.publicId} отменена.`);
-      await syncCards(deps.max, result.bundle);
-      await notifyForEvents(deps.max, result.bundle, result.events);
+      await publishOutcome(deps.max, result);
       return;
     }
 
@@ -131,9 +127,7 @@ async function handleMessage(ctx: Context, deps: Deps): Promise<void> {
         fileName: attachment.fileName,
       });
       await deps.max.send({ chatId }, 'Чек принят. Готовлю квитанцию…');
-      await syncCards(deps.max, result.bundle);
-      await notifyForEvents(deps.max, result.bundle, result.events);
-      await renderAndSendReceipt(deps.max, result.bundle);
+      await publishOutcome(deps.max, result); // карточки, N14 и квитанция PDF (T15)
       log.info({ deal: deal.publicId, role: viewRole }, 'чек приложен, сделка закрыта');
       return;
     }

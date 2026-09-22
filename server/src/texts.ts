@@ -236,6 +236,8 @@ export type CardView = {
   transferLines?: string[] | null;
   receiptLine: string | null;
   refundLine: string | null;
+  /** Отмена после «Я перевёл(а)» без подтверждения исполнителя — сверить поступление (ЗАДАЧА_03 F7). */
+  claimLine?: string | null;
   clientLink: string | null;
 };
 
@@ -276,16 +278,20 @@ export function card(v: CardView): string {
     ];
 
     const transfer = v.transferLines?.length ? v.transferLines : null;
-    const parties: (string | null)[] = [
+    const base: (string | null)[] = [
       `👤 Исполнитель: ${esc(oneLine(v.sellerName))}`,
       `👤 Клиент: ${v.clientName ? esc(oneLine(v.clientName)) : 'ещё не открыл ссылку'}`,
       ...(transfer ?? [v.paymentLine]),
+    ];
+    const receiptAt = base.length;
+    const linkAt = base.length + 3;
+    const parties: (string | null)[] = [
+      ...base,
       v.receiptLine,
       v.refundLine,
+      v.claimLine ?? null,
       v.clientLink ? `🔗 Ссылка для клиента: \`${v.clientLink}\`` : null,
     ];
-    const receiptAt = parties.length - 3;
-    const linkAt = parties.length - 1;
 
     // Гарантия DESIGN §6: не больше 12 строк. В реальных статусах строк ≤ 12 и так; на всякий
     // случай убираем необязательные в порядке возрастания важности: макет → ссылка → строка чека.
@@ -376,6 +382,15 @@ export function receiptLine(a: { attachedAt: Date | null; deadline: Date | null;
   return a.deadline ? `Чек: до ${formatDayMonth(a.deadline)}` : 'Чек: ждём от исполнителя';
 }
 
+/**
+ * Сделку отменили, когда клиент уже сообщил о переводе, а исполнитель его не подтвердил (ЗАДАЧА_03 F7).
+ * Продукт перевод не видит — строка в карточке, в N15 и отдельным сообщением обеим сторонам.
+ */
+export function claimedTransferOnCancel(a: { sumKopecks: number; at: Date | null }): string {
+  const when = a.at ? ` ${formatDateTimeShort(a.at)}` : '';
+  return `Клиент сообщал о переводе ${formatMoney(a.sumKopecks)}${when} — проверьте поступление и верните при необходимости`;
+}
+
 export function refundLine(a: { prepaymentKopecks: number; expected: boolean | null }): string | null {
   if (a.prepaymentKopecks <= 0 || a.expected === null) return null;
   const sum = formatMoney(a.prepaymentKopecks);
@@ -448,11 +463,19 @@ export function N14(a: { id: string; withReceipt: boolean }): string {
   return `✅ Сделка #${a.id} закрыта. Квитанция во вложении${a.withReceipt ? ', чек — выше' : ''}.`;
 }
 
-export function N15(a: { id: string; by: 'seller' | 'client' | 'system'; reason: string | null; refundLine: string | null }): string {
+export function N15(a: {
+  id: string;
+  by: 'seller' | 'client' | 'system';
+  reason: string | null;
+  refundLine: string | null;
+  /** claimedTransferOnCancel — если клиент успел сообщить о переводе (ЗАДАЧА_03 F7). */
+  claimLine?: string | null;
+}): string {
   const by: Record<Role, string> = { seller: 'исполнителем', client: 'клиентом', system: 'автоматически' };
   const reason = a.reason ? `: ${esc(oneLine(a.reason))}` : '';
   const refund = a.refundLine ? ` ${a.refundLine}` : '';
-  return `🚫 #${a.id} отменена ${by[a.by]}${reason}.${refund}`;
+  const claim = a.claimLine ? `\n${a.claimLine}.` : '';
+  return `🚫 #${a.id} отменена ${by[a.by]}${reason}.${refund}${claim}`;
 }
 
 export function N16(a: { id: string; context: string }): string {
@@ -498,6 +521,16 @@ export function P3_DISPUTE(a: { sumKopecks: number; linkAvailable: boolean }): s
 
 export function P3(a: { sumKopecks: number }): string {
   return `Исполнитель пока не видит перевод ${formatMoney(a.sumKopecks)}. Проверьте операцию и нажмите «Я перевёл(а)» ещё раз (не раньше чем через 10 минут после прошлого) — или «↩️ Отмена перевода» и оплата по ссылке.`;
+}
+
+/**
+ * Провайдер подтвердил оплату, которую сделка принять уже не может (ЗАДАЧА_03 F1): сделка отменена или этот
+ * этап уже оплачен другим платежом. Деньги ушли исполнителю — вернуть их может только он, продукт их не касается.
+ * Уходит обеим сторонам.
+ */
+export function LATE_PAYMENT_REFUND(a: { id: string; sumKopecks: number; dealCancelled: boolean }): string {
+  const what = a.dealCancelled ? 'отменённой сделке' : 'уже оплаченному этапу';
+  return `⚠️ Поступила оплата ${formatMoney(a.sumKopecks)} по ${what} #${a.id} — верните её клиенту.`;
 }
 
 /**
@@ -594,6 +627,12 @@ export const E10 = 'Что-то пошло не так, мы уже разбир
 export const E11 = 'Оплата по ссылке не подключена. Доступен перевод по реквизитам.';
 export const E12 = 'Исполнитель не указал реквизиты для перевода. Попросите его заполнить их в Настройках.';
 export const E13 = 'Подождите: повторно сообщить о переводе можно через 10 минут после прошлого раза — за это время исполнитель проверит поступление.';
+
+/** Двойной тап «Оплатить по ссылке», пока провайдер ещё создаёт первую ссылку (ЗАДАЧА_03 F3). */
+export const LINK_IN_PROGRESS = 'Ссылка формируется, секунду — нажмите ещё раз.';
+
+/** Кнопка чужой сделки (пересланная карточка, подобранный payload) — ЗАДАЧА_03 G1. */
+export const NOT_YOUR_DEAL = 'Это не ваша сделка.';
 
 /** Идемпотентный повтор: карточка уже в целевом состоянии (SPEC §5.2, конкурентность). */
 export const ALREADY_DONE = 'Это уже сделано — карточка актуальна.';

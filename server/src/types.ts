@@ -64,6 +64,8 @@ export type DealEventType =
   | 'payment.claimed'
   | 'payment.not_received'
   | 'payment.succeeded'
+  /** Провайдер подтвердил оплату, которую мы локально уже считали expired/canceled (ЗАДАЧА_03 F1). */
+  | 'payment.succeeded_late'
   | 'payment.canceled'
   | 'deal.done'
   | 'deal.accepted'
@@ -268,6 +270,19 @@ export function paidTotal(payments: Payment[]): number {
 export function remaining(version: Pick<DealVersion, 'totalKopecks' | 'prepaymentKopecks'>): number {
   return version.totalKopecks - version.prepaymentKopecks;
 }
+/**
+ * cancellation_reason перевода, о котором клиент сообщил («Я перевёл(а)»), но сделку отменили раньше, чем
+ * исполнитель подтвердил поступление (ЗАДАЧА_03 F7). Деньги могли прийти — продукт этого не видит.
+ */
+export const CANCELLED_AFTER_CLAIM = 'deal_cancelled_after_claim';
+
+/** Заявленный клиентом перевод, оборванный отменой сделки, — по нему стороны должны свериться сами. */
+export function claimedTransferAtCancel(payments: Payment[]): Payment | null {
+  return (
+    payments.find((p) => p.rail === 'transfer' && p.status === 'canceled' && p.cancellationReason === CANCELLED_AFTER_CLAIM) ?? null
+  );
+}
+
 /** Живой платёж по виду: не более одного (частичный уникальный индекс в 0001_init.sql). */
 export function livePayment(payments: Payment[], kind: PaymentKind): Payment | null {
   return payments.find((p) => p.kind === kind && ['pending', 'claimed', 'succeeded'].includes(p.status)) ?? null;
