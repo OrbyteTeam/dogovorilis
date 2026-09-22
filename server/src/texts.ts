@@ -484,6 +484,19 @@ export function N14(a: { id: string; withReceipt: boolean }): string {
   return `✅ Сделка #${a.id} закрыта. Квитанция во вложении${a.withReceipt ? ', чек — выше' : ''}.`;
 }
 
+const RECEIPT_STATUS_WORD: Partial<Record<DealStatus, string>> = {
+  closed: 'сделка закрыта',
+  cancelled: 'сделка отменена',
+  declined: 'клиент отказался',
+  expired: 'срок подтверждения истёк',
+};
+
+/** Квитанция по кнопке «📄 Квитанция PDF» — подпись по фактическому статусу, а не «закрыта» всегда. */
+export function RECEIPT_ON_DEMAND(a: { id: string; status: DealStatus }): string {
+  const word = RECEIPT_STATUS_WORD[a.status];
+  return `📄 Квитанция по #${a.id}${word ? ` — ${word}` : ''}.`;
+}
+
 export function N15(a: {
   id: string;
   by: 'seller' | 'client' | 'system';

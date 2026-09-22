@@ -80,7 +80,12 @@ export function buildReceiptData(bundle: DealBundle, now = new Date(), transferL
  * Если исполнитель приложил чек — он уходит тем же токеном вложения (SPEC §6.6).
  * Временный файл удаляется после отправки.
  */
-export async function renderAndSendReceipt(max: MaxGateway, bundle: DealBundle): Promise<void> {
+export async function renderAndSendReceipt(
+  max: MaxGateway,
+  bundle: DealBundle,
+  /** `onDemandFor` — кнопка «📄 Квитанция PDF»: только нажавшему, без пересылки чека, подпись по статусу. */
+  opts: { onDemandFor?: number } = {},
+): Promise<void> {
   const fileName = receiptFileName(bundle.deal.publicId);
   // Получателю MAX показывает БАЗОВОЕ ИМЯ ФАЙЛА ПО ПУТИ, который мы загрузили (CONTRACTS §1.8) —
   // а не какое-то имя из метаданных. Поэтому временный файл называем ровно так, как должен
@@ -92,16 +97,25 @@ export async function renderAndSendReceipt(max: MaxGateway, bundle: DealBundle):
   try {
     await renderReceiptPdf(buildReceiptData(bundle, new Date(), await transferHistory(bundle.deal.id)), outPath);
     const attachment = await max.uploadFile(outPath);
-    const text = texts.N14({ id: bundle.deal.publicId, withReceipt: Boolean(bundle.receipt) });
+    // Повторная квитанция по кнопке уходит только нажавшему и подписана по статусу: раньше она шла обеим
+    // сторонам с N14 «Сделка закрыта» — в том числе у отменённой сделки (найдено прогоном, 23.09).
+    const onDemand = opts.onDemandFor !== undefined;
+    const text = onDemand
+      ? texts.RECEIPT_ON_DEMAND({ id: bundle.deal.publicId, status: bundle.deal.status })
+      : texts.N14({ id: bundle.deal.publicId, withReceipt: Boolean(bundle.receipt) });
 
-    const targets = new Set<number>([bundle.deal.sellerUserId]);
-    if (bundle.deal.clientUserId) targets.add(bundle.deal.clientUserId);
+    const targets = new Set<number>();
+    if (onDemand) targets.add(opts.onDemandFor!);
+    else {
+      targets.add(bundle.deal.sellerUserId);
+      if (bundle.deal.clientUserId) targets.add(bundle.deal.clientUserId);
+    }
 
     for (const userId of targets) {
       const user = await inTx((c) => usersRepo.byId(c, userId));
       if (!user?.dialogChatId) continue;
       // Чек исполнителя пересылаем первым — квитанция ссылается на него («чек — выше»).
-      if (bundle.receipt) {
+      if (bundle.receipt && !onDemand) {
         await max.send({ chatId: user.dialogChatId }, texts.RECEIPT_FORWARDED, [
           max.attachmentFromToken(bundle.receipt.attachmentType, bundle.receipt.maxToken),
         ]);

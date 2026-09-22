@@ -230,7 +230,11 @@ describe.skipIf(!DB)('ответ на кнопку карточки — карт
     const mark = h.max.sent.length;
     await h.press(SELLER, SELLER_CHAT, `pdf:${id}`, sellerCard);
     expect(labels(sellerCard)).toEqual([texts.BTN.receiptPdf]);
-    expect(h.max.sent.slice(mark).some((m) => m.attachmentTypes.includes('file'))).toBe(true);
+    const files = h.max.sent.slice(mark).filter((m) => m.attachmentTypes.includes('file'));
+    // Только нажавшему и с честной подписью: у отменённой сделки не «закрыта» (найдено прогоном 23.09)
+    expect(files.map((m) => m.chatId)).toEqual([SELLER_CHAT]);
+    expect(files[0].text).toBe(texts.RECEIPT_ON_DEMAND({ id, status: 'cancelled' }));
+    expect(files[0].text).toContain('отменена');
   }, TIMEOUT);
 
   it('клиент открыл ссылку повторно: карточка одна, но показана внизу чата', async () => {

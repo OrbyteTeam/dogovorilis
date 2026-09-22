@@ -129,7 +129,7 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
       return;
 
     case 'pdf':
-      await sendReceiptOnDemand(ctx, deps, bundle, viewRole);
+      await sendReceiptOnDemand(ctx, deps, bundle, viewRole, userId);
       return;
 
     case 'rf': {
@@ -232,7 +232,7 @@ async function openAsClient(ctx: Context, deps: Deps, publicId: string, userId: 
 }
 
 /** Квитанция по запросу кнопкой (доступна в терминальных статусах, SPEC §5.5). */
-async function sendReceiptOnDemand(ctx: Context, deps: Deps, bundle: DealBundle, role: CardRole): Promise<void> {
+async function sendReceiptOnDemand(ctx: Context, deps: Deps, bundle: DealBundle, role: CardRole, userId: number): Promise<void> {
   if (!isTerminal(bundle.deal.status)) {
     await reply(ctx, deps, bundle, { role, note: texts.RECEIPT_NOT_YET });
     return;
@@ -240,5 +240,5 @@ async function sendReceiptOnDemand(ctx: Context, deps: Deps, bundle: DealBundle,
   // Кнопка «Квитанция PDF» живёт на карточке закрытой сделки: ответ обязан вернуть её же,
   // иначе кнопка пропала бы навсегда — закрытые сделки в /deals не показываются.
   await reply(ctx, deps, bundle, { role, note: texts.RECEIPT_PREPARING });
-  await renderAndSendReceipt(deps.max, bundle);
+  await renderAndSendReceipt(deps.max, bundle, { onDemandFor: userId });
 }
