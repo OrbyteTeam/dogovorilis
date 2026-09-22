@@ -107,7 +107,8 @@ Trusted Root CA, которой Node не доверяет по умолчани
 Зафиксированы точными версиями (без `^`) в `package.json`, `server/package.json`, `webapp/package.json`;
 lock-файл `package-lock.json` коммитится.
 Ключевые: Node 22, `@maxhub/max-bot-api` 0.3.1, `@maxhub/max-ui` 0.5.0, react 19.2.8, fastify 5.12.5, pg 8.23.0,
-pdfkit 0.20.2 + `dejavu-fonts-ttf`, zod 4.6.5, pino 10.3.1, vitest 5.0.1, vite 7.3.6, typescript 5.9.3.
+pdfkit 0.20.2 + `dejavu-fonts-ttf`, zod 4.6.5, pino 10.3.1, vitest 5.0.1, vite 7.3.6, typescript 5.9.3,
+`@fastify/rate-limit` 11.2.0 (лимит на `/webhooks/*`).
 
 В корневом `package.json` есть `overrides: { "vite": "7.3.6" }` — чтобы на монорепо был **один** Vite:
 `vitest` тянул в корень vite 8, `@vitejs/plugin-react` резолвил именно его, и dev-сервер мини-приложения
@@ -153,6 +154,7 @@ TEST_DATABASE_URL=postgres://$(whoami)@localhost:5432/dogovorilis_test npm test
 Хранятся: пользователи MAX (id, имя, chat_id диалога, телефон — только после HMAC-проверки, маской в интерфейсе),
 сделки и версии условий, платежи (id провайдера, статусы — без реквизитов карт), события, напоминания, вложения-чеки (токены MAX).
 Схема — `server/migrations/0001_init.sql` и `0002_payments_provider.sql` (применяются автоматически при старте). Реквизиты для перевода — текст, который исполнитель сам показывает клиенту.
+Доставки вебхуков пишутся в `webhook_log`; у чужих и битых хранится только сводка (событие, id объекта, размер), а не тело.
 
 ## 10. Порядок работы с тестовыми данными
 
