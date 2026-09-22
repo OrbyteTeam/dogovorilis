@@ -145,6 +145,21 @@ describe.skipIf(!DB)('ответ на кнопку карточки — карт
     expect(labels(clientCard)).toEqual(expect.arrayContaining([texts.BTN.accept, texts.BTN.remarks]));
   }, TIMEOUT);
 
+  it('вопрос «Отменить?» заранее говорит, что станет с предоплатой', async () => {
+    const { id, sellerCard, clientCard } = await realDeal(); // визит через 3 дня, правило free_24h
+    await h.press(CLIENT, CLIENT_CHAT, `cf:${id}`, clientCard);
+    await h.press(CLIENT, CLIENT_CHAT, `pt:${id}`, clientCard);
+    const pid = await livePaymentId(h, id, 'prepayment');
+    await h.press(CLIENT, CLIENT_CHAT, `tr:c:${id}:${pid}`, clientCard);
+    await h.press(SELLER, SELLER_CHAT, `tr:g:${id}:${pid}`, sellerCard);
+
+    await h.press(CLIENT, CLIENT_CHAT, `cn:${id}`, clientCard);
+    expect(h.max.byMid(clientCard)!.text).toContain(texts.CANCEL_CONSEQUENCE({ by: 'client', prepaymentKopecks: 50_000, expected: true })!);
+    await h.press(SELLER, SELLER_CHAT, `cn:${id}`, sellerCard);
+    expect(h.max.byMid(sellerCard)!.text).toContain('нужно будет вернуть клиенту');
+    expect(texts.CANCEL_CONSEQUENCE({ by: 'client', prepaymentKopecks: 50_000, expected: false })).toContain('не вернётся');
+  }, TIMEOUT);
+
   it('запрос ввода с карточки не стирает её: подсказка сверху, условия и кнопки на месте', async () => {
     const { id, clientCard } = await realDeal();
     await h.press(CLIENT, CLIENT_CHAT, `cr:${id}`, clientCard);

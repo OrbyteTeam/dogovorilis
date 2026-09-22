@@ -688,6 +688,20 @@ export function cancel(publicId: string, actor: Actor, reason: string | null, no
   );
 }
 
+/**
+ * Что станет с предоплатой, если отменить сейчас — чтобы сказать об этом ДО подтверждения отмены
+ * (найдено прогоном 1, S5: клиент узнавал о потере предоплаты только после). null — предоплаты не было.
+ */
+export function refundIfCancelled(bundle: DealBundle, by: 'seller' | 'client', now = new Date()): boolean | null {
+  return refundExpected({
+    cancelRule: bundle.version.cancelRule,
+    cancelledBy: by,
+    scheduledAt: bundle.version.scheduledAt,
+    prepaymentSucceeded: bundle.payments.some((p) => p.kind === 'prepayment' && p.status === 'succeeded'),
+    now,
+  });
+}
+
 // ─────────────────────── T8: истечение срока (system) ───────────────────────
 
 export function expire(dealId: number, now = new Date()): Promise<ServiceResult> {

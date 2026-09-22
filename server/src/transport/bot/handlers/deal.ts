@@ -119,18 +119,8 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
         // тот попробует отменить отменённое и ответит E1 на безобидный текст (поймано живым прогоном).
         await inTx((c) => inputsRepo.clear(c, userId));
         await publishResult(ctx, deps, result, viewRole);
-      } else if (role === 'seller') {
-        // Исполнителю предлагаем указать причину (она уйдёт второй стороне в N15).
-        await inTx((c) =>
-          inputsRepo.set(c, { userId, kind: 'cancel_reason', dealId: bundle.deal.id, expiresAt: addMinutes(new Date(), INPUT_TTL_MINUTES) }),
-        );
-        await reply(ctx, deps, bundle, {
-          role: viewRole,
-          note: `${texts.CONFIRM_CANCEL(parsed.publicId)}\n\n${texts.ASK_CANCEL_REASON}`,
-          keyboard: cancelReasonKeyboard(parsed.publicId),
-        });
       } else {
-        await reply(ctx, deps, bundle, { role: viewRole, note: texts.CONFIRM_CANCEL(parsed.publicId), keyboard: confirmKeyboard('cn', parsed.publicId, texts.BTN.cancelYes) });
+        await askCancel(ctx, deps, bundle, viewRole, role, userId);
       }
       return;
 
@@ -150,6 +140,29 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
       await reply(ctx, deps, bundle, { role: viewRole, note: texts.E1 });
       return;
   }
+}
+
+/**
+ * «Отменить» — вопрос поверх карточки. В нём сразу сказано, что станет с предоплатой (§5.3):
+ * узнавать о потере денег после подтверждения — нечестно. Исполнителю предлагаем указать причину
+ * (она уйдёт второй стороне в N15).
+ */
+async function askCancel(ctx: Context, deps: Deps, bundle: DealBundle, viewRole: CardRole, role: 'seller' | 'client', userId: number): Promise<void> {
+  const id = bundle.deal.publicId;
+  const consequence = texts.CANCEL_CONSEQUENCE({
+    by: role,
+    prepaymentKopecks: bundle.version.prepaymentKopecks,
+    expected: dealService.refundIfCancelled(bundle, role),
+  });
+  const question = [texts.CONFIRM_CANCEL(id), consequence].filter(Boolean).join('\n');
+  if (role === 'seller') {
+    await inTx((c) =>
+      inputsRepo.set(c, { userId, kind: 'cancel_reason', dealId: bundle.deal.id, expiresAt: addMinutes(new Date(), INPUT_TTL_MINUTES) }),
+    );
+    await reply(ctx, deps, bundle, { role: viewRole, note: `${question}\n\n${texts.ASK_CANCEL_REASON}`, keyboard: cancelReasonKeyboard(id) });
+    return;
+  }
+  await reply(ctx, deps, bundle, { role: viewRole, note: question, keyboard: confirmKeyboard('cn', id, texts.BTN.cancelYes) });
 }
 
 /** Запрос текста или файла: ждём 30 минут, помним в user_inputs (переживает рестарт, §14 п. 13). */

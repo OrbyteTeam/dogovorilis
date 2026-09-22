@@ -564,6 +564,16 @@ export function CONFIRM_CANCEL(id: string): string {
   return `Отменить сделку #${id}? Действие необратимо, вторая сторона получит уведомление.`;
 }
 
+/** Последствие отмены для предоплаты — в том же вопросе, до подтверждения (SPEC §5.3). */
+export function CANCEL_CONSEQUENCE(a: { by: 'seller' | 'client'; prepaymentKopecks: number; expected: boolean | null }): string | null {
+  if (a.expected === null || a.prepaymentKopecks <= 0) return null;
+  const sum = formatMoney(a.prepaymentKopecks);
+  if (a.by === 'seller') return `Предоплату ${sum} нужно будет вернуть клиенту — тем же способом, каким она пришла.`;
+  return a.expected
+    ? `По правилу отмены предоплата ${sum} должна вернуться — исполнитель вернёт её тем же способом.`
+    : `⚠️ По правилу отмены предоплата ${sum} не вернётся.`;
+}
+
 export function CONFIRM_CLOSE_WITHOUT_RECEIPT(id: string): string {
   return `Закрыть #${id} без чека? Квитанция уйдёт обеим сторонам, но чека из «Мой налог» в ней не будет.`;
 }
