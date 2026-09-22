@@ -9,7 +9,7 @@ import * as paymentsRepo from '../../db/repos/payments.js';
 import * as usersRepo from '../../db/repos/users.js';
 import * as versionsRepo from '../../db/repos/versions.js';
 import { log } from '../../logger.js';
-import type { Deal, DealVersion, Payment, PaymentKind, SellerProfile } from '../../types.js';
+import type { Deal, DealVersion, Payment, PaymentKind, Role, SellerProfile } from '../../types.js';
 import { newIdempotenceKey } from '../ids.js';
 import { MINUTE_MS } from '../time.js';
 import type { Actor } from '../deal/service.js';
@@ -96,9 +96,9 @@ export async function claim(
 ): Promise<{ ctx: PaymentContext; tooSoon: boolean }> {
   return inTx(async (c) => {
     const { deal, version } = await lockDeal(c, args.publicId, args.actor);
-    const payment = await lockPayment(c, deal.id, args.paymentId);
+    const payment = await lockPayment(c, deal, args.paymentId, args.actor.role);
+    assertTransferStep(deal, version, payment, args.actor.role);
 
-    if (payment.status === 'succeeded') return { ctx: { deal, version, payment }, tooSoon: false };
     // Кулдаун считается от прошлого «перевёл», даже если исполнитель уже ответил «не вижу» (SPEC §9.1 п. 5):
     // иначе «перевёл / не вижу» превращается в пинг-понг раз в секунду.
     if (payment.claimedAt && now.getTime() - payment.claimedAt.getTime() < CLAIM_COOLDOWN_MS) {
@@ -119,7 +119,9 @@ export async function claim(
 
 /**
  * Исполнитель: «Получил(а)» → succeeded. Сам переход сделки (T9/T14) делает domain/deal/service.ts:
-  * здесь только деньги, чтобы у каждого слоя была одна ответственность.
+ * здесь только деньги, чтобы у каждого слоя была одна ответственность.
+ * Уже succeeded — не ошибка: повторное «Получил(а)» должно довести сделку, если прошлый раз процесс
+ * упал между двумя транзакциями (ЗАДАЧА_03 F4), поэтому вызывающий применяет переход в любом случае.
  */
 export async function markReceived(
   args: { publicId: string; paymentId: number; actor: Actor },
@@ -128,8 +130,11 @@ export async function markReceived(
   return inTx(async (c) => {
     const { deal, version } = await lockDeal(c, args.publicId, args.actor);
     if (args.actor.role !== 'seller') throw new ForbiddenError('подтвердить поступление может только исполнитель');
-    const payment = await lockPayment(c, deal.id, args.paymentId);
-    if (payment.status === 'succeeded') return { ctx: { deal, version, payment }, alreadySucceeded: true };
+    const payment = await lockPayment(c, deal, args.paymentId, args.actor.role);
+    if (payment.rail === 'transfer' && payment.status === 'succeeded') {
+      return { ctx: { deal, version, payment }, alreadySucceeded: true };
+    }
+    assertTransferStep(deal, version, payment, args.actor.role);
 
     const updated = await paymentsRepo.update(c, payment.id, { status: 'succeeded', succeededAt: now });
     return { ctx: { deal, version, payment: updated }, alreadySucceeded: false };
@@ -143,7 +148,8 @@ export async function markNotReceived(
   return inTx(async (c) => {
     const { deal, version } = await lockDeal(c, args.publicId, args.actor);
     if (args.actor.role !== 'seller') throw new ForbiddenError('только исполнитель');
-    const payment = await lockPayment(c, deal.id, args.paymentId);
+    const payment = await lockPayment(c, deal, args.paymentId, args.actor.role);
+    assertTransferStep(deal, version, payment, args.actor.role);
     // claimed_at остаётся: от него считается пауза перед повторным «Я перевёл(а)».
     const updated = payment.status === 'claimed' ? await paymentsRepo.update(c, payment.id, { status: 'pending' }) : payment;
     await eventsRepo.append(c, {
@@ -164,7 +170,7 @@ export async function cancelPayment(
 ): Promise<PaymentContext> {
   return inTx(async (c) => {
     const { deal, version } = await lockDeal(c, args.publicId, args.actor);
-    const payment = await lockPayment(c, deal.id, args.paymentId);
+    const payment = await lockPayment(c, deal, args.paymentId, args.actor.role);
     if (payment.status === 'succeeded') return { deal, version, payment };
     const updated = await paymentsRepo.update(c, payment.id, { status: 'canceled', canceledAt: now });
     await eventsRepo.append(c, {
@@ -191,8 +197,26 @@ async function lockDeal(c: DbClient, publicId: string, actor: Actor): Promise<{ 
   return { deal, version };
 }
 
-async function lockPayment(c: DbClient, dealId: number, paymentId: number): Promise<Payment> {
+/** Платёж этой сделки под блокировкой. Чужой id (кнопка от другой сделки, подделанный payload) — E1. */
+async function lockPayment(c: DbClient, deal: Deal, paymentId: number, role: Role): Promise<Payment> {
   const payment = await paymentsRepo.lockById(c, paymentId);
-  if (!payment || payment.dealId !== dealId) throw new NotFoundError(`платёж ${paymentId}`);
+  if (!payment || payment.dealId !== deal.id) throw staleStep(deal, role);
   return payment;
+}
+
+/**
+ * «Перевёл / Получил / Не вижу» уместны только для живого перевода (pending|claimed) того вида, который
+ * сделка ждёт сейчас (ЗАДАЧА_03 F6). Иначе кнопка устарела: например, «Получил(а)» из уведомления P2
+ * по уже отменённой сделке раньше делало платёж succeeded при cancelled-сделке. Ответ — E1.
+ */
+function assertTransferStep(deal: Deal, version: DealVersion, payment: Payment, role: Role): void {
+  const expected = expectedPayment(deal, version);
+  const live = payment.status === 'pending' || payment.status === 'claimed';
+  if (payment.rail !== 'transfer' || !live || expected?.kind !== payment.kind) throw staleStep(deal, role);
+}
+
+/** E1 «Это действие уже недоступно — карточка обновлена» для платёжной кнопки. */
+function staleStep(deal: Deal, role: Role): InvalidTransition {
+  const action = deal.status === 'awaiting_payment' ? 'final_succeeded' : 'prepayment_succeeded';
+  return new InvalidTransition(deal.status, action, role, 'forbidden');
 }

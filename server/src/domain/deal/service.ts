@@ -15,6 +15,7 @@ import * as usersRepo from '../../db/repos/users.js';
 import * as versionsRepo from '../../db/repos/versions.js';
 import { log } from '../../logger.js';
 import {
+  CANCELLED_AFTER_CLAIM,
   isTerminal,
   paidTotal,
   type ActorRole,
@@ -665,22 +666,38 @@ export function cancel(publicId: string, actor: Actor, reason: string | null, no
       mutate: async ({ c, deal, version, now: at, actor: a }) => {
         const payments = await paymentsRepo.listByDeal(c, deal.id);
         const prepaymentSucceeded = payments.some((p) => p.kind === 'prepayment' && p.status === 'succeeded');
-        const expected = refundExpected({
+        const byRule = refundExpected({
           cancelRule: version.cancelRule,
           cancelledBy: a.role,
           scheduledAt: version.scheduledAt,
           prepaymentSucceeded,
           now: at,
         });
-        // Живые ссылочные платежи помечаем отменёнными локально: у провайдера ссылка просто истечёт (SPEC §5.2 T16).
+        // Клиент сообщил о переводе, а исполнитель ещё не подтвердил: деньги могли прийти, продукт этого не видит.
+        // Возврат ожидается в любом случае, а обе стороны получают предупреждение сверить поступление (ЗАДАЧА_03 F7).
+        const claimed = payments.find((p) => p.rail === 'transfer' && p.status === 'claimed') ?? null;
+        const expected = claimed ? true : byRule;
+        // Живые платежи помечаем отменёнными локально: у провайдера ссылка просто истечёт (SPEC §5.2 T16).
         for (const p of payments) {
           if (p.status === 'pending' || p.status === 'claimed') {
-            await paymentsRepo.update(c, p.id, { status: 'canceled', canceledAt: at });
+            await paymentsRepo.update(c, p.id, {
+              status: 'canceled',
+              canceledAt: at,
+              ...(p.status === 'claimed' ? { cancellationReason: CANCELLED_AFTER_CLAIM } : {}),
+            });
           }
         }
+        const claimedTransfer = claimed
+          ? { payment_id: claimed.id, kind: claimed.kind, amount: claimed.amountKopecks, claimed_at: claimed.claimedAt?.toISOString() ?? null }
+          : null;
         return {
           patch: { cancelledAt: at, cancelledByRole: a.role, cancelReason: reason, cancelRefundExpected: expected },
-          events: [{ type: 'deal.cancelled', payload: { by: a.role, reason, refund_expected: expected } }],
+          events: [
+            {
+              type: 'deal.cancelled',
+              payload: { by: a.role, reason, refund_expected: expected, ...(claimedTransfer ? { claimed_transfer: claimedTransfer } : {}) },
+            },
+          ],
         };
       },
     },

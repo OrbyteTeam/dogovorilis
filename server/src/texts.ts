@@ -236,6 +236,8 @@ export type CardView = {
   transferLines?: string[] | null;
   receiptLine: string | null;
   refundLine: string | null;
+  /** Отмена после «Я перевёл(а)» без подтверждения исполнителя — сверить поступление (ЗАДАЧА_03 F7). */
+  claimLine?: string | null;
   clientLink: string | null;
 };
 
@@ -276,16 +278,20 @@ export function card(v: CardView): string {
     ];
 
     const transfer = v.transferLines?.length ? v.transferLines : null;
-    const parties: (string | null)[] = [
+    const base: (string | null)[] = [
       `👤 Исполнитель: ${esc(oneLine(v.sellerName))}`,
       `👤 Клиент: ${v.clientName ? esc(oneLine(v.clientName)) : 'ещё не открыл ссылку'}`,
       ...(transfer ?? [v.paymentLine]),
+    ];
+    const receiptAt = base.length;
+    const linkAt = base.length + 3;
+    const parties: (string | null)[] = [
+      ...base,
       v.receiptLine,
       v.refundLine,
+      v.claimLine ?? null,
       v.clientLink ? `🔗 Ссылка для клиента: \`${v.clientLink}\`` : null,
     ];
-    const receiptAt = parties.length - 3;
-    const linkAt = parties.length - 1;
 
     // Гарантия DESIGN §6: не больше 12 строк. В реальных статусах строк ≤ 12 и так; на всякий
     // случай убираем необязательные в порядке возрастания важности: макет → ссылка → строка чека.
@@ -376,6 +382,15 @@ export function receiptLine(a: { attachedAt: Date | null; deadline: Date | null;
   return a.deadline ? `Чек: до ${formatDayMonth(a.deadline)}` : 'Чек: ждём от исполнителя';
 }
 
+/**
+ * Сделку отменили, когда клиент уже сообщил о переводе, а исполнитель его не подтвердил (ЗАДАЧА_03 F7).
+ * Продукт перевод не видит — строка в карточке, в N15 и отдельным сообщением обеим сторонам.
+ */
+export function claimedTransferOnCancel(a: { sumKopecks: number; at: Date | null }): string {
+  const when = a.at ? ` ${formatDateTimeShort(a.at)}` : '';
+  return `Клиент сообщал о переводе ${formatMoney(a.sumKopecks)}${when} — проверьте поступление и верните при необходимости`;
+}
+
 export function refundLine(a: { prepaymentKopecks: number; expected: boolean | null }): string | null {
   if (a.prepaymentKopecks <= 0 || a.expected === null) return null;
   const sum = formatMoney(a.prepaymentKopecks);
@@ -447,11 +462,19 @@ export function N14(a: { id: string; withReceipt: boolean }): string {
   return `✅ Сделка #${a.id} закрыта. Квитанция во вложении${a.withReceipt ? ', чек — выше' : ''}.`;
 }
 
-export function N15(a: { id: string; by: 'seller' | 'client' | 'system'; reason: string | null; refundLine: string | null }): string {
+export function N15(a: {
+  id: string;
+  by: 'seller' | 'client' | 'system';
+  reason: string | null;
+  refundLine: string | null;
+  /** claimedTransferOnCancel — если клиент успел сообщить о переводе (ЗАДАЧА_03 F7). */
+  claimLine?: string | null;
+}): string {
   const by: Record<Role, string> = { seller: 'исполнителем', client: 'клиентом', system: 'автоматически' };
   const reason = a.reason ? `: ${esc(oneLine(a.reason))}` : '';
   const refund = a.refundLine ? ` ${a.refundLine}` : '';
-  return `🚫 #${a.id} отменена ${by[a.by]}${reason}.${refund}`;
+  const claim = a.claimLine ? `\n${a.claimLine}.` : '';
+  return `🚫 #${a.id} отменена ${by[a.by]}${reason}.${refund}${claim}`;
 }
 
 export function N16(a: { id: string; context: string }): string {

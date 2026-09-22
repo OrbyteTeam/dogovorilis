@@ -92,6 +92,18 @@ describe.skipIf(!DB)('платежи: провайдер — источник и
 
   const labels = (mid: string) => (h.max.byMid(mid)?.buttons ?? []).map((b) => b.text);
 
+  /** Ответ на последнее нажатие (POST /answers). */
+  const lastAnswer = () => h.max.sent.filter((m) => m.kind === 'answer').at(-1)?.text ?? '';
+
+  /** Клиент выбрал перевод и нажал «Я перевёл(а)»: платёж claimed, у исполнителя P2 и кнопки в карточке. */
+  async function claimedTransfer(o: DealOpts = {}) {
+    const d = await confirmedDeal(o);
+    await h.press(CLIENT, CLIENT_CHAT, `pt:${d.id}`, d.clientCard);
+    const pid = await livePaymentId(h, d.id, 'prepayment');
+    await h.press(CLIENT, CLIENT_CHAT, `tr:c:${d.id}:${pid}`, d.clientCard);
+    return { ...d, pid };
+  }
+
   describe('F3: двойной тап «Оплатить по ссылке»', () => {
     it('параллельные вызовы — ровно один createPayment у провайдера, второй получает «ссылка формируется»', async () => {
       const { id } = await confirmedDeal();
@@ -141,6 +153,85 @@ describe.skipIf(!DB)('платежи: провайдер — источник и
       const rows = await payments(id);
       expect(rows.map((r) => r.status)).toEqual(['canceled', 'pending']);
       expect(labels(clientCard)).toContain(texts.BTN.goToPayment);
+    }, TIMEOUT);
+  });
+
+  describe('F6: шаги перевода — только для живого перевода, который сделка ждёт', () => {
+    it('«Получил(а)» из уведомления P2 по отменённой сделке → E1, платёж не становится succeeded', async () => {
+      const { id, sellerCard, pid } = await claimedTransfer();
+      await h.press(SELLER, SELLER_CHAT, `cn:y:${id}:none`, sellerCard);
+      expect(await dealStatus(h, id)).toBe('cancelled');
+
+      await h.press(SELLER, SELLER_CHAT, `tr:g:${id}:${pid}`, null); // кнопка в сообщении P2, а не в карточке
+      expect(lastAnswer()).toBe(texts.E1);
+      expect((await payments(id)).map((p) => p.status)).toEqual(['canceled']);
+      expect(await dealStatus(h, id)).toBe('cancelled');
+
+      await h.press(SELLER, SELLER_CHAT, `tr:n:${id}:${pid}`, null);
+      expect(lastAnswer()).toBe(texts.E1);
+    }, TIMEOUT);
+
+    it('«Я перевёл(а)» по уже подтверждённому переводу → E1 над карточкой, P2 повторно не уходит', async () => {
+      const { id, sellerCard, clientCard, pid } = await claimedTransfer();
+      await h.press(SELLER, SELLER_CHAT, `tr:g:${id}:${pid}`, sellerCard);
+      expect(await dealStatus(h, id)).toBe('scheduled');
+
+      const mark = h.max.sent.length;
+      await h.press(CLIENT, CLIENT_CHAT, `tr:c:${id}:${pid}`, clientCard);
+      expect(h.max.byMid(clientCard)!.text.startsWith(texts.E1)).toBe(true);
+      expect(h.max.sent.slice(mark).some((m) => m.kind === 'send' && m.text.includes('сообщает о переводе'))).toBe(false);
+    }, TIMEOUT);
+
+    it('кнопки перевода с id ссылочного платежа → E1, ссылка жива', async () => {
+      const { id, clientCard } = await confirmedDeal();
+      const { paymentId } = await issueLink(id);
+
+      await h.press(CLIENT, CLIENT_CHAT, `tr:c:${id}:${paymentId}`, clientCard);
+      expect(h.max.byMid(clientCard)!.text.startsWith(texts.E1)).toBe(true);
+      await h.press(SELLER, SELLER_CHAT, `tr:g:${id}:${paymentId}`, null);
+      expect(lastAnswer()).toBe(texts.E1);
+
+      expect((await payments(id)).map((p) => [p.rail, p.status])).toEqual([['link', 'pending']]);
+      expect(await dealStatus(h, id)).toBe('awaiting_prepayment');
+    }, TIMEOUT);
+  });
+
+  describe('F7: отмена, когда клиент уже сообщил о переводе', () => {
+    it('обе стороны получают «Клиент сообщал о переводе …», возврат ожидается, строка — в карточках', async () => {
+      const { id, sellerCard, clientCard } = await claimedTransfer();
+      const mark = h.max.sent.length;
+
+      await h.press(SELLER, SELLER_CHAT, `cn:y:${id}:none`, sellerCard);
+
+      const deal = await h.query<{ cancel_refund_expected: boolean }>('SELECT cancel_refund_expected FROM deals WHERE public_id = $1', [id]);
+      expect(deal[0].cancel_refund_expected).toBe(true);
+      const rows = await payments(id);
+      expect(rows[0]).toMatchObject({ status: 'canceled', cancellation_reason: 'deal_cancelled_after_claim' });
+
+      const claim = `Клиент сообщал о переводе ${formatMoney(50_000)}`;
+      const sent = h.max.sent.slice(mark).filter((m) => m.kind === 'send');
+      // N15 клиенту — с предупреждением; отменившему исполнителю — отдельным сообщением
+      expect(sent.some((m) => m.chatId === CLIENT_CHAT && m.text.startsWith('🚫') && m.text.includes(claim))).toBe(true);
+      expect(sent.some((m) => m.chatId === SELLER_CHAT && m.text.includes(claim))).toBe(true);
+      // строка возврата в карточках обеих сторон
+      expect(h.max.byMid(sellerCard)!.text).toContain(claim);
+      expect(h.max.byMid(clientCard)!.text).toContain(claim);
+      expect(h.max.byMid(clientCard)!.text).toContain('проверьте поступление и верните при необходимости');
+      // «Предоплата …: ожидается возврат» не пишем — получение предоплаты никто не подтверждал
+      expect(h.max.byMid(clientCard)!.text).not.toContain('ожидается возврат');
+    }, TIMEOUT);
+
+    it('клиент отменяет сам — предупреждение тоже уходит обеим', async () => {
+      const { id, clientCard } = await claimedTransfer();
+      const mark = h.max.sent.length;
+
+      await h.press(CLIENT, CLIENT_CHAT, `cn:y:${id}`, clientCard);
+
+      expect(await dealStatus(h, id)).toBe('cancelled');
+      const claim = `Клиент сообщал о переводе ${formatMoney(50_000)}`;
+      const sent = h.max.sent.slice(mark).filter((m) => m.kind === 'send');
+      expect(sent.some((m) => m.chatId === SELLER_CHAT && m.text.startsWith('🚫') && m.text.includes(claim))).toBe(true);
+      expect(sent.some((m) => m.chatId === CLIENT_CHAT && m.text.includes(claim))).toBe(true);
     }, TIMEOUT);
   });
 });
