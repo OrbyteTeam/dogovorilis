@@ -104,6 +104,7 @@ export async function createHarness(databaseUrl: string, opts?: HarnessOptions):
   await http.ready();
 
   const onError: BotErrorHandler = runtime.onError;
+  let callbackSeq = 0;
   const middleware = runtime.bot.middleware();
 
   const feed = async (update: Update): Promise<void> => {
@@ -140,15 +141,18 @@ export async function createHarness(databaseUrl: string, opts?: HarnessOptions):
     async press(userId, chatId, payload, mid) {
       // У настоящего message_callback сообщение-источник есть всегда: без него SDK не сможет отдать chat_id
       // (CONTRACTS §1.5). Для кнопок меню подставляем синтетический mid, которого нет в card_messages.
+      const sourceMid = mid ?? `not-a-card-${Date.now()}`;
+      const callbackId = `cbid-${payload}-${Date.now()}-${++callbackSeq}`;
+      max.bindCallback(callbackId, sourceMid);
       await feed({
         update_type: 'message_callback',
         timestamp: Date.now(),
-        callback: { timestamp: Date.now(), callback_id: `cbid-${payload}-${Date.now()}`, payload, user: user(userId) },
+        callback: { timestamp: Date.now(), callback_id: callbackId, payload, user: user(userId) },
         message: {
           sender: user(userId),
           recipient: { chat_id: chatId, chat_type: 'DIALOG', user_id: userId, post_id: null },
           timestamp: Date.now(),
-          body: { mid: mid ?? `not-a-card-${Date.now()}`, seq: 1, text: '', attachments: null },
+          body: { mid: sourceMid, seq: 1, text: '', attachments: null },
         },
       } as never);
     },

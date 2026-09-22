@@ -21,6 +21,7 @@ export type AppErrorCode =
   | 'forbidden'
   | 'validation'
   | 'rate_limited'
+  | 'trial_limit'          // «Слишком много пробных сделок» (сделка-пример и демо из чата)
   | 'internal';            // E10
 
 export class AppError extends Error {
@@ -99,5 +100,13 @@ export class UnauthorizedError extends AppError {
   constructor(message: string, code: 'init_data_invalid' | 'phone_hash_invalid' = 'init_data_invalid') {
     super(code, message);
     this.name = 'UnauthorizedError';
+  }
+}
+
+/** Больше TRIAL_LIMIT_PER_HOUR пробных сделок (пример или демо) за час от одного пользователя. */
+export class TrialLimitError extends AppError {
+  constructor(readonly trial: 'example' | 'demo') {
+    super('trial_limit', `лимит пробных сделок «${trial}» за час исчерпан`);
+    this.name = 'TrialLimitError';
   }
 }

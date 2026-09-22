@@ -69,3 +69,17 @@ export async function existsOfType(q: Queryable, dealId: number, type: DealEvent
   );
   return res.rows[0]?.ok === true;
 }
+
+/**
+ * Сколько сделок источника `source` пользователь создал после `since` — для лимита пробных сделок.
+ * Источник пишется в payload события deal.created; считаем по журналу, а не в памяти, чтобы лимит
+ * пережил рестарт процесса.
+ */
+export async function countCreatedSince(q: Queryable, a: { sellerUserId: number; source: string; since: Date }): Promise<number> {
+  const res = await q.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM deal_events e JOIN deals d ON d.id = e.deal_id
+     WHERE d.seller_user_id = $1 AND e.type = 'deal.created' AND e.payload->>'source' = $2 AND e.created_at > $3`,
+    [a.sellerUserId, a.source, a.since],
+  );
+  return res.rows[0]?.n ?? 0;
+}

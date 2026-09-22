@@ -1,6 +1,6 @@
 // Разбор и сборка payload callback-кнопок (SPEC §13).
 // Формат для действий над сделкой: `<code>[:<sub>]:<publicId>[:<arg>]`.
-// Меню-кнопки (`help`, `dm:new`) публичного id не имеют — регулярное выражение из §13 их не описывает,
+// Меню-кнопки (`help`, `dm:new`, `ex:new`) публичного id не имеют — регулярное выражение из §13 их не описывает,
 // расхождение зафиксировано в docs/ДОПУЩЕНИЯ.md.
 import { PUBLIC_ID_RE } from '../../domain/ids.js';
 
@@ -34,6 +34,7 @@ export type DealCode = (typeof DEAL_CODES)[number];
 export type ParsedCallback =
   | { kind: 'help' }
   | { kind: 'demo_new' }
+  | { kind: 'example_new' }
   | { kind: 'deal'; code: DealCode; sub: string | null; publicId: string; arg: string | null };
 
 const SUBS = new Set(['y', 'c', 'g', 'n', 'x']);
@@ -44,6 +45,7 @@ export function parseCallback(payload: string | undefined | null): ParsedCallbac
   const code = parts[0];
   if (code === 'help') return { kind: 'help' };
   if (code === 'dm' && parts[1] === 'new') return { kind: 'demo_new' };
+  if (code === 'ex' && parts[1] === 'new') return { kind: 'example_new' };
   if (!(DEAL_CODES as readonly string[]).includes(code)) return null;
 
   let rest = parts.slice(1);

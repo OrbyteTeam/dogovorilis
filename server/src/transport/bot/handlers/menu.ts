@@ -11,7 +11,7 @@ import type { Button } from '@maxhub/max-bot-api/types';
 import type { AttachmentRequest } from '../../../integrations/max/gateway.js';
 import * as texts from '../../../texts.js';
 import { formatMoney } from '../../../domain/money.js';
-import { demoDealDraft } from '../../../domain/templates.js';
+import { demoDealDraft, exampleDealDraft } from '../../../domain/templates.js';
 import * as dealService from '../../../domain/deal/service.js';
 import { sendCard } from '../cards.js';
 import { cb } from '../callbacks.js';
@@ -45,14 +45,13 @@ async function cmdNew(ctx: Context, deps: Deps): Promise<void> {
   if (!chatId) return;
   const rows: AttachmentRequest[] = [];
   const bot = cfg().MAX_BOT_USERNAME || 'bot';
-  const buttons: Button[][] = [[Keyboard.button.openApp(texts.BTN.newDeal, bot, undefined, 'new')]];
+  const buttons: Button[][] = [
+    [Keyboard.button.openApp(texts.BTN.newDeal, bot, undefined, 'new')],
+    [Keyboard.button.callback(texts.BTN.exampleDeal, 'ex:new')],
+  ];
   if (cfg().DEMO_MODE) buttons.push([Keyboard.button.callback(texts.BTN.tryDemo, 'dm:new')]);
   rows.push(keyboard(buttons));
-  await deps.max.send(
-    { chatId },
-    'Новая сделка: заполните форму в мини-приложении.\nЕсли мини-приложение ещё не открывается, создайте демо-сделку с данными-примером — сценарий пройдётся целиком.',
-    rows,
-  );
+  await deps.max.send({ chatId }, texts.NEW_DEAL_PROMPT, rows);
 }
 
 async function cmdDeals(ctx: Context, deps: Deps): Promise<void> {
@@ -120,15 +119,30 @@ export async function onDemoNew(ctx: Context, deps: Deps): Promise<void> {
   await ensureDemoProfile(userId, user.firstName);
 
   const draft = demoDealDraft(new Date());
-  const created = await dealService.createDeal({ sellerUserId: userId, ...draft, photoMaxToken: null, demo: true });
+  const created = await dealService.createDeal({ sellerUserId: userId, ...draft, photoMaxToken: null, demo: true, trial: 'demo' });
   const bundle = created.bundle;
 
-  await deps.max.answer(
-    ctx.callback!.callback_id,
-    `🧪 Создана демо-сделка #${bundle.deal.publicId}. Ниже — две карточки: как видите её вы и как видит клиент.\nСсылка клиента: \`${dealLink(bundle.deal.publicId)}\``,
-  );
+  await deps.max.answer(ctx.callback!.callback_id, texts.DEMO_CREATED(bundle.deal.publicId, dealLink(bundle.deal.publicId)), [menu()]);
   await sendCard(deps.max, bundle, 'seller', { userId, chatId });
   await sendCard(deps.max, bundle, 'client_demo', { userId, chatId });
+}
+
+/**
+ * «📝 Сделка-пример для клиента»: НАСТОЯЩАЯ сделка с условиями шаблона beauty, клиент не привязан.
+ * Путь к двустороннему сценарию и кнопкам шеринга прямо из чата — без мини-приложения (аудит 22.09 §3.2).
+ * Меню остаётся под ответом: сообщение, в котором нажали, MAX правит ответом (§6.4).
+ */
+export async function onExampleNew(ctx: Context, deps: Deps): Promise<void> {
+  const userId = ctx.user?.user_id;
+  const chatId = chatIdOf(ctx);
+  if (!userId || !chatId) return;
+
+  const user = await touchUser(ctx, chatId);
+  await ensureDemoProfile(userId, user.firstName);
+  const created = await dealService.createDeal({ sellerUserId: userId, ...exampleDealDraft(new Date()), photoMaxToken: null, trial: 'example' });
+
+  await deps.max.answer(ctx.callback!.callback_id, texts.EXAMPLE_CREATED(created.bundle.deal.publicId), [menu()]);
+  await sendCard(deps.max, created.bundle, 'seller', { userId, chatId });
 }
 
 /** У демо-сделки должен быть профиль исполнителя: без реквизитов рейл «перевод» недоступен (SPEC §9.1). */

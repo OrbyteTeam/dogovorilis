@@ -3,7 +3,7 @@
 import { cfg, dealLink } from '../../config.js';
 import * as cardsRepo from '../../db/repos/cards.js';
 import { inTx } from '../../db/pool.js';
-import type { MaxGateway } from '../../integrations/max/gateway.js';
+import type { AttachmentRequest, MaxGateway } from '../../integrations/max/gateway.js';
 import { log } from '../../logger.js';
 import * as texts from '../../texts.js';
 import { livePayment, paidTotal, remaining, type CardMessage, type CardRole, type DealBundle } from '../../types.js';
@@ -48,12 +48,27 @@ function lastLinkAttempt(bundle: DealBundle, kind: 'prepayment' | 'final') {
   );
 }
 
-function paymentLineFor(bundle: DealBundle): string | null {
+/** Реквизиты в карточке клиента, пока он платит переводом (SPEC §6.4, §9.1). */
+function transferLinesFor(bundle: DealBundle, role: CardRole): string[] | null {
+  if (role === 'seller') return null;
+  const kind = pendingKind(bundle);
+  if (!kind) return null;
+  const live = livePayment(bundle.payments, kind);
+  if (live?.rail !== 'transfer' || live.status !== 'pending') return null;
+  return texts.transferLines({ sumKopecks: live.amountKopecks, payoutDetails: bundle.sellerProfile?.payoutDetails ?? '' });
+}
+
+function paymentLineFor(bundle: DealBundle, role: CardRole): string | null {
+  const viewer = role === 'seller' ? 'seller' : 'client';
   const kind = pendingKind(bundle);
   if (kind) {
     const live = livePayment(bundle.payments, kind);
     const sum = kind === 'prepayment' ? bundle.version.prepaymentKopecks : remaining(bundle.version);
     if (!live || live.status === 'pending') {
+      if (live?.rail === 'transfer') {
+        // Клиент видит вместо этой строки реквизиты (transferLinesFor); исполнителю — что выбран перевод.
+        return texts.paymentLine({ kind, state: 'transfer_chosen', sumKopecks: sum, at: null, rail: 'transfer', provider: live.provider, linkExpiresAt: null });
+      }
       if (live?.rail === 'link') {
         return texts.paymentLine({ kind, state: 'link_issued', sumKopecks: sum, at: null, rail: 'link', provider: live.provider, linkExpiresAt: live.expiresAt });
       }
@@ -75,7 +90,7 @@ function paymentLineFor(bundle: DealBundle): string | null {
       return texts.paymentLine({ kind, state: 'awaiting', sumKopecks: sum, at: null, rail: null, provider: null, linkExpiresAt: null });
     }
     if (live.status === 'claimed') {
-      return texts.paymentLine({ kind, state: 'claimed', sumKopecks: live.amountKopecks, at: live.claimedAt, rail: live.rail, provider: live.provider, linkExpiresAt: null });
+      return texts.paymentLine({ kind, state: 'claimed', sumKopecks: live.amountKopecks, at: live.claimedAt, rail: live.rail, provider: live.provider, linkExpiresAt: null, viewer });
     }
   }
   const succeeded = bundle.payments
@@ -127,7 +142,8 @@ export function buildCardView(bundle: DealBundle, role: CardRole): texts.CardVie
         ? displayName(client.firstName, client.lastName)
         : null,
     demo: deal.demo,
-    paymentLine: paymentLineFor(bundle),
+    paymentLine: paymentLineFor(bundle, role),
+    transferLines: transferLinesFor(bundle, role),
     receiptLine: receiptLineFor(bundle),
     refundLine: texts.refundLine({ prepaymentKopecks: version.prepaymentKopecks, expected: deal.cancelRefundExpected }),
     clientLink: showLink ? dealLink(deal.publicId) : null,
@@ -138,16 +154,26 @@ export function displayName(firstName: string, lastName: string | null): string 
   return [firstName, lastName].filter(Boolean).join(' ').trim() || 'без имени';
 }
 
-export function renderCard(bundle: DealBundle, role: CardRole): { text: string; attachments: NonNullable<unknown>[] } {
+/**
+ * Текст и клавиатура карточки. `note` — строка над карточкой (реакция на нажатие: «уже сделано», E1…);
+ * `keyboard` подменяет кнопки карточки на время подтверждения («Да, отменить» / «Назад»).
+ */
+export function renderCard(
+  bundle: DealBundle,
+  role: CardRole,
+  o: { note?: string; keyboard?: AttachmentRequest } = {},
+): { text: string; attachments: AttachmentRequest[] } {
   const c = cfg();
-  const text = texts.card(buildCardView(bundle, role));
-  const kb = cardKeyboard(bundle, role, {
-    botUsername: c.MAX_BOT_USERNAME || 'bot',
-    demoMode: c.DEMO_MODE,
-    dealLink: dealLink(bundle.deal.publicId),
-    ...railVisibility(bundle),
-  });
-  return { text, attachments: kb ? [kb] : [] };
+  const body = texts.card(buildCardView(bundle, role));
+  const kb =
+    o.keyboard ??
+    cardKeyboard(bundle, role, {
+      botUsername: c.MAX_BOT_USERNAME || 'bot',
+      demoMode: c.DEMO_MODE,
+      dealLink: dealLink(bundle.deal.publicId),
+      ...railVisibility(bundle),
+    });
+  return { text: o.note ? `${o.note}\n\n${body}` : body, attachments: kb ? [kb] : [] };
 }
 
 /** Кому и в каком виде принадлежат карточки этой сделки. В демо у одного пользователя их две. */
@@ -174,7 +200,7 @@ export async function sendCard(
     return null;
   }
   const { text, attachments } = renderCard(bundle, role);
-  const mid = await max.send({ chatId: a.chatId }, text, attachments as never);
+  const mid = await max.send({ chatId: a.chatId }, text, attachments);
   await inTx((c) => cardsRepo.upsert(c, { dealId: bundle.deal.id, userId: a.userId, role, chatId: a.chatId!, mid }));
   return mid;
 }
@@ -190,15 +216,41 @@ export async function syncCards(max: MaxGateway, bundle: DealBundle, skipMid?: s
       if (skipMid && card.mid === skipMid) return; // это сообщение уже обновлено ответом на кнопку
       const { text, attachments } = renderCard(bundle, card.role);
       try {
-        const ok = await max.edit(card.mid, text, attachments as never);
+        const ok = await max.edit(card.mid, text, attachments);
         if (ok) return;
-        const mid = await max.send({ chatId: card.chatId }, text, attachments as never);
+        const mid = await max.send({ chatId: card.chatId }, text, attachments);
         await inTx((c) => cardsRepo.updateMid(c, card.id, mid));
       } catch (e) {
         log.warn({ deal: bundle.deal.publicId, role: card.role, err: (e as Error).message }, 'не удалось обновить карточку');
       }
     }),
   );
+}
+
+/**
+ * Показать карточку внизу чата: новое сообщение, а старое превращается в строку-указатель без кнопок.
+ * Нужна, когда человек просит карточку не из неё самой («Открыть» в уведомлении, повторный вход по
+ * ссылке): правка на месте где-то выше по ленте для него выглядит как «ничего не произошло».
+ * Возвращает true, если карточка отправлена (у пользователя есть диалог с ботом).
+ */
+export async function showCardBelow(
+  max: MaxGateway,
+  bundle: DealBundle,
+  role: CardRole,
+  a: { userId: number; chatId: number | null },
+): Promise<boolean> {
+  const existing = await inTx((c) => cardsRepo.byDeal(c, bundle.deal.id)).then((cards) =>
+    cards.find((card) => card.role === role && card.userId === a.userId),
+  );
+  const chatId = existing?.chatId ?? a.chatId;
+  if (!chatId) return false;
+  const mid = await sendCard(max, bundle, role, { userId: a.userId, chatId });
+  if (existing && mid && existing.mid !== mid) {
+    await max.edit(existing.mid, texts.CARD_MOVED(bundle.deal.publicId), []).catch((e: Error) => {
+      log.warn({ deal: bundle.deal.publicId, err: e.message }, 'не удалось пометить старую карточку');
+    });
+  }
+  return mid !== null;
 }
 
 /** Есть ли уже карточка у этой роли — чтобы не дублировать при повторном входе клиента. */

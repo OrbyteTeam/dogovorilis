@@ -327,8 +327,11 @@ describe.skipIf(!DB)('рейл «ссылка» (ЮKassa)', () => {
       const id = await demoDealAwaitingPrepayment();
       yk.failNextCreate(new IntegrationError('yookassa', 'createPayment', null, null, 'таймаут 10000 мс'));
 
-      await h.press(SELLER, SELLER_CHAT, `pl:${id}`, await cardMid(h, id, 'client_demo'));
-      expect(lastAnswer()).toBe(texts.E9);
+      const clientCard = await cardMid(h, id, 'client_demo');
+      await h.press(SELLER, SELLER_CHAT, `pl:${id}`, clientCard);
+      // E9 — заметкой над карточкой: кнопка оплаты остаётся, повторить можно тут же (SPEC §6.4)
+      expect(lastAnswer().startsWith(texts.E9)).toBe(true);
+      expect(h.max.byMid(clientCard)!.buttons.map((b) => b.payload)).toContain(`nl:${id}`);
 
       const rows = await h.query<{ status: string }>(`SELECT status FROM payments ORDER BY id`);
       expect(rows.map((r) => r.status)).toEqual(['canceled']);

@@ -45,6 +45,11 @@ export async function clear(q: Queryable, userId: number): Promise<void> {
   await q.query(`DELETE FROM user_inputs WHERE user_id = $1`, [userId]);
 }
 
+/** Снять конкретное ожидание по сделке (например, причину отмены после «Не отменять»), не трогая чужие. */
+export async function clearIf(q: Queryable, a: { userId: number; kind: InputKind; dealId: number }): Promise<void> {
+  await q.query(`DELETE FROM user_inputs WHERE user_id = $1 AND kind = $2 AND deal_id = $3`, [a.userId, a.kind, a.dealId]);
+}
+
 export async function deleteExpired(q: Queryable, now: Date): Promise<number> {
   const res = await q.query(`DELETE FROM user_inputs WHERE expires_at <= $1`, [now]);
   return res.rowCount ?? 0;

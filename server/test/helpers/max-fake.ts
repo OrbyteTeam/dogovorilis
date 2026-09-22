@@ -28,6 +28,11 @@ export type MaxFake = {
   byMid(mid: string): SentMessage | undefined;
   /** текст всех сообщений — для быстрых проверок «пришло ли N8» */
   texts(): string[];
+  /**
+   * Запомнить, из какого сообщения пришёл callback. Настоящий MAX по POST /answers ПРАВИТ именно его
+   * (MAX_API §1 п. 12) — без этой связки fake не видел бы, что ответ затирает карточку (аудит 22.09 §3.1).
+   */
+  bindCallback(callbackId: string, mid: string): void;
   uploads: number;
   reset(): void;
   close(): Promise<void>;
@@ -46,6 +51,7 @@ export async function createMaxFake(): Promise<MaxFake> {
   const sent: SentMessage[] = [];
   const subscriptions: Subscription[] = [];
   const byMidMap = new Map<string, SentMessage>();
+  const callbackMid = new Map<string, string>();
   let midCounter = 0;
   let uploads = 0;
 
@@ -132,7 +138,11 @@ export async function createMaxFake(): Promise<MaxFake> {
     if (url.pathname === '/answers' && method === 'POST') {
       const callbackId = url.searchParams.get('callback_id') ?? '';
       const inner = (body?.message ?? undefined) as Record<string, unknown> | undefined;
-      sent.push({ kind: 'answer', callbackId, ...extract(inner) });
+      const mid = callbackMid.get(callbackId);
+      sent.push({ kind: 'answer', callbackId, mid, ...extract(inner) });
+      // Ответ с message заменяет текст и клавиатуру нажатого сообщения; без message — сообщение не трогается.
+      const existing = mid ? byMidMap.get(mid) : undefined;
+      if (inner && mid && existing) byMidMap.set(mid, { ...existing, ...extract(inner) });
       return json({ success: true });
     }
 
@@ -155,6 +165,9 @@ export async function createMaxFake(): Promise<MaxFake> {
     inChat: (chatId) => sent.filter((m) => m.chatId === chatId),
     byMid: (mid) => byMidMap.get(mid),
     texts: () => sent.map((m) => m.text),
+    bindCallback: (callbackId, mid) => {
+      callbackMid.set(callbackId, mid);
+    },
     get uploads() {
       return uploads;
     },

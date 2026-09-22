@@ -9,8 +9,10 @@ import { AppError, ForbiddenError, InvalidTransition } from '../../../errors.js'
 import type { AttachmentRequest, MaxGateway } from '../../../integrations/max/gateway.js';
 import { log } from '../../../logger.js';
 import * as texts from '../../../texts.js';
-import type { CardRole, DealBundle, User } from '../../../types.js';
+import type { CardMessage, CardRole, DealBundle, User } from '../../../types.js';
+import * as dealService from '../../../domain/deal/service.js';
 import type { Actor, ServiceResult } from '../../../domain/deal/service.js';
+import { parseCallback } from '../callbacks.js';
 import { renderCard, sendCard, syncCards } from '../cards.js';
 import { menuKeyboard } from '../keyboards.js';
 import { notifyForEvents } from '../notify.js';
@@ -75,23 +77,56 @@ export function pressedMid(ctx: Context): string | null {
 }
 
 /**
- * Ответ на нажатие: обновляем то же сообщение (POST /answers) — «живая карточка» (MAX_API §1 п. 12).
- * `note` — строка перед карточкой: так пользователь видит и реакцию на нажатие, и актуальное состояние
- * (SPEC §5.2 «ответ „уже сделано“» вместе с требованием E1 перерисовать карточку).
+ * Какую карточку этой сделки нажали. null — нажали не на карточке: уведомление, меню, список /deals,
+ * пересланное чужое сообщение. От этого зависит форма ответа (SPEC §6.4).
+ */
+export async function pressedCard(ctx: Context, dealId: number): Promise<CardMessage | null> {
+  if (ctx.update.update_type !== 'message_callback') return null;
+  const mid = pressedMid(ctx);
+  if (!mid) return null;
+  const cards = await inTx((c) => cardsRepo.byDeal(c, dealId));
+  return cards.find((card) => card.mid === mid) ?? null;
+}
+
+/**
+ * Ответ на нажатие перерисованной карточкой. POST /answers ПРАВИТ нажатое сообщение (MAX_API §1 п. 12),
+ * поэтому ответ на кнопку карточки обязан сам быть карточкой: всё, что мы хотим сказать, — заметкой
+ * над ней (`note`), иначе реакция либо затрёт кнопки, либо её тут же затрёт syncCards.
  */
 export async function answerWithCard(
   ctx: Context,
   deps: Deps,
   bundle: DealBundle,
   role: CardRole,
-  note?: string,
+  o: { note?: string; keyboard?: AttachmentRequest } = {},
 ): Promise<void> {
-  const { text, attachments } = renderCard(bundle, role);
-  await deps.max.answer(ctx.callback!.callback_id, note ? `${note}\n\n${text}` : text, attachments as AttachmentRequest[]);
+  const { text, attachments } = renderCard(bundle, role, o);
+  await deps.max.answer(ctx.callback!.callback_id, text, attachments);
 }
 
 export async function answerWithText(ctx: Context, deps: Deps, text: string, keyboard?: AttachmentRequest): Promise<void> {
   await deps.max.answer(ctx.callback!.callback_id, text, keyboard ? [keyboard] : undefined);
+}
+
+/**
+ * Единое правило ответа на нажатие (SPEC §6.4): нажали на карточке — отвечаем карточкой (с заметкой
+ * и, для подтверждений, со своей клавиатурой); нажали вне карточки — текстом `text` (по умолчанию — та же
+ * заметка). Возвращает mid нажатой карточки, чтобы syncCards её не перезаписал.
+ */
+export async function reply(
+  ctx: Context,
+  deps: Deps,
+  bundle: DealBundle,
+  o: { role: CardRole; note?: string; text?: string; keyboard?: AttachmentRequest },
+): Promise<string | undefined> {
+  if (ctx.update.update_type !== 'message_callback') return undefined;
+  const card = await pressedCard(ctx, bundle.deal.id);
+  if (card) {
+    await answerWithCard(ctx, deps, bundle, card.role, { note: o.note, keyboard: o.keyboard });
+    return card.mid;
+  }
+  await answerWithText(ctx, deps, o.text ?? o.note ?? 'Готово.', o.keyboard);
+  return undefined;
 }
 
 /**
@@ -103,25 +138,19 @@ export async function publishResult(
   deps: Deps,
   result: ServiceResult,
   cardRole: CardRole,
+  note?: string,
 ): Promise<void> {
-  const mid = pressedMid(ctx);
-  const isCardPressed = mid ? await isCardMid(result.bundle.deal.id, mid) : false;
-
-  if (ctx.update.update_type === 'message_callback') {
-    if (isCardPressed) await answerWithCard(ctx, deps, result.bundle, cardRole, result.alreadyDone ? texts.ALREADY_DONE : undefined);
-    else await answerWithText(ctx, deps, result.alreadyDone ? texts.ALREADY_DONE : shortAck(result));
-  }
-  await syncCards(deps.max, result.bundle, isCardPressed ? (mid ?? undefined) : undefined);
+  const skip = await reply(ctx, deps, result.bundle, {
+    role: cardRole,
+    note: result.alreadyDone ? texts.ALREADY_DONE : note,
+    text: result.alreadyDone ? texts.ALREADY_DONE : (note ?? shortAck(result)),
+  });
+  await syncCards(deps.max, result.bundle, skip);
   if (!result.alreadyDone) await notifyForEvents(deps.max, result.bundle, result.events);
 }
 
 function shortAck(result: ServiceResult): string {
   return result.statusChanged ? 'Готово — карточка обновлена.' : 'Готово.';
-}
-
-async function isCardMid(dealId: number, mid: string): Promise<boolean> {
-  const cards = await inTx((c) => cardsRepo.byDeal(c, dealId));
-  return cards.some((card) => card.mid === mid);
 }
 
 /**
@@ -186,6 +215,8 @@ export function errorText(e: unknown): string {
         return texts.E8;
       case 'validation':
         return e.message;
+      case 'trial_limit':
+        return texts.TOO_MANY_TRIALS;
       default:
         return texts.E10;
     }
@@ -198,11 +229,36 @@ export async function answerError(ctx: Context, deps: Deps, e: unknown): Promise
   const text = errorText(e);
   log.warn({ err: (e as Error).message, update: ctx.update.update_type }, 'обработчик ответил ошибкой');
   if (ctx.update.update_type === 'message_callback') {
-    await deps.max.answer(ctx.callback!.callback_id, text).catch(() => undefined);
+    await answerCallbackProblem(ctx, deps, text);
   } else {
     const chatId = chatIdOf(ctx);
     if (chatId) await deps.max.send({ chatId }, text).catch(() => undefined);
   }
+}
+
+/**
+ * Ошибка в ответ на кнопку. Если нажали на карточке, текст ошибки встаёт заметкой над свежей карточкой:
+ * иначе ответ затёр бы карточку текстом без кнопок (E1/E9/E11…), и из сделки было бы не выйти.
+ * Любая проблема на этом пути — откат к простому тексту; ответ пользователю важнее формы.
+ */
+export async function answerCallbackProblem(ctx: Context, deps: Deps, text: string, fallback?: AttachmentRequest): Promise<void> {
+  try {
+    const parsed = parseCallback(ctx.callback?.payload);
+    if (parsed?.kind === 'deal') {
+      const bundle = await dealService.getBundle(parsed.publicId);
+      const card = await pressedCard(ctx, bundle.deal.id);
+      if (card) {
+        await answerWithCard(ctx, deps, bundle, card.role, { note: text });
+        return;
+      }
+    }
+  } catch (e) {
+    log.warn({ err: (e as Error).message }, 'ошибку не удалось показать над карточкой — отвечаем текстом');
+  }
+  // Кнопки меню (демо, сделка-пример, помощь) живут в сообщении с меню: не оставляем человека без него.
+  const menuPress = parseCallback(ctx.callback?.payload)?.kind !== 'deal';
+  const keyboard = fallback ?? (menuPress ? menu() : undefined);
+  await deps.max.answer(ctx.callback!.callback_id, text, keyboard ? [keyboard] : undefined).catch(() => undefined);
 }
 
 export function menu(): AttachmentRequest {

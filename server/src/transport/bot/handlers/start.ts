@@ -11,7 +11,7 @@ import * as texts from '../../../texts.js';
 import { isTerminal } from '../../../types.js';
 import { parseDealPayload } from '../../../domain/ids.js';
 import * as dealService from '../../../domain/deal/service.js';
-import { syncCards } from '../cards.js';
+import { showCardBelow, syncCards } from '../cards.js';
 import { ensureCard } from './shared.js';
 import { answerError, chatIdOf, menu, touchUser, type Deps } from './shared.js';
 import { notifyForEvents } from '../notify.js';
@@ -111,16 +111,20 @@ async function joinByLink(
   // 6. T2: привязываем клиента, здороваемся (S2) и отправляем клиентскую карточку.
   try {
     const result = await dealService.joinClient({ publicId, userId });
+    if (result.alreadyDone) {
+      // Повторный вход по той же ссылке: карточка одна (§14 п. 5), но показываем её внизу чата —
+      // правка на месте где-то выше выглядела бы как «ссылка не сработала».
+      await showCardBelow(deps.max, result.bundle, 'client', { userId, chatId });
+      return;
+    }
     const sellerName =
       result.bundle.sellerProfile?.displayName ??
       [result.bundle.seller.firstName, result.bundle.seller.lastName].filter(Boolean).join(' ');
-    if (chatId && !result.alreadyDone) await deps.max.send({ chatId }, texts.S2(sellerName));
+    if (chatId) await deps.max.send({ chatId }, texts.S2(sellerName));
     await ensureCard(deps, result.bundle, 'client', userId, chatId);
-    if (!result.alreadyDone) {
-      // Карточка исполнителя должна показать «Клиент: <имя>» сразу, не дожидаясь его действий (§6.5).
-      await syncCards(deps.max, result.bundle);
-      await notifyForEvents(deps.max, result.bundle, result.events);
-    }
+    // Карточка исполнителя должна показать «Клиент: <имя>» сразу, не дожидаясь его действий (§6.5).
+    await syncCards(deps.max, result.bundle);
+    await notifyForEvents(deps.max, result.bundle, result.events);
   } catch (e) {
     if (e instanceof ForbiddenError && e.message === 'other_client') {
       if (chatId) await deps.max.send({ chatId }, texts.E3, [menu()]);

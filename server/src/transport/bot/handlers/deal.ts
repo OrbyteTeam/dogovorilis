@@ -10,15 +10,18 @@ import { addMinutes } from '../../../domain/time.js';
 import * as dealService from '../../../domain/deal/service.js';
 import { INPUT_TTL_MINUTES } from '../../../domain/deal/service.js';
 import { renderAndSendReceipt } from '../receipt.js';
-import { ensureCard } from './shared.js';
+import { log } from '../../../logger.js';
+import { showCardBelow } from '../cards.js';
 import {
   actingRole,
   actorOf,
   answerWithCard,
-  answerWithText,
   chatIdOf,
+  ensureCard,
+  pressedCard,
   pressedMid,
   publishResult,
+  reply,
   touchUser,
   type Deps,
 } from './shared.js';
@@ -45,9 +48,8 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
   const viewRole: CardRole = cardRole ?? (role === 'client' && bundle.deal.demo ? 'client_demo' : role);
 
   switch (parsed.code) {
-    case 'op': // «Открыть» — просто показать актуальную карточку
-      await ensureCard(deps, bundle, viewRole, userId, chatId);
-      await answerWithText(ctx, deps, `Карточка #${bundle.deal.publicId} обновлена.`);
+    case 'op': // «Открыть» / «Назад» / «Не отменять» — показать актуальную карточку
+      await openCard(ctx, deps, bundle, viewRole, userId, chatId);
       return;
 
     case 'cf':
@@ -55,14 +57,14 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
       return;
 
     case 'cr':
-      await askInput(ctx, deps, { userId, dealId: bundle.deal.id, kind: 'change_request', prompt: texts.ASK_CHANGE_REQUEST });
+      await askInput(ctx, deps, bundle, viewRole, { userId, kind: 'change_request', prompt: texts.ASK_CHANGE_REQUEST });
       return;
 
     case 'dc':
       if (parsed.sub === 'y') {
         await publishResult(ctx, deps, await dealService.decline(parsed.publicId, actor), viewRole);
       } else {
-        await answerWithText(ctx, deps, texts.CONFIRM_DECLINE(parsed.publicId), confirmKeyboard('dc', parsed.publicId, texts.BTN.declineYes));
+        await reply(ctx, deps, bundle, { role: viewRole, note: texts.CONFIRM_DECLINE(parsed.publicId), keyboard: confirmKeyboard('dc', parsed.publicId, texts.BTN.declineYes) });
       }
       return;
 
@@ -83,7 +85,7 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
     }
 
     case 'rm':
-      await askInput(ctx, deps, { userId, dealId: bundle.deal.id, kind: 'remarks', prompt: texts.ASK_REMARKS });
+      await askInput(ctx, deps, bundle, viewRole, { userId, kind: 'remarks', prompt: texts.ASK_REMARKS });
       return;
 
     case 'fx':
@@ -91,7 +93,7 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
       return;
 
     case 'rc':
-      await askInput(ctx, deps, { userId, dealId: bundle.deal.id, kind: 'receipt', prompt: texts.ASK_RECEIPT });
+      await askInput(ctx, deps, bundle, viewRole, { userId, kind: 'receipt', prompt: texts.ASK_RECEIPT });
       return;
 
     case 'nc':
@@ -100,12 +102,11 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
         await publishResult(ctx, deps, result, viewRole);
         if (!result.alreadyDone) await renderAndSendReceipt(deps.max, result.bundle);
       } else {
-        await answerWithText(
-          ctx,
-          deps,
-          texts.CONFIRM_CLOSE_WITHOUT_RECEIPT(parsed.publicId),
-          confirmKeyboard('nc', parsed.publicId, texts.BTN.closeWithoutReceiptYes),
-        );
+        await reply(ctx, deps, bundle, {
+          role: viewRole,
+          note: texts.CONFIRM_CLOSE_WITHOUT_RECEIPT(parsed.publicId),
+          keyboard: confirmKeyboard('nc', parsed.publicId, texts.BTN.closeWithoutReceiptYes),
+        });
       }
       return;
 
@@ -123,14 +124,18 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
         await inTx((c) =>
           inputsRepo.set(c, { userId, kind: 'cancel_reason', dealId: bundle.deal.id, expiresAt: addMinutes(new Date(), INPUT_TTL_MINUTES) }),
         );
-        await answerWithText(ctx, deps, `${texts.CONFIRM_CANCEL(parsed.publicId)}\n\n${texts.ASK_CANCEL_REASON}`, cancelReasonKeyboard(parsed.publicId));
+        await reply(ctx, deps, bundle, {
+          role: viewRole,
+          note: `${texts.CONFIRM_CANCEL(parsed.publicId)}\n\n${texts.ASK_CANCEL_REASON}`,
+          keyboard: cancelReasonKeyboard(parsed.publicId),
+        });
       } else {
-        await answerWithText(ctx, deps, texts.CONFIRM_CANCEL(parsed.publicId), confirmKeyboard('cn', parsed.publicId, texts.BTN.cancelYes));
+        await reply(ctx, deps, bundle, { role: viewRole, note: texts.CONFIRM_CANCEL(parsed.publicId), keyboard: confirmKeyboard('cn', parsed.publicId, texts.BTN.cancelYes) });
       }
       return;
 
     case 'rs':
-      await remindClient(ctx, deps, bundle);
+      await remindClient(ctx, deps, bundle, viewRole);
       return;
 
     case 'dm':
@@ -138,11 +143,11 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
       return;
 
     case 'pdf':
-      await sendReceiptOnDemand(ctx, deps, bundle);
+      await sendReceiptOnDemand(ctx, deps, bundle, viewRole);
       return;
 
     default:
-      await answerWithText(ctx, deps, texts.E1);
+      await reply(ctx, deps, bundle, { role: viewRole, note: texts.E1 });
       return;
   }
 }
@@ -151,22 +156,42 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
 async function askInput(
   ctx: Context,
   deps: Deps,
-  a: { userId: number; dealId: number; kind: 'change_request' | 'remarks' | 'receipt'; prompt: string },
+  bundle: DealBundle,
+  role: CardRole,
+  a: { userId: number; kind: 'change_request' | 'remarks' | 'receipt'; prompt: string },
 ): Promise<void> {
   await inTx((c) =>
-    inputsRepo.set(c, { userId: a.userId, kind: a.kind, dealId: a.dealId, expiresAt: addMinutes(new Date(), INPUT_TTL_MINUTES) }),
+    inputsRepo.set(c, { userId: a.userId, kind: a.kind, dealId: bundle.deal.id, expiresAt: addMinutes(new Date(), INPUT_TTL_MINUTES) }),
   );
-  await answerWithText(ctx, deps, a.prompt);
+  await reply(ctx, deps, bundle, { role, note: a.prompt });
+}
+
+/**
+ * «Открыть», а также «Назад» и «Не отменять» из подтверждений. Ожидание причины отмены по этой сделке
+ * снимаем: иначе любая следующая реплика передумавшего исполнителя отменила бы сделку.
+ * Нажали на самой карточке — перерисовываем её на месте; нажали в уведомлении или в списке /deals —
+ * сообщение с кнопкой не трогаем, а карточку показываем внизу чата, где человек её и ждёт.
+ */
+async function openCard(ctx: Context, deps: Deps, bundle: DealBundle, viewRole: CardRole, userId: number, chatId: number | null): Promise<void> {
+  await inTx((c) => inputsRepo.clearIf(c, { userId, kind: 'cancel_reason', dealId: bundle.deal.id }));
+  const card = await pressedCard(ctx, bundle.deal.id);
+  if (card) {
+    await answerWithCard(ctx, deps, bundle, card.role);
+    return;
+  }
+  await deps.max.answer(ctx.callback!.callback_id).catch((e: Error) => log.warn({ err: e.message }, 'max: пустой ответ на «Открыть» отклонён'));
+  const roles: CardRole[] = bundle.deal.demo && bundle.deal.sellerUserId === userId ? ['seller', 'client_demo'] : [viewRole];
+  for (const role of roles) await showCardBelow(deps.max, bundle, role, { userId, chatId });
 }
 
 /** Ручное напоминание клиенту: не чаще раза в 4 часа на сделку (SPEC §5.5). */
 const MANUAL_REMINDER_COOLDOWN_MS = 4 * 60 * 60 * 1000;
 const lastManualReminder = new Map<number, number>();
 
-async function remindClient(ctx: Context, deps: Deps, bundle: DealBundle): Promise<void> {
+async function remindClient(ctx: Context, deps: Deps, bundle: DealBundle, role: CardRole): Promise<void> {
   const last = lastManualReminder.get(bundle.deal.id) ?? 0;
   if (Date.now() - last < MANUAL_REMINDER_COOLDOWN_MS) {
-    await answerWithText(ctx, deps, 'Напоминание уже отправлено — следующее можно через 4 часа.');
+    await reply(ctx, deps, bundle, { role, note: texts.REMIND_COOLDOWN });
     return;
   }
   const context = texts.statusText(bundle.deal.status, 'client', {
@@ -176,27 +201,29 @@ async function remindClient(ctx: Context, deps: Deps, bundle: DealBundle): Promi
   });
   const sent = await notifyManualReminder(deps.max, bundle, context);
   if (sent) lastManualReminder.set(bundle.deal.id, Date.now());
-  await answerWithText(ctx, deps, sent ? 'Напоминание отправлено клиенту.' : 'Клиент ещё не открывал бота — напоминание отправить некуда.');
+  await reply(ctx, deps, bundle, { role, note: sent ? texts.REMIND_SENT : texts.REMIND_NO_CHAT });
 }
 
 /** Демо-режим: исполнитель проходит клиентскую сторону в своём же чате (SPEC §12). */
 async function openAsClient(ctx: Context, deps: Deps, publicId: string, userId: number, chatId: number | null): Promise<void> {
   if (!cfg().DEMO_MODE) {
-    await answerWithText(ctx, deps, texts.E1);
+    await deps.max.answer(ctx.callback!.callback_id, texts.E1);
     return;
   }
   const result = await dealService.openAsClient({ publicId, sellerUserId: userId });
-  await answerWithCard(ctx, deps, result.bundle, 'seller');
+  await reply(ctx, deps, result.bundle, { role: 'seller' });
   await ensureCard(deps, result.bundle, 'client_demo', userId, chatId);
 }
 
 /** Квитанция по запросу кнопкой (доступна в терминальных статусах, SPEC §5.5). */
-async function sendReceiptOnDemand(ctx: Context, deps: Deps, bundle: DealBundle): Promise<void> {
+async function sendReceiptOnDemand(ctx: Context, deps: Deps, bundle: DealBundle, role: CardRole): Promise<void> {
   if (!isTerminal(bundle.deal.status)) {
-    await answerWithText(ctx, deps, 'Квитанция формируется после закрытия или отмены сделки.');
+    await reply(ctx, deps, bundle, { role, note: texts.RECEIPT_NOT_YET });
     return;
   }
-  await answerWithText(ctx, deps, 'Готовлю квитанцию…');
+  // Кнопка «Квитанция PDF» живёт на карточке закрытой сделки: ответ обязан вернуть её же,
+  // иначе кнопка пропала бы навсегда — закрытые сделки в /deals не показываются.
+  await reply(ctx, deps, bundle, { role, note: texts.RECEIPT_PREPARING });
   await renderAndSendReceipt(deps.max, bundle);
 }
 

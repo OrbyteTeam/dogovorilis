@@ -99,7 +99,9 @@ export async function claim(
     const payment = await lockPayment(c, deal.id, args.paymentId);
 
     if (payment.status === 'succeeded') return { ctx: { deal, version, payment }, tooSoon: false };
-    if (payment.status === 'claimed' && payment.claimedAt && now.getTime() - payment.claimedAt.getTime() < CLAIM_COOLDOWN_MS) {
+    // Кулдаун считается от прошлого «перевёл», даже если исполнитель уже ответил «не вижу» (SPEC §9.1 п. 5):
+    // иначе «перевёл / не вижу» превращается в пинг-понг раз в секунду.
+    if (payment.claimedAt && now.getTime() - payment.claimedAt.getTime() < CLAIM_COOLDOWN_MS) {
       return { ctx: { deal, version, payment }, tooSoon: true };
     }
 
@@ -142,10 +144,8 @@ export async function markNotReceived(
     const { deal, version } = await lockDeal(c, args.publicId, args.actor);
     if (args.actor.role !== 'seller') throw new ForbiddenError('только исполнитель');
     const payment = await lockPayment(c, deal.id, args.paymentId);
-    const updated =
-      payment.status === 'claimed'
-        ? await paymentsRepo.update(c, payment.id, { status: 'pending', claimedAt: null })
-        : payment;
+    // claimed_at остаётся: от него считается пауза перед повторным «Я перевёл(а)».
+    const updated = payment.status === 'claimed' ? await paymentsRepo.update(c, payment.id, { status: 'pending' }) : payment;
     await eventsRepo.append(c, {
       dealId: deal.id,
       type: 'payment.not_received',

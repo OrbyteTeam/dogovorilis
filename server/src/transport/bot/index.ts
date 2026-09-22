@@ -9,10 +9,10 @@ import * as texts from '../../texts.js';
 import { parseCallback } from './callbacks.js';
 import { onDealCallback } from './handlers/deal.js';
 import { registerInput, registerTextlessGuard } from './handlers/input.js';
-import { onDemoNew, onHelpCallback, registerMenu } from './handlers/menu.js';
+import { onDemoNew, onExampleNew, onHelpCallback, registerMenu } from './handlers/menu.js';
 import { onPaymentCallback } from './handlers/payment.js';
 import { registerStart } from './handlers/start.js';
-import { answerError, chatIdOf, menu, type Deps } from './handlers/shared.js';
+import { answerCallbackProblem, answerError, chatIdOf, menu, type Deps } from './handlers/shared.js';
 
 export const ALLOWED_UPDATES: UpdateType[] = [
   'bot_started',
@@ -45,7 +45,8 @@ export function createErrorHandler(max: MaxGateway): BotErrorHandler {
     );
     try {
       if (ctx.update.update_type === 'message_callback' && ctx.callback) {
-        await max.answer(ctx.callback.callback_id, texts.E10, [menu()]);
+        // На карточке — E10 заметкой над карточкой, чтобы не стереть её кнопки (SPEC §6.4).
+        await answerCallbackProblem(ctx as never, { max }, texts.E10, menu());
       } else {
         const chatId = chatIdOf(ctx as never);
         if (chatId) await max.send({ chatId }, texts.E10, [menu()]);
@@ -81,6 +82,7 @@ export async function createBot(config: Config, opts?: { fetch?: typeof globalTh
     try {
       if (parsed.kind === 'help') return void (await onHelpCallback(ctx, deps));
       if (parsed.kind === 'demo_new') return void (await onDemoNew(ctx, deps));
+      if (parsed.kind === 'example_new') return void (await onExampleNew(ctx, deps));
       if (PAYMENT_CODES.has(parsed.code)) return void (await onPaymentCallback(ctx, deps, parsed));
       return void (await onDealCallback(ctx, deps, parsed));
     } catch (e) {

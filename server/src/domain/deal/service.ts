@@ -3,7 +3,7 @@
 // с записью события (§5.4) и пересозданием набора напоминаний (§10.1).
 // Транспорт (бот, HTTP) не знает про SQL, а домен не знает про SDK MAX: сервис возвращает список
 // добавленных событий, а какие уведомления N1–N15 из них следуют — решает transport/bot/notify.
-import { ForbiddenError, InvalidTransition, NotFoundError, ValidationError } from '../../errors.js';
+import { ForbiddenError, InvalidTransition, NotFoundError, TrialLimitError, ValidationError } from '../../errors.js';
 import { inTx, type DbClient } from '../../db/pool.js';
 import * as cardsRepo from '../../db/repos/cards.js';
 import * as dealsRepo from '../../db/repos/deals.js';
@@ -237,7 +237,14 @@ export type CreateDealInput = {
   photoMaxToken: string | null;
   /** предзаполненная демо-сделка: клиентом сразу становится сам исполнитель (SPEC §12) */
   demo?: boolean;
+  /**
+   * Пробная сделка из чата: `example` — «📝 Сделка-пример для клиента» (настоящая, клиент не привязан),
+   * `demo` — «🧪 Попробовать на демо-сделке». Не больше TRIAL_LIMIT_PER_HOUR каждого вида в час.
+   */
+  trial?: 'example' | 'demo';
 };
+
+export const TRIAL_LIMIT_PER_HOUR = 5;
 
 export async function createDeal(input: CreateDealInput, now = new Date()): Promise<ServiceResult> {
   assertAmounts(input.totalKopecks, input.prepaymentKopecks);
@@ -249,6 +256,7 @@ export async function createDeal(input: CreateDealInput, now = new Date()): Prom
     throw new ValidationError('Дата не раньше чем через 30 минут', 'scheduled_at');
 
   return inTx(async (c) => {
+    if (input.trial) await assertTrialQuota(c, input.sellerUserId, input.trial, now);
     const deal = await createWithUniquePublicId(c, {
       sellerUserId: input.sellerUserId,
       template: input.template,
@@ -272,7 +280,7 @@ export async function createDeal(input: CreateDealInput, now = new Date()): Prom
       type: 'deal.created',
       actorUserId: input.sellerUserId,
       actorRole: 'seller',
-      payload: { template: input.template, total: input.totalKopecks, prepayment: input.prepaymentKopecks },
+      payload: { template: input.template, total: input.totalKopecks, prepayment: input.prepaymentKopecks, source: input.trial ?? 'app' },
     });
 
     const withDemo = input.demo
@@ -282,6 +290,16 @@ export async function createDeal(input: CreateDealInput, now = new Date()): Prom
     await replanReminders(c, bundle, now);
     return { bundle, previousStatus: 'awaiting_confirmation', statusChanged: true, events: [created], alreadyDone: false };
   });
+}
+
+/**
+ * Лимит пробных сделок в час. Advisory-блокировка по пользователю в той же транзакции: два быстрых
+ * нажатия не проскочат между подсчётом и вставкой.
+ */
+async function assertTrialQuota(c: DbClient, sellerUserId: number, trial: 'example' | 'demo', now: Date): Promise<void> {
+  await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`trial:${sellerUserId}`]);
+  const created = await eventsRepo.countCreatedSince(c, { sellerUserId, source: trial, since: addHours(now, -1) });
+  if (created >= TRIAL_LIMIT_PER_HOUR) throw new TrialLimitError(trial);
 }
 
 /** public_id генерируется случайно; на коллизию (крайне маловероятную) просто пробуем ещё раз. */

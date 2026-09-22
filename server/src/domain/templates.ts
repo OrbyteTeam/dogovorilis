@@ -51,3 +51,11 @@ export function demoDealDraft(now: Date): {
     cancelRule: 'free_24h',
   };
 }
+
+/**
+ * «📝 Сделка-пример для клиента»: настоящая сделка с условиями шаблона beauty. Её увидит настоящий
+ * клиент, поэтому описание прямо говорит, что условия — пример (SPEC §18 «помечено везде»).
+ */
+export function exampleDealDraft(now: Date): ReturnType<typeof demoDealDraft> {
+  return { ...demoDealDraft(now), description: 'Условия-пример из шаблона «Красота». Адрес: онлайн-запись, кабинет 3.' };
+}

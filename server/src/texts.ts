@@ -98,7 +98,28 @@ export const H1 = `Как это работает
 
 export const INPUT_CANCELLED = 'Ввод отменён';
 
+// BTN объявлен ниже, а константа вычисляется при загрузке модуля, поэтому подпись кнопки — литералом.
+export const NEW_DEAL_PROMPT = `Новая сделка: заполните форму в мини-приложении — условия под себя.
+Быстрый старт: «📝 Сделка-пример для клиента» создаёт настоящую сделку с условиями-примером, её ссылку можно сразу отправить клиенту.`;
+
+/** Ответ на «📝 Сделка-пример для клиента» (ЗАДАЧА_03 B). */
+export function EXAMPLE_CREATED(id: string): string {
+  return `📝 Создана сделка #${id}. Это настоящая сделка с условиями-примером: отправьте ссылку клиенту — он увидит карточку и сможет подтвердить. Условия под себя — в «${BTN.newDeal}».
+Карточка — ниже, ссылка и кнопки «${BTN.sendToMax}» / «${BTN.copyLink}» — в ней.`;
+}
+
+export function DEMO_CREATED(id: string, link: string): string {
+  return `🧪 Создана демо-сделка #${id}. Ниже — две карточки: как видите её вы и как видит клиент.\nСсылка клиента: \`${link}\``;
+}
+
+export const TOO_MANY_TRIALS = 'Слишком много пробных сделок, подождите — не больше 5 в час.';
+
 export const DEAL_FINISHED_LINE = 'Сделка завершена';
+
+/** Старое сообщение карточки после того, как она показана заново внизу чата. */
+export function CARD_MOVED(id: string): string {
+  return `↓ Карточка #${id} — ниже, актуальная версия.`;
+}
 
 // --- статусы ---
 
@@ -211,6 +232,8 @@ export type CardView = {
   clientName: string | null;
   demo: boolean;
   paymentLine: string | null;
+  /** Реквизиты и подсказка рейла «перевод» в карточке клиента (§6.4) — заменяют строку оплаты. */
+  transferLines?: string[] | null;
   receiptLine: string | null;
   refundLine: string | null;
   clientLink: string | null;
@@ -252,14 +275,17 @@ export function card(v: CardView): string {
       v.hasPhoto ? '🖼 макет приложён' : null,
     ];
 
+    const transfer = v.transferLines?.length ? v.transferLines : null;
     const parties: (string | null)[] = [
       `👤 Исполнитель: ${esc(oneLine(v.sellerName))}`,
       `👤 Клиент: ${v.clientName ? esc(oneLine(v.clientName)) : 'ещё не открыл ссылку'}`,
-      v.paymentLine,
+      ...(transfer ?? [v.paymentLine]),
       v.receiptLine,
       v.refundLine,
       v.clientLink ? `🔗 Ссылка для клиента: \`${v.clientLink}\`` : null,
     ];
+    const receiptAt = parties.length - 3;
+    const linkAt = parties.length - 1;
 
     // Гарантия DESIGN §6: не больше 12 строк. В реальных статусах строк ≤ 12 и так; на всякий
     // случай убираем необязательные в порядке возрастания важности: макет → ссылка → строка чека.
@@ -269,10 +295,10 @@ export function card(v: CardView): string {
         terms[4] = null; // 🖼 макет приложён
       },
       () => {
-        parties[5] = null; // 🔗 ссылка для клиента (она же в кнопке «Скопировать ссылку»)
+        parties[linkAt] = null; // 🔗 ссылка для клиента (она же в кнопке «Скопировать ссылку»)
       },
       () => {
-        parties[3] = null; // строка чека
+        parties[receiptAt] = null; // строка чека
       },
     ];
     for (const dropIt of dropOrder) {
@@ -302,7 +328,7 @@ export function card(v: CardView): string {
 
 export function paymentLine(a: {
   kind: 'prepayment' | 'final';
-  state: 'awaiting' | 'link_issued' | 'link_expired' | 'link_canceled' | 'claimed' | 'received';
+  state: 'awaiting' | 'link_issued' | 'link_expired' | 'link_canceled' | 'transfer_chosen' | 'claimed' | 'received';
   sumKopecks: number;
   at: Date | null;
   rail: PaymentRail | null;
@@ -310,6 +336,8 @@ export function paymentLine(a: {
   linkExpiresAt: Date | null;
   /** cancellation_details.reason провайдера — показывается как есть (SPEC §9.2). */
   cancelReason?: string | null;
+  /** Кто читает строку: «клиент сообщил о переводе» исполнителю и «вы сообщили» — клиенту. */
+  viewer?: 'seller' | 'client';
 }): string {
   const label = a.kind === 'prepayment' ? 'Предоплата' : 'Остаток';
   const sum = formatMoney(a.sumKopecks);
@@ -327,10 +355,14 @@ export function paymentLine(a: {
       return a.cancelReason
         ? `Оплата ${sum} отменена: ${cancelReasonText(a.cancelReason)}`
         : `Оплата ${sum} отменена — можно создать новую ссылку`;
-    case 'claimed':
-      return a.at
-        ? `${label} ${sum}: клиент сообщил о переводе ${formatDateTimeShort(a.at)} — ждём подтверждения исполнителя`
-        : `${label} ${sum}: клиент сообщил о переводе — ждём подтверждения исполнителя`;
+    case 'transfer_chosen':
+      return `${label} ${sum}: клиент выбрал перевод по реквизитам — ждём перевода`;
+    case 'claimed': {
+      const when = a.at ? ` ${formatDateTimeShort(a.at)}` : '';
+      return a.viewer === 'client'
+        ? `Вы сообщили о переводе ${sum}${when}. Ждём подтверждения исполнителя`
+        : `${label} ${sum}: клиент сообщил о переводе${when} — проверьте поступление и подтвердите кнопкой`;
+    }
     case 'received': {
       const verb = a.kind === 'prepayment' ? 'получена' : 'получен';
       return a.at ? `${label} ${verb} ${formatDateTimeShort(a.at)}${rail}` : `${label} ${verb}${rail}`;
@@ -429,6 +461,18 @@ export function N16(a: { id: string; context: string }): string {
 
 // --- рейл «перевод» (§9.1) ---
 
+/**
+ * Реквизиты прямо в карточке клиента (SPEC §6.4). Раньше они уходили отдельным ответом на нажатие,
+ * и MAX тут же затирал его перерисовкой той же карточки: POST /answers правит нажатое сообщение.
+ */
+export function transferLines(a: { sumKopecks: number; payoutDetails: string }): string[] {
+  return [
+    `💸 Переведите **${formatMoney(a.sumKopecks)}** по реквизитам и нажмите «${BTN.transferDone}»:`,
+    `\`${esc(oneLine(a.payoutDetails))}\``,
+    testRailNotice('manual'),
+  ];
+}
+
 export function P1(a: { sumKopecks: number; payoutDetails: string }): string {
   return `Переведите ${formatMoney(a.sumKopecks)} исполнителю:
 \`${esc(a.payoutDetails)}\`
@@ -488,7 +532,7 @@ export function linkIssued(a: { sumKopecks: number; expiresAt: Date | null; prov
 export function testRailNotice(provider: PaymentProvider): string {
   if (provider === 'yookassa') return '🧪 Тестовый магазин ЮKassa: реальные деньги не списываются.';
   if (provider === 'tbank') return '🧪 DEMO-терминал Т-Банка: реальные деньги не списываются.';
-  return '🧪 Перевод по реквизитам подтверждается вручную обеими сторонами.';
+  return '🧪 Перевод продукт не видит — его подтверждают обе стороны кнопками.';
 }
 
 // --- запросы ввода (§6.6) ---
@@ -532,6 +576,17 @@ export const E13 = 'Подождите — исполнитель ещё про�
 /** Идемпотентный повтор: карточка уже в целевом состоянии (SPEC §5.2, конкурентность). */
 export const ALREADY_DONE = 'Это уже сделано — карточка актуальна.';
 
+// --- заметки над карточкой в ответ на нажатие (§6.4) ---
+
+export const REMIND_SENT = '🔔 Напоминание отправлено клиенту.';
+export const REMIND_COOLDOWN = 'Напоминание уже отправлено — следующее можно через 4 часа.';
+export const REMIND_NO_CHAT = 'Клиент ещё не открывал бота — напоминание отправить некуда.';
+export const RECEIPT_NOT_YET = 'Квитанция формируется после закрытия или отмены сделки.';
+export const TRANSFER_CLAIMED = '📨 Сообщили исполнителю о переводе. Ждём его подтверждения.';
+export const TRANSFER_NOT_SEEN_ACK = 'Отметили, что перевода не видно. Клиент получил подсказку.';
+export const RAIL_CANCELLED = 'Способ оплаты отменён. Выберите другой.';
+export const RECEIPT_PREPARING = '📄 Готовлю квитанцию — пришлю отдельным сообщением.';
+
 // --- напоминания (§10.2) ---
 
 export function reminderText(
@@ -574,6 +629,7 @@ export const BTN = {
   settings: '⚙️ Настройки',
   help: '❓ Как это работает',
   tryDemo: '🧪 Попробовать на демо-сделке',
+  exampleDeal: '📝 Сделка-пример для клиента',
   sendToMax: '📤 Отправить в MAX',
   copyLink: '📋 Скопировать ссылку',
   editTerms: '✏️ Изменить условия',
@@ -590,7 +646,7 @@ export const BTN = {
   transferDone: '✅ Я перевёл(а)',
   transferReceived: '✅ Получил(а)',
   transferNotReceived: '❌ Не вижу перевода',
-  transferCancel: 'Отмена',
+  transferCancel: '↩️ Отмена перевода',
   goToPayment: 'Перейти к оплате',
   checkPayment: '🔄 Проверить оплату',
   emulatePayment: '🧪 Эмулировать оплату',
@@ -606,4 +662,6 @@ export const BTN = {
   noReason: 'Без причины',
   receiptPdf: '📄 Квитанция PDF',
   open: 'Открыть',
+  back: '↩️ Назад',
+  keepDeal: '↩️ Не отменять',
 };

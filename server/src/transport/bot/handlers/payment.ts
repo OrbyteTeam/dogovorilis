@@ -8,11 +8,11 @@ import * as paymentService from '../../../domain/payment/service.js';
 import * as rails from '../../../domain/payment/rails.js';
 import type { Actor } from '../../../domain/deal/service.js';
 import { syncCards } from '../cards.js';
-import { linkPaymentKeyboard, transferCheckKeyboard, transferKeyboard } from '../keyboards.js';
+import { transferCheckKeyboard, transferKeyboard } from '../keyboards.js';
 import { deliver, notifyForEvents } from '../notify.js';
 import { renderAndSendReceipt } from '../receipt.js';
 import type { ParsedCallback } from '../callbacks.js';
-import { actingRole, actorOf, answerWithText, chatIdOf, pressedMid, publishResult, touchUser, type Deps } from './shared.js';
+import { actingRole, actorOf, chatIdOf, pressedMid, publishResult, reply, touchUser, type Deps } from './shared.js';
 
 export async function onPaymentCallback(
   ctx: Context,
@@ -33,19 +33,19 @@ export async function onPaymentCallback(
   switch (parsed.code) {
     case 'pl':
     case 'nl':
-      await offerLink(ctx, deps, parsed.publicId, actor, { renew: parsed.code === 'nl' });
+      await offerLink(ctx, deps, parsed.publicId, actor, viewRole, { renew: parsed.code === 'nl' });
       return;
 
     case 'pc':
       await checkLink(ctx, deps, parsed, viewRole);
       return;
 
-    case 'pe': // эмуляция оплаты — только DEMO-терминал Т-Банка (SPEC §9.3), подключается в ЗАДАЧА_03
-      await answerWithText(ctx, deps, texts.E11);
+    case 'pe': // эмуляция оплаты — только DEMO-терминал Т-Банка (SPEC §9.3); терминал не подключён
+      await reply(ctx, deps, bundle, { role: viewRole, note: texts.E11 });
       return;
 
     case 'pt':
-      await offerTransfer(ctx, deps, parsed.publicId, actor);
+      await offerTransfer(ctx, deps, parsed.publicId, actor, viewRole);
       return;
 
     case 'tr':
@@ -53,24 +53,26 @@ export async function onPaymentCallback(
       return;
 
     default:
-      await answerWithText(ctx, deps, texts.E1);
+      await reply(ctx, deps, bundle, { role: viewRole, note: texts.E1 });
   }
+}
+
+/** Ответить на нажатие свежей карточкой с заметкой и перерисовать остальные карточки сделки. */
+async function answerAndSync(ctx: Context, deps: Deps, publicId: string, role: CardRole, note?: string): Promise<DealBundle> {
+  const fresh = await dealService.getBundle(publicId);
+  const skip = await reply(ctx, deps, fresh, { role, note });
+  await syncCards(deps.max, fresh, skip);
+  return fresh;
 }
 
 /**
  * Клиент выбрал оплату по ссылке (или запросил новую). Карточка получает строку со сроком и
  * кнопки [Перейти к оплате] [🔄 Проверить оплату] — их рисует cardKeyboard по живому платежу (SPEC §9.1 п. 2).
  */
-async function offerLink(ctx: Context, deps: Deps, publicId: string, actor: Actor, o: { renew: boolean }): Promise<void> {
+async function offerLink(ctx: Context, deps: Deps, publicId: string, actor: Actor, role: CardRole, o: { renew: boolean }): Promise<void> {
   const { ctx: pay } = await rails.createLinkPayment(publicId, actor, { renew: o.renew });
-  const fresh = await dealService.getBundle(publicId);
-  await answerWithText(
-    ctx,
-    deps,
-    texts.linkIssued({ sumKopecks: pay.payment.amountKopecks, expiresAt: pay.payment.expiresAt, provider: pay.payment.provider }),
-    linkPaymentKeyboard(publicId, pay.payment),
-  );
-  await syncCards(deps.max, fresh);
+  const note = texts.linkIssued({ sumKopecks: pay.payment.amountKopecks, expiresAt: pay.payment.expiresAt, provider: pay.payment.provider });
+  await answerAndSync(ctx, deps, publicId, role, note);
 }
 
 /**
@@ -85,7 +87,7 @@ async function checkLink(
 ): Promise<void> {
   const paymentId = Number(parsed.arg);
   if (!Number.isFinite(paymentId)) {
-    await answerWithText(ctx, deps, texts.E1);
+    await answerAndSync(ctx, deps, parsed.publicId, viewRole, texts.E1);
     return;
   }
   const result = await rails.refreshFromProvider(paymentId);
@@ -94,22 +96,14 @@ async function checkLink(
     await closeIfNoReceiptNeeded(deps, result.transition.bundle);
     return;
   }
-  const bundle = await dealService.getBundle(parsed.publicId);
-  await answerWithText(ctx, deps, texts.paymentStillPending(result.payment.status), linkPaymentKeyboard(parsed.publicId, result.payment));
-  await syncCards(deps.max, bundle);
+  // Оплаты ещё нет: карточка остаётся с «Перейти к оплате» / «Проверить» (или «Новая ссылка»), текст — заметкой.
+  await answerAndSync(ctx, deps, parsed.publicId, viewRole, texts.paymentStillPending(result.payment.status));
 }
 
-/** Клиент выбрал перевод: показываем реквизиты (P1) и кнопку «Я перевёл(а)». */
-async function offerTransfer(ctx: Context, deps: Deps, publicId: string, actor: Actor): Promise<void> {
-  const { ctx: pay, profile } = await paymentService.createTransferPayment(publicId, actor);
-  await answerWithText(
-    ctx,
-    deps,
-    `${texts.P1({ sumKopecks: pay.payment.amountKopecks, payoutDetails: profile.payoutDetails ?? '' })}\n\n${texts.testRailNotice('manual')}`,
-    transferKeyboard(publicId, pay.payment.id),
-  );
-  const fresh = await dealService.getBundle(publicId);
-  await syncCards(deps.max, fresh);
+/** Клиент выбрал перевод: реквизиты и «Я перевёл(а)» рисует сама карточка (SPEC §6.4). */
+async function offerTransfer(ctx: Context, deps: Deps, publicId: string, actor: Actor, role: CardRole): Promise<void> {
+  await paymentService.createTransferPayment(publicId, actor);
+  await answerAndSync(ctx, deps, publicId, role);
 }
 
 async function onTransferStep(
@@ -120,23 +114,21 @@ async function onTransferStep(
   viewRole: CardRole,
 ): Promise<void> {
   const paymentId = Number(parsed.arg);
+  const publicId = parsed.publicId;
   if (!Number.isFinite(paymentId)) {
-    await answerWithText(ctx, deps, texts.E1);
+    await answerAndSync(ctx, deps, publicId, viewRole, texts.E1);
     return;
   }
-  const publicId = parsed.publicId;
 
   switch (parsed.sub) {
     case 'c': {
-      // Клиент: «Я перевёл(а)» → исполнителю приходит P2 с кнопками подтверждения.
+      // Клиент: «Я перевёл(а)» → карточка исполнителя получает «Получил(а)/Не вижу», плюс уведомление P2.
       const { ctx: pay, tooSoon } = await paymentService.claim({ publicId, paymentId, actor });
       if (tooSoon) {
-        await answerWithText(ctx, deps, texts.E13);
+        await answerAndSync(ctx, deps, publicId, viewRole, texts.E13);
         return;
       }
-      const bundle = await dealService.getBundle(publicId);
-      await answerWithText(ctx, deps, 'Сообщили исполнителю о переводе. Ждём подтверждения.');
-      await syncCards(deps.max, bundle);
+      const bundle = await answerAndSync(ctx, deps, publicId, viewRole, texts.TRANSFER_CLAIMED);
       const clientName = bundle.deal.demo ? 'демо-клиент' : (bundle.client ? `${bundle.client.firstName}` : 'клиент');
       await deliver(deps.max, bundle, {
         to: 'seller',
@@ -150,7 +142,7 @@ async function onTransferStep(
       // Исполнитель: «Получил(а)» → платёж succeeded → переход сделки T9 или T14.
       const { alreadySucceeded, ctx: pay } = await paymentService.markReceived({ publicId, paymentId, actor });
       if (alreadySucceeded) {
-        await answerWithText(ctx, deps, texts.ALREADY_DONE);
+        await answerAndSync(ctx, deps, publicId, viewRole, texts.ALREADY_DONE);
         return;
       }
       const transition = await dealService.applyPaymentSucceeded({
@@ -166,9 +158,7 @@ async function onTransferStep(
     case 'n': {
       // Исполнитель: «Не вижу перевода» → платёж снова pending, клиенту уходит P3.
       const pay = await paymentService.markNotReceived({ publicId, paymentId, actor });
-      const bundle = await dealService.getBundle(publicId);
-      await answerWithText(ctx, deps, 'Отметили, что перевод не виден. Клиент получил подсказку.');
-      await syncCards(deps.max, bundle);
+      const bundle = await answerAndSync(ctx, deps, publicId, viewRole, texts.TRANSFER_NOT_SEEN_ACK);
       await deliver(deps.max, bundle, {
         to: 'client',
         text: texts.P3({ sumKopecks: pay.payment.amountKopecks }),
@@ -178,16 +168,14 @@ async function onTransferStep(
     }
 
     case 'x': {
-      // Клиент отказался от выбранного рейла: сделка остаётся, платёж отменён локально.
+      // Клиент отказался от выбранного рейла: сделка остаётся, платёж отменён локально, карточка снова даёт выбор.
       await paymentService.cancelPayment({ publicId, paymentId, actor });
-      const bundle = await dealService.getBundle(publicId);
-      await answerWithText(ctx, deps, 'Способ оплаты отменён. Можно выбрать другой.');
-      await syncCards(deps.max, bundle);
+      await answerAndSync(ctx, deps, publicId, viewRole, texts.RAIL_CANCELLED);
       return;
     }
 
     default:
-      await answerWithText(ctx, deps, texts.E1);
+      await answerAndSync(ctx, deps, publicId, viewRole, texts.E1);
   }
 }
 

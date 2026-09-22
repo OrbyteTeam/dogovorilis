@@ -58,6 +58,7 @@ export function menuKeyboard(a: { botUsername: string; demoMode: boolean }): Att
     ...pair(openApp(BTN.newDeal, a.botUsername, 'new'), openApp(BTN.myDeals, a.botUsername, 'deals')),
     ...pair(openApp(BTN.settings, a.botUsername, 'settings'), callback(BTN.help, 'help')),
   ];
+  rows.push([callback(BTN.exampleDeal, 'ex:new')]);
   if (a.demoMode) rows.push([callback(BTN.tryDemo, 'dm:new')]);
   return keyboard(rows);
 }
@@ -108,9 +109,17 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
         rows.push(...pair(openApp(BTN.editTerms, o.botUsername, `d_${id}`), callback(BTN.keepAsIs, cb('ka', id))));
         break;
       case 'awaiting_prepayment':
-      case 'awaiting_payment':
-        rows.push([callback(BTN.remindClient, cb('rs', id))]);
+      case 'awaiting_payment': {
+        // Клиент сообщил о переводе — подтверждение живёт в самой карточке, а не только в уведомлении P2.
+        const live = liveFor(bundle, status === 'awaiting_prepayment' ? 'prepayment' : 'final');
+        if (live?.rail === 'transfer' && live.status === 'claimed') {
+          rows.push([callback(BTN.transferReceived, cb('tr', id, 'g', live.id))]);
+          rows.push([callback(BTN.transferNotReceived, cb('tr', id, 'n', live.id))]);
+        } else {
+          rows.push([callback(BTN.remindClient, cb('rs', id))]);
+        }
         break;
+      }
       case 'scheduled':
         rows.push([callback(BTN.done, cb('dn', id))]);
         break;
@@ -145,6 +154,12 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
       if (live?.rail === 'link' && live.status === 'pending' && live.confirmationUrl) {
         rows.push([link(BTN.goToPayment, live.confirmationUrl)]);
         rows.push([callback(BTN.checkPayment, cb('pc', id, undefined, live.id))]);
+      } else if (live?.rail === 'transfer' && live.status === 'pending') {
+        // Реквизиты уже в тексте карточки (§6.4) — здесь только «перевёл» и отказ от этого способа.
+        rows.push([callback(BTN.transferDone, cb('tr', id, 'c', live.id))]);
+        rows.push([callback(BTN.transferCancel, cb('tr', id, 'x', live.id))]);
+      } else if (live?.rail === 'transfer' && live.status === 'claimed') {
+        // Клиент сообщил о переводе — ждём исполнителя, кнопок рейла нет.
       } else {
         // Подписи рейлов длинные, поэтому каждая занимает свой ряд — иначе MAX их обрежет.
         if (o.linkRailVisible) rows.push([callback(o.linkRailRetry ? BTN.newLink : BTN.payByLink, cb(o.linkRailRetry ? 'nl' : 'pl', id))]);
@@ -163,7 +178,7 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
     case 'paid':
       return null; // ждём исполнителя
   }
-  return keyboard(rows);
+  return rows.length ? keyboard(rows) : null;
 }
 
 /**
@@ -197,14 +212,23 @@ export function transferCheckKeyboard(publicId: string, paymentId: number): Atta
   ]);
 }
 
-/** Подтверждение необратимого действия отдельной кнопкой (§5.2 T7, T16, T15). */
+/**
+ * Подтверждение необратимого действия отдельной кнопкой (§5.2 T7, T16, T15). Показывается на месте
+ * карточки; «Назад» (`op`) возвращает обычную карточку.
+ */
 export function confirmKeyboard(code: 'dc' | 'cn' | 'nc', publicId: string, yesText: string): AttachmentRequest {
-  return keyboard([[Keyboard.button.callback(yesText, cb(code, publicId, 'y'))], [Keyboard.button.callback(BTN.open, cb('op', publicId))]]);
+  return keyboard([[Keyboard.button.callback(yesText, cb(code, publicId, 'y'))], [Keyboard.button.callback(BTN.back, cb('op', publicId))]]);
 }
 
-/** Причина отмены: кнопка «Без причины» (§6.6). */
+/**
+ * Причина отмены: «Без причины» (§6.6) и «Не отменять». Второе обязательно: пока ждём причину,
+ * любой текст исполнителя отменил бы сделку — передумавшему нужен явный выход (`op` снимает ожидание).
+ */
 export function cancelReasonKeyboard(publicId: string): AttachmentRequest {
-  return keyboard([[Keyboard.button.callback(BTN.noReason, cb('cn', publicId, 'y', 'none'))]]);
+  return keyboard([
+    [Keyboard.button.callback(BTN.noReason, cb('cn', publicId, 'y', 'none'))],
+    [Keyboard.button.callback(BTN.keepDeal, cb('op', publicId))],
+  ]);
 }
 
 /** Кнопки уведомлений N3 (предложены изменения) и N11 (замечания). */
