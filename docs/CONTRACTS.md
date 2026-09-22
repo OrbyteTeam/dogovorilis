@@ -127,7 +127,7 @@ export type WebhookOptions = { domain: string; port?: number; path?: string; sec
 | `createWebhook(options)` | Подписывает (`subscribe`) + возвращает тот же обработчик `(req, res)`. Сервер не поднимает. |
 | Обработчик webhook | Принимает только `POST` на `hookPath` с валидным заголовком `x-max-bot-api-secret` (сравнение `timingSafeEqual`; если `secret` не задан — заголовок не проверяется). Отвечает `200 'OK'` (`Content-Type: text/plain`) **до** обработки update, затем `handleUpdate(update)`; невалидный JSON → `400 'Invalid JSON'`; иначе → `404 'Not Found'`. Ошибки middleware попадают в `bot.catch` (через `handleUpdate`); если обработчик ошибок сам бросает (поведение по умолчанию: `process.exitCode = 1; throw err`), исключение перехватывается в webhook-слое и только логируется через `debug` — процесс **не** завершается, но `process.exitCode` остаётся `1`. |
 | `stopPolling()` | `abortController.abort()`. `stop()` — deprecated-алиас. |
-| `stopWebhook()` | `server.close()` + `DELETE /subscriptions?url=`. |
+| `stopWebhook()` | Только если бот запускался через `startWebhook` (флаг `webhookIsStarted`): `server.close()` + `DELETE /subscriptions?url=`. После `createWebhook`/`webhookCallback` флаг не ставится — вызов ничего не делает (debug «Webhook is not running»); проверено тестом `server/test/webhook-mode.test.ts`. |
 | `bot.catch(handler)` | Заменяет `handleError`. По умолчанию: `process.exitCode = 1; console.error('Unhandled error while processing', ctx.update); throw err;`. README: «По умолчанию `bot.handleError` просто завершает работу программы… ⚠️ Завершайте работу программы при неизвестных ошибках, иначе бот может зависнуть в состоянии ошибки.» |
 | `handleUpdate(update)` | `ctx = new contextType(update, api, botInfo)`; `await this.middleware()(ctx, () => Promise.resolve())`; ошибки → `handleError(err, ctx)`. При polling все update из одной пачки обрабатываются **параллельно** (`Promise.all(updates.map(handleUpdate))`). |
 
@@ -529,7 +529,7 @@ bot.use(async (ctx, next) => {
 9. **Возврат значения из `onRequest`-хука Fastify не завершает запрос** (это не про SDK MAX, но ловится в той же
    связке): обработчик маршрута всё равно выполняется. Ошибки авторизации `/api` поэтому бросаются исключением,
    а формат ответа задаёт единый `setErrorHandler` (`server/src/transport/http/server.ts`).
-10. **Обработчик из `createWebhook()` нельзя просто повесить на маршрут Fastify.** Он принимает сырые
+10. **Обработчик из `webhookCallback()`/`createWebhook()` нельзя просто повесить на маршрут Fastify.** Он принимает сырые
     `(IncomingMessage, ServerResponse)`: сам читает тело из потока запроса и сам пишет ответ. Fastify по умолчанию
     делает и то и другое раньше — и обе стороны ломаются:
     - JSON-парсер Fastify **вычитывает поток до обработчика**, поэтому обработчик SDK ждёт события `data`/`end`,
