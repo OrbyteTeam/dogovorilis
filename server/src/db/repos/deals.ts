@@ -211,20 +211,6 @@ export async function listForUser(
   return res.rows.map(mapDeal);
 }
 
-/** Нетерминальные сделки с истёкшим expires_at — для планировщика (SPEC §10.2 confirmation_expired). */
-export async function findExpired(q: Queryable, now: Date, limit: number): Promise<Deal[]> {
-  const res = await q.query<DealRow>(
-    `SELECT ${COLS} FROM deals
-     WHERE expires_at IS NOT NULL
-       AND expires_at <= $1
-       AND NOT (status = ANY($2::text[]))
-     ORDER BY expires_at
-     LIMIT $3`,
-    [now, TERMINAL_STATUSES as readonly string[], limit],
-  );
-  return res.rows.map(mapDeal);
-}
-
 /**
  * Список для экрана «Мои сделки» (SPEC §7.4): одним запросом с текущей версией и суммой
  * подтверждённых платежей. Отдельно от listForUser, чтобы не ходить за каждой сделкой в getBundleById.

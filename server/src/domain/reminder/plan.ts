@@ -2,7 +2,7 @@
 // Принцип «пересоздаём при каждом переходе» — SPEC §10.1; набор и сроки — §10.2.
 // Запись в БД делает domain/deal/service.ts через db/repos/reminders.planMany.
 import type { Deal, DealVersion, ReminderKind, TaxMode } from '../../types.js';
-import { DAY_MS, HOUR_MS, addHours, partsIn, receiptReminderAt } from '../time.js';
+import { DAY_MS, HOUR_MS, addHours, addMinutes, partsIn, receiptReminderAt } from '../time.js';
 
 export type PlannedReminder = {
   kind: ReminderKind;
@@ -10,6 +10,19 @@ export type PlannedReminder = {
   dueAt: Date;
   dedupeKey: string;
 };
+
+/**
+ * Демо-сделку (SPEC §12) один человек проходит за минуты, а напоминания рассчитаны на сутки — в демо их не было бы
+ * видно никогда. Поэтому два напоминания, которые ждут человека посреди сценария (приёмка — клиенту, чек — исполнителю),
+ * в демо приходят через 2 минуты и с пометкой «🧪 в демо — ускорено» (texts.reminderText). Остальные сроки не трогаем:
+ * они привязаны к дате визита или к 72 ч на подтверждение, и ускорять их — значит закрывать демо-сделку раньше, чем её пройдут.
+ */
+export const DEMO_REMINDER_DELAY_MINUTES = 2;
+const DEMO_ACCELERATED: readonly ReminderKind[] = ['acceptance_due', 'receipt_due'];
+
+export function isDemoAccelerated(kind: ReminderKind): boolean {
+  return DEMO_ACCELERATED.includes(kind);
+}
 
 /**
  * dedupe_key. SPEC §10.1 задаёт `<deal_id>:<kind>:<status_changed_at ISO>`, но `event_tomorrow` уходит
@@ -22,7 +35,7 @@ function dedupeKey(dealId: number, kind: ReminderKind, role: 'seller' | 'client'
 
 /** Набор напоминаний для текущего статуса сделки. Прошедшие сроки не планируем — отправлять их поздно. */
 export function planReminders(input: {
-  deal: Pick<Deal, 'id' | 'status' | 'statusChangedAt' | 'clientUserId' | 'expiresAt' | 'paidAt'>;
+  deal: Pick<Deal, 'id' | 'status' | 'statusChangedAt' | 'clientUserId' | 'expiresAt' | 'paidAt' | 'demo'>;
   version: Pick<DealVersion, 'scheduledAt' | 'prepaymentKopecks' | 'totalKopecks' | 'cancelRule'>;
   taxMode: TaxMode;
   now: Date;
@@ -32,6 +45,10 @@ export function planReminders(input: {
   const tz = input.timezone;
   const base = deal.statusChangedAt;
   const out: PlannedReminder[] = [];
+
+  /** Срок «через N часов после смены статуса»; у демо-сделки ускоренные виды — через 2 минуты. */
+  const after = (kind: ReminderKind, hours: number): Date =>
+    deal.demo && isDemoAccelerated(kind) ? addMinutes(base, DEMO_REMINDER_DELAY_MINUTES) : addHours(base, hours);
 
   const add = (kind: ReminderKind, role: 'seller' | 'client', dueAt: Date) => {
     // Срок в прошлом относительно «сейчас» не планируем: планировщик отправил бы его тем же тиком,
@@ -80,7 +97,7 @@ export function planReminders(input: {
       break;
 
     case 'awaiting_acceptance':
-      add('acceptance_due', 'client', addHours(base, 24));
+      add('acceptance_due', 'client', after('acceptance_due', 24));
       break;
 
     case 'awaiting_payment':
@@ -90,7 +107,7 @@ export function planReminders(input: {
 
     case 'paid': {
       if (taxMode === 'none') break; // чек не нужен — напоминать не о чем
-      add('receipt_due', 'seller', addHours(base, 24));
+      add('receipt_due', 'seller', after('receipt_due', 24));
       if (taxMode === 'npd') {
         const paidAt = deal.paidAt ?? base;
         const deadlineReminder = receiptReminderAt(paidAt, tz);

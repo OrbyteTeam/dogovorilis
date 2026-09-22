@@ -40,8 +40,11 @@ export type PlannedReminder = {
 };
 
 /**
- * Вставка набора с ON CONFLICT (dedupe_key) DO NOTHING — защита от дублей при повторном планировании (SPEC §10.1).
- * Возвращает число реально вставленных строк.
+ * Материализация набора (SPEC §10.1). Уникальный dedupe_key защищает от дублей; строка с тем же ключом:
+ * - погашенная перепланированием (`cancelled` + `replanned`) — оживает: pending, новый срок, попытки с нуля;
+ * - любая другая (pending, sent, failed, погашенная планировщиком по state_changed / no_chat / sending_disabled) —
+ *   не трогается: отправленное не уходит второй раз, а отменённое по делу не воскресает.
+ * Возвращает число вставленных и оживлённых строк.
  */
 export async function planMany(q: Queryable, dealId: number, items: PlannedReminder[]): Promise<number> {
   if (items.length === 0) return 0;
@@ -50,7 +53,9 @@ export async function planMany(q: Queryable, dealId: number, items: PlannedRemin
      SELECT $1, t.kind, t.recipient_role, t.due_at, t.dedupe_key
      FROM unnest($2::text[], $3::text[], $4::timestamptz[], $5::text[])
        AS t(kind, recipient_role, due_at, dedupe_key)
-     ON CONFLICT (dedupe_key) DO NOTHING`,
+     ON CONFLICT (dedupe_key) DO UPDATE
+       SET status = 'pending', due_at = EXCLUDED.due_at, attempts = 0, last_error = NULL
+       WHERE reminders.status = 'cancelled' AND reminders.last_error = 'replanned'`,
     [
       dealId,
       items.map((i) => i.kind),
@@ -62,12 +67,15 @@ export async function planMany(q: Queryable, dealId: number, items: PlannedRemin
   return res.rowCount ?? 0;
 }
 
-/** При каждом переходе все pending этой сделки гасятся перед планированием нового набора (SPEC §10.1). */
-export async function cancelPendingForDeal(q: Queryable, dealId: number, reason: string): Promise<number> {
+/**
+ * При переходе гасятся pending этой сделки, которых нет в новом наборе (SPEC §10.1). Ключи из нового набора
+ * не трогаем: у перехода без смены статуса (T2) ключ тот же, и погасить-и-вставить заново его было бы нельзя.
+ */
+export async function cancelPendingExcept(q: Queryable, dealId: number, keepKeys: string[], reason: string): Promise<number> {
   const res = await q.query(
-    `UPDATE reminders SET status = 'cancelled', last_error = $2
-     WHERE deal_id = $1 AND status = 'pending'`,
-    [dealId, reason],
+    `UPDATE reminders SET status = 'cancelled', last_error = $3
+     WHERE deal_id = $1 AND status = 'pending' AND NOT (dedupe_key = ANY($2::text[]))`,
+    [dealId, keepKeys, reason],
   );
   return res.rowCount ?? 0;
 }

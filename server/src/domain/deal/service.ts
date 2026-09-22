@@ -52,6 +52,8 @@ export type ServiceResult = {
 };
 
 const CONFIRMATION_TTL_HOURS = 72; // SPEC §5.2 T1/T8
+/** Статусы, в которых действует `deals.expires_at` — срок подтверждения (T8 истекает только из них). */
+const AWAITING_CONFIRMATION: readonly DealStatus[] = ['awaiting_confirmation', 'changes_requested'];
 export const INPUT_TTL_MINUTES = 30; // SPEC §6.6
 
 // ─────────────────────────────── чтение ───────────────────────────────
@@ -184,6 +186,9 @@ async function runTransition(spec: TransitionSpec, now = new Date()): Promise<Se
     if (statusChanged) {
       patch.status = verdict.to;
       patch.statusChangedAt = now;
+      // Срок подтверждения живёт, только пока ждём подтверждения (T1, T5, T6 его ставят); вышли из ожидания
+      // в любой другой статус (T3, T7, T8, T16) — обнуляем, чтобы в БД не висел «срок» у подтверждённой сделки.
+      if (AWAITING_CONFIRMATION.includes(deal.status) && !AWAITING_CONFIRMATION.includes(verdict.to)) patch.expiresAt = null;
     }
     const updated = await dealsRepo.update(c, deal.id, patch);
 
@@ -210,16 +215,17 @@ async function runTransition(spec: TransitionSpec, now = new Date()): Promise<Se
   });
 }
 
-/** Пересоздание набора напоминаний: все pending → cancelled, затем набор для нового статуса (SPEC §10.1). */
+/**
+ * Пересоздание набора напоминаний (SPEC §10.1): гасим pending, которых нет в новом наборе, и материализуем набор.
+ * Раньше гасилось всё подряд, а вставка шла ON CONFLICT DO NOTHING: у перехода без смены статуса (T2 «клиент
+ * открыл ссылку», демо «Открыть как клиент») ключ confirmation_expired тот же — строка оставалась погашенной,
+ * и настоящая сделка не истекала никогда (аудит 22.09 п. 3). Уже зависшие строки поднимает миграция 0003.
+ */
 async function replanReminders(c: DbClient, bundle: DealBundle, now: Date): Promise<void> {
-  await remindersRepo.cancelPendingForDeal(c, bundle.deal.id, 'replanned');
-  if (isTerminal(bundle.deal.status)) return;
-  const items = planReminders({
-    deal: bundle.deal,
-    version: bundle.version,
-    taxMode: taxModeOf(bundle),
-    now,
-  });
+  const items = isTerminal(bundle.deal.status)
+    ? []
+    : planReminders({ deal: bundle.deal, version: bundle.version, taxMode: taxModeOf(bundle), now });
+  await remindersRepo.cancelPendingExcept(c, bundle.deal.id, items.map((i) => i.dedupeKey), 'replanned');
   if (items.length) await remindersRepo.planMany(c, bundle.deal.id, items);
 }
 

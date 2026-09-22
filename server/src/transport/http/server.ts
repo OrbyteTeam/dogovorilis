@@ -18,6 +18,8 @@ export type HttpDeps = {
   config: Config;
   max: MaxGateway | null;
   botReady: () => boolean;
+  /** Режим webhook: есть ли подписка MAX (null — ещё не проверяли). В polling/off не передаётся. */
+  subscription?: () => boolean | null;
 };
 
 export async function createHttpServer(deps: HttpDeps): Promise<FastifyInstance> {
@@ -59,11 +61,13 @@ export async function createHttpServer(deps: HttpDeps): Promise<FastifyInstance>
       return { ok: false, db: false, error: (e as Error).message };
     }
     const botOk = deps.config.MAX_MODE === 'off' || deps.botReady();
+    // Подписка MAX — для диагностики «бот молчит» (deploy/README.md §5); на ok не влияет: её вернёт сторож.
+    const subscription = deps.subscription ? { subscription: deps.subscription() } : {};
     if (!botOk) {
       reply.code(503);
-      return { ok: false, db: true, bot: false };
+      return { ok: false, db: true, bot: false, ...subscription };
     }
-    return { ok: true, db: true, bot: botOk };
+    return { ok: true, db: true, bot: botOk, ...subscription };
   });
 
   registerApi(app, { max: deps.max });

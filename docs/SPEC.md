@@ -146,19 +146,24 @@ dogovorilis/
    `setMyCommands` (§6.1); затем:
    - `polling`: `bot.start({ mode: 'polling', options: { allowedUpdates: [...] } })` — **внимание: SDK удаляет все
      webhook-подписки этого токена** (CONTRACTS §1.3). Поэтому один токен = один работающий экземпляр.
-   - `webhook`: `bot.createWebhook({ domain: PUBLIC_BASE_URL host, path: '/webhooks/max', secret })` и
-     регистрация возвращённого обработчика в Fastify как raw-handler (`POST /webhooks/max`). Порт наружу — 443
-     через Caddy. Не использовать `startWebhook` (он поднимает второй http-сервер).
+   - `webhook`: `bot.webhookCallback({ domain: PUBLIC_BASE_URL host, path: '/webhooks/max', secret })` — обработчик
+     **без подписки** — регистрируется в Fastify как raw-handler (`POST /webhooks/max`); подписка
+     (`bot.api.subscribe(url, secret, allowedUpdates)`, чужие подписки токена снимаются) — только **после**
+     `app.listen` (п. 4 ↔ 5), иначе первые доставки MAX получают 502. Порт наружу — 443 через Caddy.
+     Не использовать `startWebhook` (он поднимает второй http-сервер). Сторож в планировщике раз в 5 минут
+     возвращает подписку, если её сняли (чужой polling, MAX через 8 ч); `/readyz` показывает `subscription`.
    - Ошибка `fetch failed` с `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`/`SELF_SIGNED_CERT_IN_CHAIN` → лог с подсказкой
      про `certs/russian_trusted_bundle.pem` и `exit(1)`.
    - `allowedUpdates`: `bot_started`, `message_created`, `message_callback`, `bot_stopped`, `dialog_cleared`.
 6. Планировщик: `setInterval` 30 с; задания §10 и §9.6; защита от наложения (флаг «выполняется»).
-7. Graceful shutdown: SIGTERM → stop polling/webhook, дождаться текущих обработчиков (≤ 10 с), закрыть pool.
+7. Graceful shutdown: SIGTERM → остановить планировщик и polling, дождаться текущих запросов (≤ 10 с), закрыть pool.
+   Webhook-подписку MAX **не снимать**: рестарт не должен оставлять бота глухим.
 
 ### 4.5. Логи и наблюдаемость
 pino JSON; каждый входящий update/запрос — `request_id`; в логах никогда нет токена, `initData`, реквизитов,
 секретов провайдеров (маскировать). Ошибки интеграций — уровень `warn` с `provider`, `op`, `status`, `code`.
-`/healthz` — процесс жив; `/readyz` — БД отвечает и (если `MAX_MODE != off`) бот инициализирован.
+`/healthz` — процесс жив; `/readyz` — БД отвечает и (если `MAX_MODE != off`) бот инициализирован; в режиме `webhook`
+ещё поле `subscription: true|false|null` (есть ли наша подписка у MAX по последней проверке) — на `ok` не влияет.
 
 ## 5. Машина состояний сделки
 
@@ -612,9 +617,11 @@ DDL — `server/migrations/0001_init.sql` (первичен). Ключевые �
 ## 10. Планировщик напоминаний
 
 ### 10.1. Принцип
-Напоминания **материализуются** при каждом переходе (`domain/reminder/plan.ts::planReminders(deal)`): все `pending` этой
-сделки → `cancelled`, затем создаётся набор для нового статуса. `dedupe_key = <deal_id>:<kind>:<status_changed_at ISO>` —
-уникальный индекс защищает от дублей при повторном планировании. Тик планировщика (30 с) берёт `pending` с `due_at <= now`
+Напоминания **материализуются** при каждом переходе (`domain/reminder/plan.ts::planReminders(deal)`): `pending` этой
+сделки, которых нет в наборе для нового статуса, → `cancelled` (`last_error='replanned'`), затем набор вставляется.
+`dedupe_key = <deal_id>:<kind>:<role>:<status_changed_at ISO>` — уникальный индекс защищает от дублей при повторном
+планировании; строка с тем же ключом, погашенная перепланированием, оживает (`pending`), любая другая не трогается.
+Так переход без смены статуса (T2 — ключи те же) не теряет `confirmation_expired`. Тик планировщика (30 с) берёт `pending` с `due_at <= now`
 (`FOR UPDATE SKIP LOCKED`, порциями по 50), отправляет, ставит `sent`/`failed` (3 попытки, потом `failed`). Отправка
 пропускается (status `cancelled`, `last_error='state_changed'`), если статус сделки уже не тот, для которого создано напоминание.
 

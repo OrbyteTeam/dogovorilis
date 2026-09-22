@@ -612,9 +612,21 @@ export const RECEIPT_PREPARING = '📄 Готовлю квитанцию — п�
 
 // --- напоминания (§10.2) ---
 
+/** Пометка к напоминанию, которое у демо-сделки пришло через 2 минуты вместо суток (domain/reminder/plan.ts). */
+export const DEMO_ACCELERATED_NOTE = '🧪 в демо — ускорено: в настоящей сделке это напоминание придёт через сутки.';
+
+/** Кому адресовано — решает план (§10.2); текст написан под эту сторону. `accelerated` — демо-сделка, срок ускорен. */
 export function reminderText(
   kind: ReminderKind,
-  a: { id: string; title: string; sumKopecks: number; scheduledAt: Date | null; deadline: Date | null },
+  a: { id: string; title: string; sumKopecks: number; scheduledAt: Date | null; deadline: Date | null; accelerated?: boolean },
+): string {
+  const text = reminderBody(kind, a);
+  return a.accelerated ? `${text}\n${DEMO_ACCELERATED_NOTE}` : text;
+}
+
+function reminderBody(
+  kind: ReminderKind,
+  a: { id: string; title: string; sumKopecks: number; scheduledAt: Date | null },
 ): string {
   const sum = formatMoney(a.sumKopecks);
   switch (kind) {
