@@ -26,6 +26,12 @@ export const createDealSchema = z.object({
   profile: profileSchema.optional(),
 });
 
+/** Query для GET /api/deals (SPEC §7.8); отсутствующие параметры — значения по умолчанию. */
+export const dealListQuerySchema = z.object({
+  role: z.enum(['seller', 'client', 'all']).default('all'),
+  filter: z.enum(['active', 'awaiting_payment', 'done', 'all']).default('active'),
+});
+
 export const phoneSchema = z.object({
   phone: z.string().min(5).max(20),
   authDate: z.string().min(1),

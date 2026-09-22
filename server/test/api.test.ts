@@ -44,6 +44,10 @@ describe.skipIf(!DB)('API мини-приложения', () => {
     expect(res.json.items.map((t: { key: string }) => t.key)).toEqual([
       'beauty', 'lesson', 'repair', 'custom_order', 'freelance', 'free',
     ]);
+    // Шаблон со 100 % предоплаты обязан объяснить это словами: форма молча ставит «Своя» на всю сумму.
+    const lesson = res.json.items.find((t: { key: string }) => t.key === 'lesson');
+    expect(lesson.prepayment_percent).toBe(100);
+    expect(lesson.hint).toBeTruthy();
   });
 
   it('POST /api/deals с ошибкой в сумме — 400 validation с текстом для поля', async () => {
@@ -90,6 +94,83 @@ describe.skipIf(!DB)('API мини-приложения', () => {
     expect(res.json.profile.tax_mode).toBe('ip_kkt');
     const me = await h.api('GET', '/api/me', SELLER);
     expect(me.json.profile.display_name).toBe('Мастер Анна');
+  });
+
+  it('GET /api/deals: пустой список, когда сделок нет', async () => {
+    const res = await h.api('GET', '/api/deals', SELLER);
+    expect(res.status).toBe(200);
+    expect(res.json.items).toEqual([]);
+  });
+
+  it('GET /api/deals отдаёт строку списка со статусом, сроком и суммами (§7.4)', async () => {
+    const created = await h.api('POST', '/api/deals', SELLER, {
+      template: 'beauty', title: 'Маникюр с покрытием', total_rub: 2500, prepayment_rub: 750,
+      scheduled_at: null, cancel_rule: 'free_24h',
+      profile: { display_name: 'Анна Мастер', tax_mode: 'npd', payout_details: 'СБП', transfer_enabled: true, link_enabled: false, default_cancel_rule: 'free_24h' },
+    });
+    expect(created.status).toBe(200);
+
+    const res = await h.api('GET', '/api/deals', SELLER);
+    expect(res.status).toBe(200);
+    expect(res.json.items).toHaveLength(1);
+    expect(res.json.items[0]).toMatchObject({
+      public_id: created.json.deal.public_id,
+      status: 'awaiting_confirmation',
+      role: 'seller',
+      demo: false,
+      title: 'Маникюр с покрытием',
+      scheduled_at: null,
+      total_kopecks: 250_000,
+      prepayment_kopecks: 75_000,
+      paid_kopecks: 0,
+    });
+    expect(res.json.items[0].status_text).toBeTruthy();
+  });
+
+  it('GET /api/deals: фильтры done и awaiting_payment не показывают новую сделку', async () => {
+    await h.api('POST', '/api/deals', SELLER, {
+      template: 'free', title: 'Свежая сделка', total_rub: 1000, prepayment_rub: 0,
+      scheduled_at: null, cancel_rule: 'free_24h',
+      profile: { display_name: 'Анна', tax_mode: 'npd', payout_details: null, transfer_enabled: true, link_enabled: false, default_cancel_rule: 'free_24h' },
+    });
+    expect((await h.api('GET', '/api/deals?filter=active', SELLER)).json.items).toHaveLength(1);
+    expect((await h.api('GET', '/api/deals?filter=all', SELLER)).json.items).toHaveLength(1);
+    expect((await h.api('GET', '/api/deals?filter=done', SELLER)).json.items).toEqual([]);
+    expect((await h.api('GET', '/api/deals?filter=awaiting_payment', SELLER)).json.items).toEqual([]);
+  });
+
+  it('GET /api/deals: чужие сделки не видны, role=client пуст для исполнителя', async () => {
+    await h.api('POST', '/api/deals', SELLER, {
+      template: 'free', title: 'Моя сделка', total_rub: 1000, prepayment_rub: 0,
+      scheduled_at: null, cancel_rule: 'free_24h',
+      profile: { display_name: 'Анна', tax_mode: 'npd', payout_details: null, transfer_enabled: true, link_enabled: false, default_cancel_rule: 'free_24h' },
+    });
+    const stranger = await h.api('GET', '/api/deals?filter=all', SELLER + 777);
+    expect(stranger.status).toBe(200);
+    expect(stranger.json.items).toEqual([]);
+    expect((await h.api('GET', '/api/deals?role=client&filter=all', SELLER)).json.items).toEqual([]);
+  });
+
+  it('GET /api/deals: демо-сделка (клиент = исполнитель) попадает в список один раз', async () => {
+    const created = await h.api('POST', '/api/deals', SELLER, {
+      template: 'beauty', title: 'Демо-маникюр', total_rub: 2500, prepayment_rub: 500,
+      scheduled_at: null, cancel_rule: 'free_24h',
+      profile: { display_name: 'Анна', tax_mode: 'npd', payout_details: null, transfer_enabled: true, link_enabled: false, default_cancel_rule: 'free_24h' },
+    });
+    // В демо клиент — тот же пользователь (SPEC §12): условие OR в выборке не должно задвоить строку.
+    await h.query('UPDATE deals SET demo = true, client_user_id = seller_user_id WHERE public_id = $1', [
+      created.json.deal.public_id,
+    ]);
+
+    const res = await h.api('GET', '/api/deals?filter=all', SELLER);
+    expect(res.json.items).toHaveLength(1);
+    expect(res.json.items[0]).toMatchObject({ demo: true, role: 'seller' });
+  });
+
+  it('GET /api/deals с неизвестным filter — 400 validation', async () => {
+    const res = await h.api('GET', '/api/deals?filter=hack', SELLER);
+    expect(res.status).toBe(400);
+    expect(res.json.error.code).toBe('validation');
   });
 
   it('неизвестный метод /api/* — 404 в формате контракта', async () => {

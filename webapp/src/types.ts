@@ -115,6 +115,28 @@ export interface CreateDealRequest {
   profile?: SellerProfile;
 }
 
+/** Строка списка «Мои сделки» — SPEC §7.4, §7.8 (`GET /api/deals`). */
+export interface DealListItem {
+  public_id: string;
+  status: DealStatus;
+  status_text: string;
+  demo: boolean;
+  role: 'seller' | 'client';
+  title: string;
+  scheduled_at: string | null;
+  total_kopecks: number;
+  prepayment_kopecks: number;
+  paid_kopecks: number;
+  updated_at: string;
+}
+
+export interface DealsResponse {
+  items: DealListItem[];
+}
+
+export type DealsRole = 'seller' | 'client' | 'all';
+export type DealsFilter = 'active' | 'awaiting_payment' | 'done' | 'all';
+
 export interface CreateDealResponse {
   deal: DealView;
   link: string;

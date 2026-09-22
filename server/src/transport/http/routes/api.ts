@@ -2,6 +2,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { cfg } from '../../../config.js';
 import { inTx } from '../../../db/pool.js';
+import * as dealsRepo from '../../../db/repos/deals.js';
 import * as usersRepo from '../../../db/repos/users.js';
 import { AppError, UnauthorizedError, ValidationError } from '../../../errors.js';
 import type { MaxGateway } from '../../../integrations/max/gateway.js';
@@ -12,8 +13,8 @@ import { templateByKey } from '../../../domain/templates.js';
 import * as dealService from '../../../domain/deal/service.js';
 import { sendCard } from '../../bot/cards.js';
 import { verifyInitData } from '../auth.js';
-import { createDealSchema, profileSchema } from '../schemas.js';
-import { dealView, profileView, shareText, templatesView, userView } from '../views.js';
+import { createDealSchema, dealListQuerySchema, profileSchema } from '../schemas.js';
+import { dealListItemView, dealView, profileView, shareText, templatesView, userView } from '../views.js';
 
 /** Простой счётчик запросов на пользователя: 60/мин (SPEC §17). */
 const RATE_LIMIT = 60;
@@ -61,6 +62,14 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
   });
 
   app.get('/api/templates', async () => ({ items: templatesView() }));
+
+  app.get('/api/deals', async (req, reply) => {
+    const user = me(req);
+    const parsed = dealListQuerySchema.safeParse(req.query);
+    if (!parsed.success) return fail(reply, 400, 'validation', firstIssue(parsed.error.issues));
+    const items = await inTx((c) => dealsRepo.listItemsForUser(c, user.maxUserId, parsed.data));
+    return { items: items.map(dealListItemView) };
+  });
 
   app.put('/api/me/profile', async (req, reply) => {
     const user = me(req);

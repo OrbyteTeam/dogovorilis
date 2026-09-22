@@ -6,11 +6,13 @@ import { api, ApiError, errorText } from './api';
 import { backButton, DEV_NO_BRIDGE, isAvailable, startParam } from './bridge';
 import { BridgeMissingScreen, ErrorScreen, LoadingScreen } from './components/StateScreen';
 import { ToastProvider, useToast } from './components/Toast';
+import { DealsScreen } from './screens/Deals';
 import { DoneScreen } from './screens/Done';
 import { NewScreen } from './screens/New';
-import type { CreateDealResponse, MeResponse, Template } from './types';
+import { SettingsScreen } from './screens/Settings';
+import type { CreateDealResponse, MeResponse, SellerProfile, Template } from './types';
 
-type Route = { name: 'new' } | { name: 'done'; id: string };
+type Route = { name: 'new' } | { name: 'done'; id: string } | { name: 'deals' } | { name: 'settings' };
 
 /** Формат public_id — SPEC §13: `^d_[A-Za-z0-9]{10}$`. */
 const DEEPLINK_RE = /^d_([A-Za-z0-9]{10})$/;
@@ -46,18 +48,23 @@ function recallDone(publicId: string): CreateDealResponse | null {
 function parseHash(hash: string): Route | null {
   const path = hash.replace(/^#/, '');
   if (path === '/new') return { name: 'new' };
+  if (path === '/deals') return { name: 'deals' };
+  if (path === '/settings') return { name: 'settings' };
   const done = /^\/done\/([A-Za-z0-9]{1,32})$/.exec(path);
   if (done) return { name: 'done', id: done[1] };
   return null;
 }
 
 function routeToHash(route: Route): string {
-  return route.name === 'done' ? `#/done/${route.id}` : '#/new';
+  if (route.name === 'done') return `#/done/${route.id}`;
+  if (route.name === 'deals') return '#/deals';
+  if (route.name === 'settings') return '#/settings';
+  return '#/new';
 }
 
 /**
  * Старт по `start_param` (SPEC §7.1, §13): `new` → форма, `d_<id>` → экран «Готово» с ссылкой,
- * `deals`/`settings` → форма с тостом (эти экраны появятся в ЗАДАЧА_04).
+ * `deals` → список сделок (§7.4), `settings` → профиль (§7.7).
  */
 function resolveInitialRoute(): { route: Route; notice: string | null } {
   const fromHash = parseHash(window.location.hash);
@@ -66,9 +73,8 @@ function resolveInitialRoute(): { route: Route; notice: string | null } {
   const param = (startParam() ?? '').trim();
   const deeplink = DEEPLINK_RE.exec(param);
   if (deeplink) return { route: { name: 'done', id: deeplink[1] }, notice: null };
-  if (param === 'deals' || param === 'settings') {
-    return { route: { name: 'new' }, notice: 'Список и настройки появятся позже' };
-  }
+  if (param === 'deals') return { route: { name: 'deals' }, notice: null };
+  if (param === 'settings') return { route: { name: 'settings' }, notice: null };
   return { route: { name: 'new' }, notice: null };
 }
 
@@ -148,6 +154,25 @@ function Router() {
   if (state.status === 'unauthorized') return <BridgeMissingScreen />;
   if (state.status === 'error') return <ErrorScreen message={state.message} onRetry={() => void load()} />;
 
+  if (route.name === 'deals') {
+    return <DealsScreen onNewDeal={() => navigate({ name: 'new' })} />;
+  }
+
+  if (route.name === 'settings') {
+    return (
+      <SettingsScreen
+        me={state.data.me}
+        onSaved={(profile: SellerProfile) =>
+          setState((prev) =>
+            prev.status === 'ready'
+              ? { ...prev, data: { ...prev.data, me: { ...prev.data.me, profile } } }
+              : prev,
+          )
+        }
+      />
+    );
+  }
+
   if (route.name === 'done') {
     return (
       <DoneScreen
@@ -163,8 +188,16 @@ function Router() {
     <NewScreen
       me={state.data.me}
       templates={state.data.templates}
-      onCreated={(result) => {
+      onCreated={(result, savedProfile) => {
         rememberDone(result);
+        // Профиль сохранён вместе со сделкой: без этого «Создать ещё одну» снова покажет пустой блок «О вас».
+        if (savedProfile) {
+          setState((prev) =>
+            prev.status === 'ready'
+              ? { ...prev, data: { ...prev.data, me: { ...prev.data.me, profile: savedProfile } } }
+              : prev,
+          );
+        }
         navigate({ name: 'done', id: result.deal.public_id });
       }}
     />

@@ -1,7 +1,7 @@
 // Представления для мини-приложения (SPEC §7.8). Наружу — snake_case, внутрь домена — camelCase.
 import { dealLink } from '../../config.js';
 import * as texts from '../../texts.js';
-import { paidTotal, remaining, type DealBundle, type SellerProfile, type User } from '../../types.js';
+import { paidTotal, remaining, type DealBundle, type DealListItem, type SellerProfile, type User } from '../../types.js';
 import { TEMPLATES } from '../../domain/templates.js';
 
 export function userView(user: User) {
@@ -36,6 +36,26 @@ export function templatesView() {
     date_required: t.dateRequired,
     hint: t.hint,
   }));
+}
+
+export function dealListItemView(item: DealListItem) {
+  return {
+    public_id: item.publicId,
+    status: item.status,
+    status_text: texts.statusText(item.status, item.role, {
+      prepaymentKopecks: item.prepaymentKopecks,
+      remainingKopecks: item.totalKopecks - item.prepaymentKopecks,
+      scheduledAt: item.scheduledAt,
+    }),
+    demo: item.demo,
+    role: item.role,
+    title: item.title,
+    scheduled_at: item.scheduledAt?.toISOString() ?? null,
+    total_kopecks: item.totalKopecks,
+    prepayment_kopecks: item.prepaymentKopecks,
+    paid_kopecks: item.paidKopecks,
+    updated_at: item.updatedAt.toISOString(),
+  };
 }
 
 export function dealView(bundle: DealBundle) {

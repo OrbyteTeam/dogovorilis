@@ -3,6 +3,9 @@ import { DEV_NO_BRIDGE, initData } from './bridge';
 import type {
   CreateDealRequest,
   CreateDealResponse,
+  DealsFilter,
+  DealsResponse,
+  DealsRole,
   MeResponse,
   ProfileResponse,
   SellerProfile,
@@ -116,6 +119,8 @@ export const api = {
   templates: () => get<TemplatesResponse>('/templates'),
   saveProfile: (profile: SellerProfile) => put<ProfileResponse>('/me/profile', profile),
   createDeal: (deal: CreateDealRequest) => post<CreateDealResponse>('/deals', deal),
+  deals: (q: { role: DealsRole; filter: DealsFilter }) =>
+    get<DealsResponse>(`/deals?role=${q.role}&filter=${q.filter}`),
 };
 
 /** Текст для пользователя по любой ошибке запроса (DESIGN.md §5). */

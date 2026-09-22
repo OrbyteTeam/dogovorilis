@@ -1,6 +1,6 @@
 // Таблица deals (SPEC §8). Переходы статусов — только через lock* + update, под транзакцией домена (SPEC §5.2).
 import type { Queryable } from '../pool.js';
-import type { Deal, DealStatus, TemplateKey } from '../../types.js';
+import type { Deal, DealListItem, DealStatus, TemplateKey } from '../../types.js';
 import { TERMINAL_STATUSES } from '../../types.js';
 
 const COLS = `id, public_id, seller_user_id, client_user_id, demo, template, current_version, status,
@@ -30,6 +30,19 @@ type DealRow = {
   expires_at: Date | null;
   created_at: Date;
   updated_at: Date;
+};
+
+type DealListItemRow = {
+  public_id: string;
+  status: DealStatus;
+  demo: boolean;
+  seller_user_id: string | number;
+  updated_at: Date;
+  title: string;
+  scheduled_at: Date | null;
+  total_kopecks: string | number;
+  prepayment_kopecks: string | number;
+  paid_kopecks: string | number;
 };
 
 function mapDeal(r: DealRow): Deal {
@@ -210,4 +223,62 @@ export async function findExpired(q: Queryable, now: Date, limit: number): Promi
     [now, TERMINAL_STATUSES as readonly string[], limit],
   );
   return res.rows.map(mapDeal);
+}
+
+/**
+ * Список для экрана «Мои сделки» (SPEC §7.4): одним запросом с текущей версией и суммой
+ * подтверждённых платежей. Отдельно от listForUser, чтобы не ходить за каждой сделкой в getBundleById.
+ */
+export async function listItemsForUser(
+  q: Queryable,
+  userId: number,
+  a: { role: 'seller' | 'client' | 'all'; filter: 'active' | 'awaiting_payment' | 'done' | 'all'; limit?: number },
+): Promise<DealListItem[]> {
+  const params: unknown[] = [userId];
+  const where: string[] =
+    a.role === 'seller'
+      ? ['d.seller_user_id = $1']
+      : a.role === 'client'
+        ? ['d.client_user_id = $1']
+        : ['(d.seller_user_id = $1 OR d.client_user_id = $1)'];
+
+  if (a.filter === 'active') {
+    params.push(TERMINAL_STATUSES as readonly string[]);
+    where.push(`NOT (d.status = ANY($${params.length}::text[]))`);
+  } else if (a.filter === 'done') {
+    params.push(TERMINAL_STATUSES as readonly string[]);
+    where.push(`d.status = ANY($${params.length}::text[])`);
+  } else if (a.filter === 'awaiting_payment') {
+    params.push(AWAITING_PAYMENT_STATUSES as readonly string[]);
+    where.push(`d.status = ANY($${params.length}::text[])`);
+  }
+
+  params.push(a.limit ?? 50);
+  const res = await q.query<DealListItemRow>(
+    `SELECT d.public_id, d.status, d.demo, d.seller_user_id, d.updated_at,
+            v.title, v.scheduled_at, v.total_kopecks, v.prepayment_kopecks,
+            COALESCE(p.paid, 0) AS paid_kopecks
+     FROM deals d
+     JOIN deal_versions v ON v.deal_id = d.id AND v.version = d.current_version
+     LEFT JOIN LATERAL (
+       SELECT SUM(amount_kopecks) AS paid FROM payments
+       WHERE deal_id = d.id AND status = 'succeeded'
+     ) p ON TRUE
+     WHERE ${where.join(' AND ')}
+     ORDER BY d.updated_at DESC
+     LIMIT $${params.length}`,
+    params,
+  );
+  return res.rows.map((r) => ({
+    publicId: r.public_id,
+    status: r.status,
+    demo: r.demo,
+    role: Number(r.seller_user_id) === userId ? 'seller' : 'client',
+    title: r.title,
+    scheduledAt: r.scheduled_at,
+    totalKopecks: Number(r.total_kopecks),
+    prepaymentKopecks: Number(r.prepayment_kopecks),
+    paidKopecks: Number(r.paid_kopecks),
+    updatedAt: r.updated_at,
+  }));
 }

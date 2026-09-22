@@ -58,7 +58,8 @@ function toLocalInputValue(date: Date): string {
 export interface NewScreenProps {
   me: MeResponse;
   templates: Template[];
-  onCreated: (result: CreateDealResponse) => void;
+  /** `savedProfile` — профиль, сохранённый этим же запросом; null, если он уже был. */
+  onCreated: (result: CreateDealResponse, savedProfile: SellerProfile | null) => void;
 }
 
 export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
@@ -249,7 +250,7 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
       const result = await api.createDeal(payload);
       disableClosingConfirmation();
       haptic('success');
-      onCreated(result);
+      onCreated(result, payload.profile ?? null);
     } catch (error) {
       haptic('error');
       showToast(errorText(error), 'error');

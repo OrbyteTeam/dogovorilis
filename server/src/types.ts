@@ -117,6 +117,21 @@ export type SellerProfile = {
   defaultCancelRule: CancelRule;
 };
 
+/** Строка списка «Мои сделки» (SPEC §7.4): плоская, без версий, платежей и событий. */
+export type DealListItem = {
+  publicId: string;
+  status: DealStatus;
+  demo: boolean;
+  /** роль смотрящего в этой сделке */
+  role: 'seller' | 'client';
+  title: string;
+  scheduledAt: Date | null;
+  totalKopecks: number;
+  prepaymentKopecks: number;
+  paidKopecks: number;
+  updatedAt: Date;
+};
+
 export type Deal = {
   id: number;
   publicId: string;
