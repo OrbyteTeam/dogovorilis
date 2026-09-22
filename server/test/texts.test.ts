@@ -579,6 +579,14 @@ describe('напоминания (SPEC §10.2)', () => {
     expect(reminderText('event_tomorrow', { ...base, scheduledAt: null })).toContain('Завтра по плану');
     expect(reminderText('receipt_deadline', base)).toContain('422-ФЗ');
   });
+
+  it('ускоренное в демо напоминание несёт пометку, обычное — нет', () => {
+    const base = { id: ID, title: 'Маникюр', sumKopecks: 50_000, scheduledAt: SCHEDULED, deadline: null };
+    const fast = reminderText('receipt_due', { ...base, accelerated: true });
+    expect(fast.startsWith(reminderText('receipt_due', base))).toBe(true);
+    expect(fast).toContain('🧪 в демо — ускорено');
+    for (const kind of ALL_REMINDERS) expect(reminderText(kind, base), kind).not.toContain('ускорено');
+  });
 });
 
 describe('меню, ошибки, кнопки', () => {

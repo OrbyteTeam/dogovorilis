@@ -152,7 +152,12 @@ export async function notifyManualReminder(max: MaxGateway, bundle: DealBundle, 
   return deliver(max, bundle, { to: 'client', text: texts.N16({ id: bundle.deal.publicId, context }), keyboard: openKeyboard(bundle.deal.publicId) });
 }
 
-export async function deliver(max: MaxGateway, bundle: DealBundle, notice: Notice): Promise<boolean> {
+/**
+ * Отправить уведомление стороне. false — писать некуда (нет клиента или диалога с ботом) либо отправка упала.
+ * `rethrow` — ошибку отправки не глотать: планировщику напоминаний нужен повтор (SPEC §10.1 «3 попытки»),
+ * а «писать некуда» повтором не лечится и по-прежнему возвращает false.
+ */
+export async function deliver(max: MaxGateway, bundle: DealBundle, notice: Notice, opts?: { rethrow?: boolean }): Promise<boolean> {
   const userId = notice.to === 'seller' ? bundle.deal.sellerUserId : bundle.deal.clientUserId;
   if (!userId) {
     await skip(bundle, notice.to, 'no_client');
@@ -170,6 +175,7 @@ export async function deliver(max: MaxGateway, bundle: DealBundle, notice: Notic
     return true;
   } catch (e) {
     log.warn({ deal: bundle.deal.publicId, to: notice.to, err: (e as Error).message }, 'уведомление не доставлено');
+    if (opts?.rethrow) throw e;
     return false;
   }
 }

@@ -81,7 +81,7 @@ async function main(): Promise<void> {
     log.info({ bot: `https://max.ru/${runtime.username}` }, 'бот: polling запущен');
   }
 
-  const scheduler = startScheduler({ max: runtime?.max ?? null, sendReminders: false });
+  const scheduler = startScheduler({ max: runtime?.max ?? null, sendReminders: true });
 
   const shutdown = async (signal: string) => {
     log.info({ signal }, 'остановка');
