@@ -64,6 +64,8 @@ export type DealEventType =
   | 'payment.claimed'
   | 'payment.not_received'
   | 'payment.succeeded'
+  /** Провайдер подтвердил оплату, которую мы локально уже считали expired/canceled (ЗАДАЧА_03 F1). */
+  | 'payment.succeeded_late'
   | 'payment.canceled'
   | 'deal.done'
   | 'deal.accepted'

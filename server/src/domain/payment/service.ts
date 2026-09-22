@@ -12,7 +12,8 @@ import { log } from '../../logger.js';
 import type { Deal, DealVersion, Payment, PaymentKind, Role, SellerProfile } from '../../types.js';
 import { newIdempotenceKey } from '../ids.js';
 import { MINUTE_MS } from '../time.js';
-import type { Actor } from '../deal/service.js';
+import * as dealService from '../deal/service.js';
+import type { Actor, ServiceResult } from '../deal/service.js';
 import { actorRoleFor } from '../deal/service.js';
 
 /** Повторное «Я перевёл(а)» — не чаще раза в 10 минут (SPEC §9.1 п. 5, текст E13). */
@@ -161,6 +162,27 @@ export async function markNotReceived(
     });
     return { deal, version, payment: updated };
   });
+}
+
+/** Сколько ждём, прежде чем считать succeeded-платёж «зависшим»: переход обычно доводит тот, кто подтвердил. */
+export const STUCK_AFTER_MS = 60_000;
+
+/**
+ * Самовосстановление (ЗАДАЧА_03 F4): платёж уже succeeded, а сделка не сдвинулась — процесс упал между
+ * транзакцией платежа и транзакцией перехода. Для перевода новых нажатий может и не быть, для ссылки
+ * вебхук уже отработан, поэтому планировщик сам доводит такие сделки тем же идемпотентным переходом.
+ * Возвращает только реально выполненные переходы — их транспорт доводит до сторон.
+ */
+export async function healStuckPayments(now = new Date(), limit = 20): Promise<ServiceResult[]> {
+  const stuck = await inTx((c) => paymentsRepo.stuckSucceeded(c, new Date(now.getTime() - STUCK_AFTER_MS), limit));
+  const healed: ServiceResult[] = [];
+  for (const p of stuck) {
+    const result = await dealService.applyPaymentSucceeded({ dealId: p.dealId, paymentId: p.id, kind: p.kind }, now);
+    if (result.alreadyDone) continue;
+    log.warn({ deal: result.bundle.deal.publicId, payment: p.id, status: result.bundle.deal.status }, 'сделка доведена по уже подтверждённому платежу');
+    healed.push(result);
+  }
+  return healed;
 }
 
 /** Клиент отказался от выбранного рейла (кнопка «Отмена» под реквизитами). Сделку это не отменяет. */

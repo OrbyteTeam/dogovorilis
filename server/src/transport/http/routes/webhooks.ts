@@ -13,8 +13,7 @@ import { log } from '../../../logger.js';
 import type { MaxGateway } from '../../../integrations/max/gateway.js';
 import * as rails from '../../../domain/payment/rails.js';
 import * as dealService from '../../../domain/deal/service.js';
-import { syncCards } from '../../bot/cards.js';
-import { notifyForEvents } from '../../bot/notify.js';
+import { publishPaymentUpdate } from '../../bot/outcome.js';
 
 /** CONTRACTS §2.5 — дословный список сетей ЮKassa. */
 export const YOOKASSA_NETWORKS = [
@@ -88,19 +87,14 @@ async function handle(a: { externalId: string; event: string; logId: number | nu
       }
     }
 
+    // Провайдер — источник истины: оплата учитывается и после нашего expired/canceled (ЗАДАЧА_03 F1),
+    // а повтор по уже succeeded доводит сделку, если прошлый раз процесс упал между транзакциями (F4).
     const result = await rails.applyProviderStatus(payment.id, rails.outcomeOf(fresh));
     await mark(a.logId, result.changed ? 'ok' : 'ignored:no_change');
 
-    if (!a.max) return;
-    if (result.transition) {
-      await syncCards(a.max, result.transition.bundle);
-      await notifyForEvents(a.max, result.transition.bundle, result.transition.events);
-      return;
-    }
-    if (result.changed) {
-      // Отмена провайдером: перехода сделки нет, но карточка обязана это показать.
-      await syncCards(a.max, await dealService.getBundleById(payment.dealId));
-    }
+    // Переход (с закрытием и квитанцией при tax_mode=none, F5), отмена провайдером — перерисовка карточек,
+    // поздняя оплата по отменённой сделке — «верните деньги» обеим сторонам.
+    if (a.max) await publishPaymentUpdate(a.max, result);
   } catch (e) {
     // Ошибка не считается обработкой: ЮKassa повторит доставку, и alreadyProcessed её пропустит дальше.
     await mark(a.logId, `error:${(e as Error).message}`.slice(0, 500));

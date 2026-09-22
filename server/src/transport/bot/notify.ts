@@ -91,6 +91,21 @@ export function noticesFor(bundle: DealBundle, event: DealEvent): Notice[] {
       return [{ to: 'seller', text: texts.N13({ id, deadline }), keyboard: n13Keyboard(id) }];
     }
 
+    case 'payment.succeeded_late': {
+      // Поздняя оплата, которую сделка приняла, уведомляется обычным N8/N13 по переходу. Здесь — только
+      // оплата, которую сделка принять уже не может: вернуть её может только исполнитель (ЗАДАЧА_03 F1).
+      if (!event.payload.refund_required) return [];
+      const text = texts.LATE_PAYMENT_REFUND({
+        id,
+        sumKopecks: Number(event.payload.amount ?? 0),
+        dealCancelled: event.payload.reason === 'deal_cancelled',
+      });
+      return [
+        { to: 'seller', text, keyboard: openKeyboard(id) },
+        { to: 'client', text, keyboard: openKeyboard(id) },
+      ];
+    }
+
     case 'deal.done':
       return [{ to: 'client', text: texts.N9({ id }), keyboard: openKeyboard(id) }];
 

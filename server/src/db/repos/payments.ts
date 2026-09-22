@@ -185,6 +185,33 @@ export async function update(q: Queryable, id: number, patch: PaymentPatch): Pro
 }
 
 /**
+ * Платежи, которые уже succeeded, а сделка их всё ещё ждёт: процесс упал между транзакцией платежа
+ * и транзакцией перехода (ЗАДАЧА_03 F4). Сюда же — оплаченная сделка при tax_mode='none', которая
+ * не успела закрыться (T14 прошёл, T15 нет). `succeededBefore` отсекает только что подтверждённые:
+ * их переход прямо сейчас доводит тот, кто подтвердил. Выборка идёт от deals по индексу статуса.
+ */
+export async function stuckSucceeded(q: Queryable, succeededBefore: Date, limit: number): Promise<Payment[]> {
+  const res = await q.query<PaymentRow>(
+    `SELECT ${COLS} FROM payments WHERE id IN (
+       SELECT p.id FROM deals d
+       JOIN payments p ON p.deal_id = d.id AND p.status = 'succeeded'
+       LEFT JOIN seller_profiles sp ON sp.user_id = d.seller_user_id
+       WHERE d.status IN ('awaiting_prepayment', 'awaiting_payment', 'paid')
+         AND p.succeeded_at < $1
+         AND (
+           (p.kind = 'prepayment' AND d.status = 'awaiting_prepayment')
+           OR (p.kind = 'final' AND d.status = 'awaiting_payment')
+           OR (p.kind = 'final' AND d.status = 'paid' AND sp.tax_mode = 'none')
+         )
+     )
+     ORDER BY succeeded_at
+     LIMIT $2`,
+    [succeededBefore, limit],
+  );
+  return res.rows.map(mapPayment);
+}
+
+/**
  * Для опроса провайдера планировщиком (SPEC §10.3): rail=link, status=pending,
  * создан > 30 с назад, не опрашивался 60 с (метка опроса — updated_at).
  * Истёкший expires_at здесь не отсекается: домен по нему переводит платёж в `expired`.

@@ -124,6 +124,13 @@ type TransitionSpec = {
   actor: Actor;
   /** system-переходы (T8, T9, T14) не проверяют участие пользователя */
   system?: boolean;
+  /**
+   * Подтверждение оплаты идемпотентно в широком смысле: если сделка уже ушла из статуса, в котором
+   * этот платёж что-то двигает (оплата применена раньше, сделка дальше или отменена), — это не ошибка,
+   * а «уже сделано». Нужно, чтобы любое повторное применение succeeded могло без риска вызывать
+   * переход (ЗАДАЧА_03 F4). Деньги по отменённой сделке ловит rails.applyProviderStatus раньше.
+   */
+  idempotentIfMoved?: boolean;
   /** дополнительные изменения и события внутри той же транзакции */
   mutate?: (a: MutateArgs) => Promise<{ patch?: dealsRepo.DealPatch; events?: Array<{ type: DealEvent['type']; payload?: Record<string, unknown> }> }>;
 };
@@ -168,7 +175,10 @@ async function runTransition(spec: TransitionSpec, now = new Date()): Promise<Se
     );
 
     if (!verdict.ok) {
-      if (verdict.reason === 'already_done') {
+      if (verdict.reason === 'already_done' || spec.idempotentIfMoved) {
+        if (verdict.reason !== 'already_done') {
+          log.info({ deal: deal.publicId, status: deal.status, action: spec.action }, 'оплата уже учтена: сделка ушла дальше, переход не нужен');
+        }
         const bundle = await loadBundle(c, deal);
         return { bundle, previousStatus: deal.status, statusChanged: false, events: [], alreadyDone: true };
       }
@@ -541,12 +551,11 @@ export function markFixed(publicId: string, actor: Actor, now = new Date()): Pro
 
 /**
  * T11 «Принимаю». Если остатка нет, целевой статус — `paid`, и тогда сразу выполняются эффекты T14
- * (SPEC §5.2 T11: «если сразу paid — выполняются эффекты T14»), а при tax_mode='none' — ещё и T15.
- * Цепочку доводит вызывающий через `finishIfPaid`, чтобы каждый переход остался отдельной транзакцией
- * со своим событием и своим перепланированием напоминаний.
+ * (SPEC §5.2 T11: «если сразу paid — выполняются эффекты T14»), а при tax_mode='none' — ещё и T15:
+ * его доводит finishIfNoReceiptNeeded отдельной транзакцией со своим событием и перепланированием.
  */
-export function accept(publicId: string, actor: Actor, now = new Date()): Promise<ServiceResult> {
-  return runTransition(
+export async function accept(publicId: string, actor: Actor, now = new Date()): Promise<ServiceResult> {
+  const accepted = await runTransition(
     {
       publicId,
       action: 'accept',
@@ -561,21 +570,30 @@ export function accept(publicId: string, actor: Actor, now = new Date()): Promis
     },
     now,
   );
+  return finishIfNoReceiptNeeded(accepted, now);
 }
 
 // ─────────────────────── T9, T14: деньги пришли (system) ───────────────────────
 
-/** Платёж подтверждён: вебхуком, опросом или кнопкой «Получил(а)». Идемпотентно по статусу сделки. */
+/**
+ * Платёж подтверждён: вебхуком, опросом, кнопкой «Проверить оплату» или «Получил(а)».
+ * Идемпотентно: сделка уже сдвинута (или ушла дальше) — alreadyDone без побочных эффектов, поэтому
+ * вызывать можно при каждом применении succeeded — так самовосстанавливается «платёж succeeded, а сделка
+ * не сдвинулась» после падения между транзакциями (ЗАДАЧА_03 F4).
+ * При tax_mode='none' сделка после T14 сразу закрывается (T15) — на любом пути подтверждения (F5);
+ * результат несёт события обоих переходов, транспорт по deal.closed отправляет квитанцию.
+ */
 export async function applyPaymentSucceeded(
   args: { dealId: number; paymentId: number; kind: 'prepayment' | 'final' },
   now = new Date(),
 ): Promise<ServiceResult> {
-  return runTransition(
+  const moved = await runTransition(
     {
       dealId: args.dealId,
       action: args.kind === 'prepayment' ? 'prepayment_succeeded' : 'final_succeeded',
       actor: { userId: 0, role: 'seller' },
       system: true,
+      idempotentIfMoved: true,
       mutate: async ({ now: at, to }) => ({
         patch: to === 'paid' ? { paidAt: at } : {},
         events: [{ type: 'payment.succeeded', payload: { kind: args.kind, payment_id: args.paymentId } }],
@@ -583,10 +601,28 @@ export async function applyPaymentSucceeded(
     },
     now,
   );
+  return finishIfNoReceiptNeeded(moved, now);
+}
+
+/**
+ * T14 → T15 (SPEC §5.2): при tax_mode='none' чек не нужен — полностью оплаченная сделка закрывается сразу.
+ * Сделка уже `paid` от прошлого раза (процесс упал между переходами) — тоже закрываем: это та же цепочка.
+ * События обоих переходов объединяются, чтобы вызывающий отправил и N-уведомления, и квитанцию.
+ */
+async function finishIfNoReceiptNeeded(result: ServiceResult, now: Date): Promise<ServiceResult> {
+  if (result.bundle.deal.status !== 'paid' || taxModeOf(result.bundle) !== 'none') return result;
+  const closed = await closeAutomatically(result.bundle.deal.id, now);
+  return {
+    bundle: closed.bundle,
+    previousStatus: result.previousStatus,
+    statusChanged: result.statusChanged || closed.statusChanged,
+    events: [...result.events, ...closed.events],
+    alreadyDone: result.alreadyDone && closed.alreadyDone,
+  };
 }
 
 /** T15 при tax_mode='none': чек не нужен, закрываем сразу после полной оплаты. */
-export async function closeAutomatically(dealId: number, now = new Date()): Promise<ServiceResult> {
+async function closeAutomatically(dealId: number, now: Date): Promise<ServiceResult> {
   return runTransition(
     {
       dealId,

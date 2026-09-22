@@ -12,7 +12,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import * as texts from '../src/texts.js';
 import * as rails from '../src/domain/payment/rails.js';
-import { LinkInProgressError } from '../src/errors.js';
+import { IntegrationError, LinkInProgressError } from '../src/errors.js';
 import { formatMoney } from '../src/domain/money.js';
 import { pollLinkPayments } from '../src/scheduler/jobs/payments-poll.js';
 import { cardMid, createHarness, dealStatus, livePaymentId, truncateAll, type Harness } from './helpers/harness.js';
@@ -232,6 +232,299 @@ describe.skipIf(!DB)('платежи: провайдер — источник и
       const sent = h.max.sent.slice(mark).filter((m) => m.kind === 'send');
       expect(sent.some((m) => m.chatId === SELLER_CHAT && m.text.startsWith('🚫') && m.text.includes(claim))).toBe(true);
       expect(sent.some((m) => m.chatId === CLIENT_CHAT && m.text.includes(claim))).toBe(true);
+    }, TIMEOUT);
+  });
+
+  // ─────────────── F1, F2, F4, F5: применение статуса провайдера ───────────────
+
+  const webhook = (event: string, providerId: string) =>
+    h.webhook('/webhooks/yookassa', { type: 'notification', event, object: { id: providerId, status: 'succeeded' } }, '185.71.76.1');
+
+  /** Обработка вебхука и отправка квитанции идут после ответа 200 — ждём условие, а не угадываем паузу. */
+  async function waitFor(what: string, cond: () => Promise<boolean> | boolean, ms = 20_000): Promise<void> {
+    const started = Date.now();
+    while (Date.now() - started < ms) {
+      if (await cond()) return;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    throw new Error(`не дождались: ${what}`);
+  }
+
+  const webhookDone = async () => (await h.query<{ n: number }>('SELECT count(*)::int AS n FROM webhook_log WHERE result IS NULL'))[0].n === 0;
+
+  const events = (id: string, type: string) =>
+    h.query<{ payload: Record<string, unknown> }>(
+      `SELECT e.payload FROM deal_events e JOIN deals d ON d.id = e.deal_id WHERE d.public_id = $1 AND e.type = $2 ORDER BY e.seq`,
+      [id, type],
+    );
+
+  const sentTo = (chatId: number, from = 0) => h.max.sent.slice(from).filter((m) => m.kind === 'send' && m.chatId === chatId);
+
+  /** Квитанция PDF (вложение file) ушла обеим сторонам. */
+  const receiptSentToBoth = (from: number) =>
+    [SELLER_CHAT, CLIENT_CHAT].every((chat) => sentTo(chat, from).some((m) => m.attachmentTypes.includes('file')));
+
+  /** Два часа спустя — ссылка (1 ч) по нашим часам истекла. */
+  const later = () => new Date(Date.now() + 2 * 3_600_000);
+
+  /** Предоплата переводом, «Выполнено», «Принимаю» — сделка ждёт остаток. */
+  async function awaitingFinal(o: DealOpts = {}) {
+    const d = await claimedTransfer(o);
+    await h.press(SELLER, SELLER_CHAT, `tr:g:${d.id}:${d.pid}`, d.sellerCard);
+    await h.press(SELLER, SELLER_CHAT, `dn:${d.id}`, d.sellerCard);
+    await h.press(CLIENT, CLIENT_CHAT, `ac:${d.id}`, d.clientCard);
+    expect(await dealStatus(h, d.id)).toBe('awaiting_payment');
+    return d;
+  }
+
+  describe('F1: оплата после локального expired / canceled', () => {
+    it('ссылка истекла по нашим часам, клиент заплатил позже → оплата учтена, T9, N8 обеим', async () => {
+      const { id } = await confirmedDeal();
+      const { paymentId, providerId } = await issueLink(id);
+      await pollLinkPayments(h.gateway, later());
+      expect((await payments(id))[0].status).toBe('expired');
+
+      const mark = h.max.sent.length;
+      yk.succeed(providerId);
+      await webhook('payment.succeeded', providerId);
+      await waitFor('вебхук обработан', webhookDone);
+
+      expect((await payments(id))[0]).toMatchObject({ id: paymentId, status: 'succeeded' });
+      expect(await dealStatus(h, id)).toBe('scheduled');
+      expect((await events(id, 'payment.succeeded_late'))[0].payload).toMatchObject({ payment_id: paymentId, was: 'expired' });
+      await waitFor('N8 обеим', () => [SELLER_CHAT, CLIENT_CHAT].every((c) => sentTo(c, mark).some((m) => m.text.includes('получена'))));
+    }, TIMEOUT);
+
+    it('после истёкшей уже выдана новая ссылка: старая оплачена → новая вытесняется, сделка сдвигается', async () => {
+      const { id, clientCard } = await confirmedDeal();
+      const first = await issueLink(id);
+      await pollLinkPayments(h.gateway, later());
+      await h.press(CLIENT, CLIENT_CHAT, `nl:${id}`, clientCard);
+      const secondId = await livePaymentId(h, id, 'prepayment');
+      expect(secondId).not.toBe(first.paymentId);
+
+      yk.succeed(first.providerId);
+      await webhook('payment.succeeded', first.providerId);
+      await waitFor('вебхук обработан', webhookDone);
+
+      const rows = await payments(id);
+      expect(rows.find((p) => p.id === first.paymentId)?.status).toBe('succeeded');
+      expect(rows.find((p) => p.id === secondId)).toMatchObject({ status: 'canceled', cancellation_reason: 'superseded_by_late_success' });
+      expect((await events(id, 'payment.canceled')).some((e) => e.payload.reason === 'superseded_by_late_success')).toBe(true);
+      expect(await dealStatus(h, id)).toBe('scheduled');
+    }, TIMEOUT);
+
+    it('сделка отменена, а оплата по живой ссылке пришла → сделка не двигается, возврат ожидается, «верните» обеим', async () => {
+      const { id, sellerCard } = await confirmedDeal();
+      const { paymentId, providerId } = await issueLink(id);
+      await h.press(SELLER, SELLER_CHAT, `cn:y:${id}:none`, sellerCard);
+      expect((await payments(id))[0].status).toBe('canceled');
+
+      const mark = h.max.sent.length;
+      yk.succeed(providerId);
+      await webhook('payment.succeeded', providerId);
+      await waitFor('вебхук обработан', webhookDone);
+
+      expect(await dealStatus(h, id)).toBe('cancelled');
+      const deal = await h.query<{ cancel_refund_expected: boolean }>('SELECT cancel_refund_expected FROM deals WHERE public_id = $1', [id]);
+      expect(deal[0].cancel_refund_expected).toBe(true);
+      expect((await payments(id))[0]).toMatchObject({ id: paymentId, status: 'succeeded' });
+      expect((await events(id, 'payment.succeeded_late'))[0].payload).toMatchObject({ refund_required: true, reason: 'deal_cancelled' });
+
+      const refund = texts.LATE_PAYMENT_REFUND({ id, sumKopecks: 50_000, dealCancelled: true });
+      expect(refund).toContain('по отменённой сделке');
+      await waitFor('«верните» обеим', () => [SELLER_CHAT, CLIENT_CHAT].every((c) => sentTo(c, mark).some((m) => m.text === refund)));
+      expect(h.max.byMid(sellerCard)!.text).toContain('ожидается возврат');
+
+      // Повторное применение (опрос, «Проверить оплату») второго «верните деньги» не шлёт.
+      const again = h.max.sent.length;
+      await rails.refreshFromProvider(paymentId);
+      expect(await events(id, 'payment.succeeded_late')).toHaveLength(1);
+      expect(h.max.sent.slice(again).some((m) => m.text === refund)).toBe(false);
+    }, TIMEOUT);
+
+    it('этап уже оплачен переводом, а старая ссылка тоже оплачена → двойная оплата: сделка стоит, «верните» обеим', async () => {
+      const { id, sellerCard, clientCard } = await confirmedDeal();
+      const link = await issueLink(id);
+      await h.press(CLIENT, CLIENT_CHAT, `pt:${id}`, clientCard); // передумал: ссылка canceled (rail_switch)
+      const transfer = await livePaymentId(h, id, 'prepayment');
+      await h.press(CLIENT, CLIENT_CHAT, `tr:c:${id}:${transfer}`, clientCard);
+      await h.press(SELLER, SELLER_CHAT, `tr:g:${id}:${transfer}`, sellerCard);
+      expect(await dealStatus(h, id)).toBe('scheduled');
+
+      const mark = h.max.sent.length;
+      yk.succeed(link.providerId);
+      await webhook('payment.succeeded', link.providerId);
+      await waitFor('вебхук обработан', webhookDone);
+
+      expect(await dealStatus(h, id)).toBe('scheduled');
+      // «Один живой платёж на (сделку, вид)»: второй succeeded того же вида невозможен — факт в provider_status и событии.
+      expect((await payments(id)).find((p) => p.id === link.paymentId)).toMatchObject({ status: 'canceled', provider_status: 'succeeded' });
+      expect((await events(id, 'payment.succeeded_late'))[0].payload).toMatchObject({ refund_required: true, reason: 'already_paid' });
+      const refund = texts.LATE_PAYMENT_REFUND({ id, sumKopecks: 50_000, dealCancelled: false });
+      expect(refund).toContain('по уже оплаченному этапу');
+      await waitFor('«верните» обеим', () => [SELLER_CHAT, CLIENT_CHAT].every((c) => sentTo(c, mark).some((m) => m.text === refund)));
+    }, TIMEOUT);
+  });
+
+  describe('F2: опрос перед истечением спрашивает провайдера', () => {
+    it('клиент заплатил, вебхук не дошёл, срок ссылки вышел → не expired, а succeeded и T9', async () => {
+      const { id } = await confirmedDeal();
+      const { paymentId, providerId } = await issueLink(id);
+      yk.succeed(providerId);
+
+      await pollLinkPayments(h.gateway, later());
+
+      expect(yk.getCalls).toContain(providerId);
+      expect((await payments(id))[0]).toMatchObject({ id: paymentId, status: 'succeeded' });
+      expect(await dealStatus(h, id)).toBe('scheduled');
+      expect((await events(id, 'payment.canceled')).some((e) => e.payload.reason === 'link_expired')).toBe(false);
+    }, TIMEOUT);
+
+    it('провайдер недоступен в момент истечения → ссылка не объявляется истёкшей вслепую', async () => {
+      const { id } = await confirmedDeal();
+      const { providerId } = await issueLink(id);
+      const realGet = yk.api.getPayment;
+      yk.api.getPayment = async () => {
+        throw new IntegrationError('yookassa', 'getPayment', null, null, 'таймаут');
+      };
+      try {
+        await pollLinkPayments(h.gateway, later());
+      } finally {
+        yk.api.getPayment = realGet;
+      }
+      expect((await payments(id))[0].status).toBe('pending');
+
+      // Провайдер ожил и говорит pending — теперь истечение честное.
+      await pollLinkPayments(h.gateway, later());
+      expect((await payments(id))[0].status).toBe('expired');
+      expect(yk.getCalls).toContain(providerId);
+    }, TIMEOUT);
+  });
+
+  describe('F4: succeeded без перехода сделки чинится следующим применением', () => {
+    /** Процесс «упал» между транзакциями: платёж succeeded, сделка всё ещё ждёт предоплату. */
+    async function crashAfterPaymentTx(paymentId: number, minutesAgo = 0): Promise<void> {
+      await h.query(`UPDATE payments SET status = 'succeeded', succeeded_at = now() - make_interval(mins => $2) WHERE id = $1`, [
+        paymentId,
+        minutesAgo,
+      ]);
+    }
+
+    it('«Проверить оплату» по уже succeeded платежу доводит сделку', async () => {
+      const { id, clientCard } = await confirmedDeal();
+      const { paymentId, providerId } = await issueLink(id);
+      yk.succeed(providerId);
+      await crashAfterPaymentTx(paymentId);
+      expect(await dealStatus(h, id)).toBe('awaiting_prepayment');
+
+      await h.press(CLIENT, CLIENT_CHAT, `pc:${id}:${paymentId}`, clientCard);
+      expect(await dealStatus(h, id)).toBe('scheduled');
+      expect(await events(id, 'payment.succeeded')).toHaveLength(1);
+
+      // Ещё раз — «уже сделано», второго перехода и события нет.
+      await h.press(CLIENT, CLIENT_CHAT, `pc:${id}:${paymentId}`, clientCard);
+      expect(h.max.byMid(clientCard)!.text.startsWith(texts.ALREADY_DONE)).toBe(true);
+      expect(await events(id, 'payment.succeeded')).toHaveLength(1);
+    }, TIMEOUT);
+
+    it('повтор вебхука после падения доводит сделку', async () => {
+      const { id } = await confirmedDeal();
+      const { paymentId, providerId } = await issueLink(id);
+      yk.succeed(providerId);
+      await crashAfterPaymentTx(paymentId);
+
+      await webhook('payment.succeeded', providerId);
+      await waitFor('вебхук обработан', webhookDone);
+      expect(await dealStatus(h, id)).toBe('scheduled');
+      expect((await h.query<{ result: string }>('SELECT result FROM webhook_log'))[0].result).toBe('ok');
+    }, TIMEOUT);
+
+    it('опрос планировщика доводит сделку по зависшему succeeded — и по переводу тоже, N8 обеим', async () => {
+      const { id, clientCard } = await confirmedDeal();
+      await h.press(CLIENT, CLIENT_CHAT, `pt:${id}`, clientCard);
+      const pid = await livePaymentId(h, id, 'prepayment');
+      await crashAfterPaymentTx(pid, 5);
+
+      const mark = h.max.sent.length;
+      await pollLinkPayments(h.gateway, new Date());
+      expect(await dealStatus(h, id)).toBe('scheduled');
+      expect([SELLER_CHAT, CLIENT_CHAT].every((c) => sentTo(c, mark).some((m) => m.text.includes('получена')))).toBe(true);
+
+      // Только что подтверждённые не трогаем: их переход доводит тот, кто подтвердил.
+      const fresh = await confirmedDeal();
+      await h.press(CLIENT, CLIENT_CHAT, `pt:${fresh.id}`, fresh.clientCard);
+      const freshPid = await livePaymentId(h, fresh.id, 'prepayment');
+      await crashAfterPaymentTx(freshPid, 0);
+      await pollLinkPayments(h.gateway, new Date());
+      expect(await dealStatus(h, fresh.id)).toBe('awaiting_prepayment');
+    }, TIMEOUT);
+
+    it('«Получил(а)» по уже succeeded переводу доводит сделку, а не отвечает «уже сделано»', async () => {
+      const { id, sellerCard, pid } = await claimedTransfer();
+      await crashAfterPaymentTx(pid);
+      expect(await dealStatus(h, id)).toBe('awaiting_prepayment');
+
+      await h.press(SELLER, SELLER_CHAT, `tr:g:${id}:${pid}`, sellerCard);
+      expect(await dealStatus(h, id)).toBe('scheduled');
+      expect(labels(sellerCard)).toContain(texts.BTN.done);
+    }, TIMEOUT);
+  });
+
+  describe('F5: tax_mode=none закрывается сам на любом пути подтверждения', () => {
+    it('вебхук ЮKassa на остаток → closed, квитанция PDF обеим', async () => {
+      const { id, clientCard } = await awaitingFinal({ taxMode: 'none' });
+      await h.press(CLIENT, CLIENT_CHAT, `pl:${id}`, clientCard);
+      const finalId = await livePaymentId(h, id, 'final');
+      const providerId = (await h.query<{ provider_payment_id: string }>('SELECT provider_payment_id FROM payments WHERE id = $1', [finalId]))[0]
+        .provider_payment_id;
+
+      const mark = h.max.sent.length;
+      yk.succeed(providerId);
+      await webhook('payment.succeeded', providerId);
+      await waitFor('вебхук обработан', webhookDone);
+
+      expect(await dealStatus(h, id)).toBe('closed');
+      await waitFor('квитанция обеим', () => receiptSentToBoth(mark));
+      expect(await events(id, 'deal.closed')).toHaveLength(1);
+    }, TIMEOUT);
+
+    it('опрос планировщика на остаток → closed, квитанция обеим', async () => {
+      const { id, clientCard } = await awaitingFinal({ taxMode: 'none' });
+      await h.press(CLIENT, CLIENT_CHAT, `pl:${id}`, clientCard);
+      yk.succeed(yk.lastId());
+
+      const mark = h.max.sent.length;
+      await pollLinkPayments(h.gateway, new Date(Date.now() + 2 * 60_000));
+
+      expect(await dealStatus(h, id)).toBe('closed');
+      expect(receiptSentToBoth(mark)).toBe(true);
+    }, TIMEOUT);
+
+    it('«Получил(а)» по переводу остатка → closed, квитанция обеим', async () => {
+      const { id, sellerCard, clientCard } = await awaitingFinal({ taxMode: 'none' });
+      await h.press(CLIENT, CLIENT_CHAT, `pt:${id}`, clientCard);
+      const finalId = await livePaymentId(h, id, 'final');
+      await h.press(CLIENT, CLIENT_CHAT, `tr:c:${id}:${finalId}`, clientCard);
+
+      const mark = h.max.sent.length;
+      await h.press(SELLER, SELLER_CHAT, `tr:g:${id}:${finalId}`, sellerCard);
+
+      expect(await dealStatus(h, id)).toBe('closed');
+      expect(receiptSentToBoth(mark)).toBe(true);
+      expect(labels(sellerCard)).toEqual([texts.BTN.receiptPdf]);
+    }, TIMEOUT);
+
+    it('«Принимаю» при нулевом остатке → closed, квитанция обеим', async () => {
+      const d = await claimedTransfer({ taxMode: 'none', totalRub: 1000, prepaymentRub: 1000 });
+      await h.press(SELLER, SELLER_CHAT, `tr:g:${d.id}:${d.pid}`, d.sellerCard);
+      await h.press(SELLER, SELLER_CHAT, `dn:${d.id}`, d.sellerCard);
+
+      const mark = h.max.sent.length;
+      await h.press(CLIENT, CLIENT_CHAT, `ac:${d.id}`, d.clientCard);
+
+      expect(await dealStatus(h, d.id)).toBe('closed');
+      expect(receiptSentToBoth(mark)).toBe(true);
     }, TIMEOUT);
   });
 });

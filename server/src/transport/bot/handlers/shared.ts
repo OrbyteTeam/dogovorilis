@@ -13,9 +13,9 @@ import type { CardMessage, CardRole, DealBundle, User } from '../../../types.js'
 import * as dealService from '../../../domain/deal/service.js';
 import type { Actor, ServiceResult } from '../../../domain/deal/service.js';
 import { parseCallback } from '../callbacks.js';
-import { renderCard, sendCard, syncCards } from '../cards.js';
+import { renderCard, sendCard } from '../cards.js';
 import { menuKeyboard } from '../keyboards.js';
-import { notifyForEvents } from '../notify.js';
+import { publishOutcome } from '../outcome.js';
 
 export type Deps = { max: MaxGateway };
 
@@ -131,7 +131,8 @@ export async function reply(
 
 /**
  * Довести результат перехода до обеих сторон: обновить нажатую карточку ответом, остальные — правкой,
- * затем отправить уведомления. Порядок важен: пользователь сначала видит реакцию на своё нажатие.
+ * затем уведомления и, если сделка закрылась, квитанция PDF (outcome.publishOutcome).
+ * Порядок важен: пользователь сначала видит реакцию на своё нажатие.
  */
 export async function publishResult(
   ctx: Context,
@@ -145,8 +146,7 @@ export async function publishResult(
     note: result.alreadyDone ? texts.ALREADY_DONE : note,
     text: result.alreadyDone ? texts.ALREADY_DONE : (note ?? shortAck(result)),
   });
-  await syncCards(deps.max, result.bundle, skip);
-  if (!result.alreadyDone) await notifyForEvents(deps.max, result.bundle, result.events);
+  await publishOutcome(deps.max, result, skip);
 }
 
 function shortAck(result: ServiceResult): string {
