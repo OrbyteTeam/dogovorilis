@@ -15,13 +15,25 @@ const DEMO_PROFILE: SellerProfile = {
   transfer_enabled: true,
   link_enabled: false,
   default_cancel_rule: 'free_24h',
+  digest_time: 480,
 };
 
-const ME: MeResponse = {
-  user: { id: 1001, first_name: 'Анна', last_name: 'Аксёнова', username: 'anna', phone_verified: false },
-  profile: HAS_PROFILE ? DEMO_PROFILE : null,
-  config: { provider: 'none', demo: true, bot_username: BOT },
-};
+/** Профиль живёт в памяти вкладки: «Сохранить» в настройках и первая сделка меняют его, как на сервере. */
+let profile: SellerProfile | null = HAS_PROFILE ? DEMO_PROFILE : null;
+
+function me(): MeResponse {
+  return {
+    user: { id: 1001, first_name: 'Анна', last_name: 'Аксёнова', username: 'anna', phone_verified: false },
+    profile,
+    config: { provider: 'none', demo: true, bot_username: BOT },
+  };
+}
+
+/** Как на сервере: поле, которого нет в теле, — значение по умолчанию (08:00). */
+function saveProfile(body: SellerProfile): SellerProfile {
+  profile = { ...body, digest_time: body.digest_time === undefined ? 480 : body.digest_time };
+  return profile;
+}
 
 const TEMPLATES: TemplatesResponse = {
   items: [
@@ -128,9 +140,13 @@ function createDeal(body: CreateDealRequest): CreateDealResponse {
 
 export async function mockRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
   await delay(300);
-  if (method === 'GET' && path === '/me') return ME as unknown as T;
+  if (method === 'GET' && path === '/me') return me() as unknown as T;
   if (method === 'GET' && path === '/templates') return TEMPLATES as unknown as T;
-  if (method === 'PUT' && path === '/me/profile') return { profile: body as SellerProfile } as unknown as T;
-  if (method === 'POST' && path === '/deals') return createDeal(body as CreateDealRequest) as unknown as T;
+  if (method === 'PUT' && path === '/me/profile') return { profile: saveProfile(body as SellerProfile) } as unknown as T;
+  if (method === 'POST' && path === '/deals') {
+    const request = body as CreateDealRequest;
+    if (request.profile && !profile) saveProfile(request.profile);
+    return createDeal(request) as unknown as T;
+  }
   throw new Error(`mock: нет заглушки для ${method} ${path}`);
 }

@@ -30,6 +30,11 @@ export interface SellerProfile {
   transfer_enabled: boolean;
   link_enabled: boolean;
   default_cancel_rule: CancelRule;
+  /**
+   * Время утренней сводки — минуты от полуночи по МСК (360…720, шаг 30); null — сводка выключена.
+   * undefined — сервер старше этого поля: экран показывает значение по умолчанию (08:00).
+   */
+  digest_time?: number | null;
 }
 
 export interface MeUser {

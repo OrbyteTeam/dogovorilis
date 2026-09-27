@@ -123,3 +123,12 @@ export function renderCardPreview(deal: DealView): string {
   if (deal.demo) lines.push('🧪 ДЕМО-сделка — тестовые данные');
   return lines.join('\n');
 }
+
+/** Утренняя сводка: 06:00…12:00 МСК с шагом 30 минут, по умолчанию 08:00 (ЗАДАЧА_04 B2). Значение — минуты от полуночи. */
+export const DIGEST_DEFAULT_MINUTES = 8 * 60;
+export const DIGEST_TIMES: number[] = Array.from({ length: 13 }, (_, i) => 6 * 60 + i * 30);
+
+export function formatMinutes(minutes: number): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
+}
