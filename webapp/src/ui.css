@@ -336,3 +336,179 @@
   color: var(--text-themed);
   overflow-wrap: anywhere;
 }
+
+/* ───────────── «Мои сделки»: вкладки, лента дней, строки (ЗАДАЧА_04 C) ───────────── */
+
+/* Чипы вида «Расписание / Список»: ряд не прокручивается, нижний отступ как у остальных блоков */
+.dg-chips_tight {
+  padding-bottom: var(--spacing-size2xs);
+}
+
+/* Лента дней: прокручивается только она, от края до края экрана (поля экрана компенсируем отрицательным отступом) */
+.dg-days {
+  position: relative;
+  display: flex;
+  gap: var(--spacing-size-s);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  margin: 0 calc(-1 * var(--spacing-size2xl));
+  padding: var(--spacing-size2xs) var(--spacing-size2xl);
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.dg-days::-webkit-scrollbar {
+  display: none;
+}
+
+.dg-day {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: 48px;
+  min-height: 76px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-size2xs);
+  padding: var(--spacing-size-m) 0;
+  border: 2px solid transparent;
+  border-radius: var(--size-border-radius-action-medium);
+  background-color: var(--background-card);
+  color: var(--text-primary);
+  font-family: var(--family-base);
+  cursor: pointer;
+  scroll-snap-align: center;
+  transition: background-color 0.15s ease;
+}
+
+.dg-day__weekday {
+  font-size: var(--font-size-label);
+  line-height: var(--line-height-label);
+  color: var(--text-tertiary);
+}
+
+.dg-day__weekday_weekend {
+  color: var(--text-negative);
+}
+
+.dg-day__num {
+  font-size: var(--font-size-title);
+  line-height: var(--line-height-title);
+  font-weight: var(--font-weight-title);
+  font-variant-numeric: tabular-nums;
+}
+
+.dg-day__count {
+  box-sizing: border-box;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 var(--spacing-size-xs);
+  border-radius: 9px;
+  background-color: var(--background-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--font-size-tag);
+  font-weight: var(--font-weight-tag-strong);
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.dg-day__count_empty {
+  visibility: hidden;
+}
+
+/* Сегодня — рамка акцентом; выбранный день — залит акцентом (цвет — не единственный признак: есть aria-pressed и заголовок дня) */
+.dg-day_today {
+  border-color: var(--button-primary);
+}
+
+.dg-day_today .dg-day__num {
+  color: var(--text-themed);
+}
+
+.dg-day_active {
+  background-color: var(--button-primary);
+  border-color: var(--button-primary);
+  color: var(--text-primary-inverse-static);
+}
+
+.dg-day_active .dg-day__weekday,
+.dg-day_active .dg-day__num {
+  color: inherit;
+}
+
+.dg-day_active .dg-day__count {
+  background-color: var(--text-primary-inverse-static);
+  color: var(--button-primary);
+}
+
+/* Блок с заголовком (день расписания, «Без даты») */
+.dg-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-size-m);
+}
+
+.dg-section__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-size2xs);
+  padding: 0 var(--spacing-size-xs);
+}
+
+/* Карточка «текст + кнопка» в одну строку, на узком экране — переносится */
+.dg-card_row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Строки сделок: остров с разделителями, в строке — CellSimple и ряд действий */
+.dg-deals {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--size-border-radius-semantic-border-radius-card);
+  background-color: var(--background-card);
+  overflow: hidden;
+}
+
+.dg-deal + .dg-deal {
+  border-top: 1px solid var(--divider-secondary);
+}
+
+.dg-deal__time {
+  min-width: 44px;
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  font-weight: var(--font-weight-body-strong);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.dg-deal__sum {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.dg-deal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-size-m);
+  padding: 0 var(--spacing-size-xl) var(--spacing-size-xl);
+}
+
+/* Бейдж «демо» в названии */
+.dg-tag {
+  display: inline-block;
+  padding: 0 var(--spacing-size-s);
+  border-radius: var(--size-border-radius-action-small);
+  background-color: var(--background-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--font-size-tag);
+  line-height: var(--line-height-tag);
+  font-weight: var(--font-weight-tag-strong);
+  vertical-align: middle;
+}
