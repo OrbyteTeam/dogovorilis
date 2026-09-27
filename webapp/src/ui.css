@@ -217,6 +217,47 @@
   color: var(--states-text-primary-disabled);
 }
 
+/* Нативный select под вид Input (время утренней сводки): стрелка — из токенов, не картинкой */
+.dg-select {
+  position: relative;
+}
+
+.dg-select::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: var(--spacing-size2xl);
+  width: 8px;
+  height: 8px;
+  margin-top: -6px;
+  border-right: 2px solid var(--icon-tertiary, var(--text-tertiary));
+  border-bottom: 2px solid var(--icon-tertiary, var(--text-tertiary));
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+
+.dg-select__control {
+  box-sizing: border-box;
+  width: 100%;
+  height: 52px;
+  padding: 0 calc(var(--spacing-size2xl) * 2 + 8px) 0 var(--spacing-size-xl);
+  border: none;
+  border-radius: var(--size-border-radius-action-large);
+  background-color: var(--background-tertiary);
+  color: var(--text-primary);
+  font-family: var(--family-base);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+
+.dg-select__control option {
+  background-color: var(--background-primary);
+  color: var(--text-primary);
+}
+
 /* Предупреждение (например, пустые реквизиты) */
 .dg-warning {
   display: flex;

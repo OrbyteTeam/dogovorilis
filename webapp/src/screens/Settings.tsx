@@ -7,13 +7,30 @@ import { api, errorText } from '../api';
 import { ControlRow } from '../components/ControlRow';
 import { Field } from '../components/Field';
 import { useToast } from '../components/Toast';
-import { CANCEL_RULE_LABEL, CANCEL_RULES, TAX_MODE_LABEL, TAX_MODES } from '../format';
+import {
+  CANCEL_RULE_LABEL,
+  CANCEL_RULES,
+  DIGEST_DEFAULT_MINUTES,
+  DIGEST_TIMES,
+  formatMinutes,
+  TAX_MODE_LABEL,
+  TAX_MODES,
+} from '../format';
 import { haptic } from '../bridge';
 import type { CancelRule, MeResponse, SellerProfile, TaxMode } from '../types';
 
 const NAME_MIN = 2;
 const NAME_MAX = 40;
 const PAYOUT_MAX = 200;
+/** Значение пункта «Выключено» в выпадающем списке сводки. */
+const DIGEST_OFF = 'off';
+
+/** undefined — профиля нет или сервер ещё не отдаёт поле; значение вне сетки — тоже по умолчанию (08:00). */
+function initialDigestTime(profile: SellerProfile | null): number | null {
+  const value = profile?.digest_time;
+  if (value === null) return null;
+  return value !== undefined && DIGEST_TIMES.includes(value) ? value : DIGEST_DEFAULT_MINUTES;
+}
 
 export interface SettingsScreenProps {
   me: MeResponse;
@@ -32,6 +49,7 @@ export function SettingsScreen({ me, onSaved }: SettingsScreenProps) {
   const [cancelRule, setCancelRule] = useState<CancelRule>(profile?.default_cancel_rule ?? 'free_24h');
   const [transferEnabled, setTransferEnabled] = useState(profile?.transfer_enabled ?? true);
   const [linkEnabled, setLinkEnabled] = useState(providerOff ? false : (profile?.link_enabled ?? true));
+  const [digestTime, setDigestTime] = useState<number | null>(() => initialDigestTime(profile));
   const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -68,6 +86,7 @@ export function SettingsScreen({ me, onSaved }: SettingsScreenProps) {
       transfer_enabled: transferOn,
       link_enabled: providerOff ? false : linkEnabled,
       default_cancel_rule: cancelRule,
+      digest_time: digestTime,
     };
 
     setSaving(true);
@@ -191,6 +210,36 @@ export function SettingsScreen({ me, onSaved }: SettingsScreenProps) {
           <Typography.Text variant="description" color="tertiary">
             Подставляется в новую сделку; в самой сделке правило всё равно можно поменять.
           </Typography.Text>
+        </section>
+
+        <section className="dg-card" aria-labelledby="settings-digest">
+          <Typography.Text variant="title" asChild>
+            <h2 id="settings-digest">Утренняя сводка</h2>
+          </Typography.Text>
+          <Field
+            label="Когда присылать"
+            htmlFor="settings-digest-time"
+            hint="Каждое утро — список записей на сегодня, если они есть. Время — МСК"
+          >
+            <div className="dg-select">
+              <select
+                id="settings-digest-time"
+                className="dg-select__control"
+                value={digestTime === null ? DIGEST_OFF : String(digestTime)}
+                onChange={(event) => {
+                  const value = event.currentTarget.value;
+                  setDigestTime(value === DIGEST_OFF ? null : Number(value));
+                }}
+              >
+                <option value={DIGEST_OFF}>Выключено</option>
+                {DIGEST_TIMES.map((minutes) => (
+                  <option key={minutes} value={String(minutes)}>
+                    {`${formatMinutes(minutes)} (МСК)`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </Field>
         </section>
 
         <div className="dg-actions">
