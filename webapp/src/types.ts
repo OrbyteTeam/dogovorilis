@@ -118,6 +118,10 @@ export interface CreateDealRequest {
   photo_max_token?: string | null;
   /** Передаётся только если профиля исполнителя ещё нет (SPEC §7.2, первый блок). */
   profile?: SellerProfile;
+  /** «Повторить сделку»: public_id прежней сделки (ЗАДАЧА_04 F). */
+  repeat_of?: string;
+  /** Отправить новую карточку тому же клиенту сразу, без ссылки (только вместе с repeat_of). */
+  same_client?: boolean;
 }
 
 /** Строка списка «Мои сделки» — SPEC §7.4, §7.8 (`GET /api/deals`). */
@@ -150,7 +154,14 @@ export interface CreateDealResponse {
   deal: DealView;
   link: string;
   share_text: string;
+  /** Карточка дошла до исполнителя (есть диалог с ботом). */
   card_sent: boolean;
+  /** Повтор с тем же клиентом: карточка уже у клиента — ссылка не нужна. Нет у сервера старше ЗАДАЧА_04 F. */
+  client_card_sent?: boolean;
+  /** Клиент новой сделки (при повторе с тем же клиентом). */
+  client?: { name: string } | null;
+  /** Тот же клиент запрошен, но у него нет диалога с ботом — сделка обычная, со ссылкой. */
+  client_no_dialog?: boolean;
 }
 
 /**

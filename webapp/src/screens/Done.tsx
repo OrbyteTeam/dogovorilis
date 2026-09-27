@@ -1,6 +1,7 @@
 // Экран «Готово» — docs/SPEC.md §7.3 (превью, ссылка, кнопки, шаг «нажмите Начать»), вид — docs/DESIGN.md §4.
 // Каждое утверждение на экране опирается на ответ сервера (ЗАДАЧА_04 D1): «карточка уже в чате» — только при card_sent,
-// а если экран открыт без результата создания (перезагрузка, прямая ссылка) — ничего о доставке не утверждаем.
+// «карточка ушла клиенту» — только при client_card_sent (повтор с тем же клиентом, ЗАДАЧА_04 F), а если экран открыт
+// без результата создания (перезагрузка, прямая ссылка) — ничего о доставке не утверждаем.
 import { Button, CellSimple, IconButton, Panel, Typography } from '@maxhub/max-ui';
 
 import { botLink, copyToClipboard, haptic, openBot, shareDeal } from '../bridge';
@@ -34,6 +35,11 @@ export function DoneScreen({ publicId, me, result, onNewDeal, onDeals }: DoneScr
   const shareText = result?.share_text ?? 'Подтвердите нашу договорённость';
   /** Карточка не дошла до исполнителя: он ещё не нажимал «Начать» в чате с ботом (SPEC §7.3). */
   const needStartBot = result !== null && !result.card_sent;
+  /** Повтор с тем же клиентом: карточка уже у клиента — ни ссылка, ни «Отправить клиенту» не нужны. */
+  const sentToClient = result?.client_card_sent === true;
+  /** Тот же клиент запрошен, но у него нет диалога с ботом — сделка обычная, ссылку отправляет исполнитель. */
+  const clientNoDialog = result?.client_no_dialog === true;
+  const clientName = result?.client?.name ?? null;
 
   async function onCopy() {
     const ok = await copyToClipboard(link);
@@ -60,9 +66,16 @@ export function DoneScreen({ publicId, me, result, onNewDeal, onDeals }: DoneScr
   return (
     <Panel mode="secondary" className="dg-root">
       <div className="dg-screen">
-        <Typography.Text variant="subheader" asChild>
-          <h1>{result ? 'Карточка создана' : `Сделка #${publicId}`}</h1>
-        </Typography.Text>
+        <div className="dg-head">
+          <Typography.Text variant="subheader" asChild>
+            <h1>{sentToClient ? 'Карточка ушла клиенту' : result ? 'Карточка создана' : `Сделка #${publicId}`}</h1>
+          </Typography.Text>
+          {sentToClient ? (
+            <Typography.Text variant="body" color="secondary">
+              {`${clientName ?? 'Клиент'} увидит её в чате с ботом. Ждём подтверждения`}
+            </Typography.Text>
+          ) : null}
+        </div>
 
         {result ? (
           <section className="dg-card">
@@ -79,16 +92,25 @@ export function DoneScreen({ publicId, me, result, onNewDeal, onDeals }: DoneScr
           </section>
         )}
 
-        <CellSimple
-          surface="island"
-          overline={`Ссылка для клиента · #${publicId}`}
-          title={link}
-          after={
-            <IconButton variant="secondary" size="small" aria-label="Скопировать ссылку" onClick={() => void onCopy()}>
-              <CopyIcon />
-            </IconButton>
-          }
-        />
+        {clientNoDialog ? (
+          <p className="dg-warning">
+            <span aria-hidden="true">⚠️</span>
+            <span>{`${clientName ?? 'Клиент'} ещё не начинал(а) диалог с ботом — отправьте ссылку`}</span>
+          </p>
+        ) : null}
+
+        {sentToClient ? null : (
+          <CellSimple
+            surface="island"
+            overline={`Ссылка для клиента · #${publicId}`}
+            title={link}
+            after={
+              <IconButton variant="secondary" size="small" aria-label="Скопировать ссылку" onClick={() => void onCopy()}>
+                <CopyIcon />
+              </IconButton>
+            }
+          />
+        )}
 
         {needStartBot ? (
           <section className="dg-card dg-card_flat">
@@ -105,12 +127,14 @@ export function DoneScreen({ publicId, me, result, onNewDeal, onDeals }: DoneScr
         ) : null}
 
         <div className="dg-actions">
-          <Button variant="primary" size="large" stretched onClick={() => void onShare()}>
-            Отправить клиенту
-          </Button>
+          {sentToClient ? null : (
+            <Button variant="primary" size="large" stretched onClick={() => void onShare()}>
+              Отправить клиенту
+            </Button>
+          )}
           {/* При needStartBot кнопка чата уже есть в блоке выше — вторую такую же не показываем. */}
           {needStartBot ? null : (
-            <Button variant="secondary" size="large" stretched onClick={() => onOpenBot()}>
+            <Button variant={sentToClient ? 'primary' : 'secondary'} size="large" stretched onClick={() => onOpenBot()}>
               Открыть чат с ботом
             </Button>
           )}
@@ -124,7 +148,9 @@ export function DoneScreen({ publicId, me, result, onNewDeal, onDeals }: DoneScr
 
         {result?.card_sent ? (
           <Typography.Text variant="description" color="tertiary">
-            Карточка уже в вашем чате с ботом — там вы увидите, когда клиент откроет ссылку.
+            {sentToClient
+              ? 'Ваша карточка — в чате с ботом: там вы увидите, когда клиент подтвердит.'
+              : 'Карточка уже в вашем чате с ботом — там вы увидите, когда клиент откроет ссылку.'}
           </Typography.Text>
         ) : null}
       </div>

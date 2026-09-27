@@ -9,12 +9,14 @@ import { ToastProvider, useToast } from './components/Toast';
 import { DealsScreen } from './screens/Deals';
 import { DoneScreen } from './screens/Done';
 import { EditDealScreen } from './screens/EditDeal';
+import { RepeatDealScreen } from './screens/RepeatDeal';
 import { NewScreen } from './screens/New';
 import { SettingsScreen } from './screens/Settings';
 import type { CreateDealRequest, CreateDealResponse, MeResponse, SellerProfile, Template } from './types';
 
 type Route =
-  | { name: 'new' }
+  /** `from` — «Повторить сделку»: форма с условиями прежней сделки (`#/new?from=<id>`). */
+  | { name: 'new'; from?: string }
   | { name: 'done'; id: string }
   | { name: 'deals' }
   | { name: 'edit'; id: string }
@@ -25,6 +27,9 @@ const DEEPLINK_RE = /^d_([A-Za-z0-9]{10})$/;
 /** Правка условий из карточки бота: `edit_<id>` → `#/deals/<id>/edit` (ЗАДАЧА_04 E). */
 const EDIT_PARAM_RE = /^edit_([A-Za-z0-9]{10})$/;
 const EDIT_HASH_RE = /^\/deals\/([A-Za-z0-9]{10})\/edit$/;
+/** «Повторить» из карточки бота: `repeat_<id>` → `#/new?from=<id>` (ЗАДАЧА_04 F). */
+const REPEAT_PARAM_RE = /^repeat_([A-Za-z0-9]{10})$/;
+const REPEAT_HASH_RE = /^\/new\?from=([A-Za-z0-9]{10})$/;
 const DONE_STORAGE_PREFIX = 'dogovorilis:done:';
 
 /** Кэш результата создания на время сессии: sessionStorage в MAX WebView может быть недоступен. */
@@ -59,6 +64,8 @@ function parseHash(hash: string): Route | null {
   if (path === '/new') return { name: 'new' };
   if (path === '/deals') return { name: 'deals' };
   if (path === '/settings') return { name: 'settings' };
+  const repeat = REPEAT_HASH_RE.exec(path);
+  if (repeat) return { name: 'new', from: repeat[1] };
   const edit = EDIT_HASH_RE.exec(path);
   if (edit) return { name: 'edit', id: edit[1] };
   const done = /^\/done\/([A-Za-z0-9]{1,32})$/.exec(path);
@@ -71,12 +78,12 @@ function routeToHash(route: Route): string {
   if (route.name === 'deals') return '#/deals';
   if (route.name === 'settings') return '#/settings';
   if (route.name === 'edit') return `#/deals/${route.id}/edit`;
-  return '#/new';
+  return route.from ? `#/new?from=${route.from}` : '#/new';
 }
 
 /**
  * Старт по `start_param` (SPEC §7.1, §13): `new` → форма, `d_<id>` → экран «Готово» с ссылкой,
- * `deals` → список сделок (§7.4), `settings` → профиль (§7.7), `edit_<id>` → правка условий (§7.5).
+ * `deals` → список сделок (§7.4), `settings` → профиль (§7.7), `edit_<id>` → правка условий, `repeat_<id>` → повтор (§7.5).
  */
 function resolveInitialRoute(): { route: Route; notice: string | null } {
   const fromHash = parseHash(window.location.hash);
@@ -87,6 +94,8 @@ function resolveInitialRoute(): { route: Route; notice: string | null } {
   if (deeplink) return { route: { name: 'done', id: deeplink[1] }, notice: null };
   const edit = EDIT_PARAM_RE.exec(param);
   if (edit) return { route: { name: 'edit', id: edit[1] }, notice: null };
+  const repeat = REPEAT_PARAM_RE.exec(param);
+  if (repeat) return { route: { name: 'new', from: repeat[1] }, notice: null };
   if (param === 'deals') return { route: { name: 'deals' }, notice: null };
   if (param === 'settings') return { route: { name: 'settings' }, notice: null };
   return { route: { name: 'new' }, notice: null };
@@ -131,21 +140,22 @@ function Router() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  // BackButton — на всех экранах, кроме корневого #/new (SPEC §7.1). С правки — назад к «Моим сделкам», откуда пришли.
+  // BackButton — на всех экранах, кроме корневого #/new (SPEC §7.1). С правки и повтора — в «Мои сделки», откуда пришли.
+  const isRoot = route.name === 'new' && !route.from;
+  const backToDeals = route.name === 'edit' || (route.name === 'new' && Boolean(route.from));
   useEffect(() => {
-    if (route.name === 'new') {
+    if (isRoot) {
       backButton.hide();
       return;
     }
-    const target: Route = route.name === 'edit' ? { name: 'deals' } : { name: 'new' };
-    const onBack = () => navigate(target);
+    const onBack = () => navigate(backToDeals ? { name: 'deals' } : { name: 'new' });
     backButton.onClick(onBack);
     backButton.show();
     return () => {
       backButton.offClick(onBack);
       backButton.hide();
     };
-  }, [route.name]);
+  }, [isRoot, backToDeals]);
 
   const load = useCallback(async () => {
     setState({ status: 'loading' });
@@ -178,6 +188,7 @@ function Router() {
         me={state.data.me}
         onNewDeal={() => navigate({ name: 'new' })}
         onEdit={(id) => navigate({ name: 'edit', id })}
+        onRepeat={(id) => navigate({ name: 'new', from: id })}
       />
     );
   }
@@ -190,6 +201,7 @@ function Router() {
         me={state.data.me}
         templates={state.data.templates}
         onDeals={() => navigate({ name: 'deals' })}
+        onRepeat={(id) => navigate({ name: 'new', from: id })}
       />
     );
   }
@@ -235,6 +247,20 @@ function Router() {
       );
     }
     navigate({ name: 'done', id: result.deal.public_id });
+  }
+
+  if (route.from) {
+    return (
+      <RepeatDealScreen
+        key={route.from}
+        publicId={route.from}
+        me={state.data.me}
+        templates={state.data.templates}
+        onSubmit={createDeal}
+        onNewDeal={() => navigate({ name: 'new' })}
+        onDeals={() => navigate({ name: 'deals' })}
+      />
+    );
   }
 
   return <NewScreen me={state.data.me} templates={state.data.templates} onSubmit={createDeal} />;
