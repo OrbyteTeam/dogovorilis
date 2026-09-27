@@ -18,7 +18,8 @@ type Side = 'seller' | 'client';
 
 type Notice = { to: Side; text: string; keyboard?: AttachmentRequest };
 
-function clientName(bundle: DealBundle): string {
+/** Как называть клиента в текстах второй стороне: в демо — «демо-клиент», до входа по ссылке — «клиент». */
+export function clientName(bundle: DealBundle): string {
   if (bundle.deal.demo) return 'демо-клиент';
   return bundle.client ? displayName(bundle.client.firstName, bundle.client.lastName) : 'клиент';
 }

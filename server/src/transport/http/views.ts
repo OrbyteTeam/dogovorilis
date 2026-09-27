@@ -23,6 +23,7 @@ export function profileView(p: SellerProfile | null) {
     transfer_enabled: p.transferEnabled,
     link_enabled: p.linkEnabled,
     default_cancel_rule: p.defaultCancelRule,
+    digest_time: p.digestTime,
   };
 }
 

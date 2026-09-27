@@ -21,6 +21,8 @@ export const DEMO_REMINDER_DELAY_MINUTES = 2;
 /** Напоминание вернуть предоплату по отменённой сделке — через 48 ч без отметки «Вернул(а)» (ЗАДАЧА_03 H1). */
 export const REFUND_REMINDER_HOURS = 48;
 const DEMO_ACCELERATED: readonly ReminderKind[] = ['acceptance_due', 'receipt_due'];
+/** «⏰ Через 30 минут» — обеим сторонам перед сроком (ЗАДАЧА_04 B1). */
+export const EVENT_SOON_MINUTES = 30;
 
 export function isDemoAccelerated(kind: ReminderKind): boolean {
   return DEMO_ACCELERATED.includes(kind);
@@ -63,6 +65,15 @@ export function planReminders(input: {
     out.push({ kind, recipientRole: role, dueAt, dedupeKey: dedupeKey(deal.id, kind, role, base) });
   };
 
+  // За 30 минут до срока — обеим сторонам, и в scheduled, и пока ждём предоплату: исполнителю важно знать,
+  // что клиент придёт без неё (ЗАДАЧА_04 B1). Срок в прошлом add() не планирует.
+  const eventSoon = () => {
+    if (!version.scheduledAt) return;
+    const at = addMinutes(version.scheduledAt, -EVENT_SOON_MINUTES);
+    add('event_soon', 'seller', at);
+    add('event_soon', 'client', at);
+  };
+
   switch (deal.status) {
     case 'awaiting_confirmation': {
       if (!deal.clientUserId) add('client_not_opened', 'seller', addHours(base, 24));
@@ -91,6 +102,7 @@ export function planReminders(input: {
     case 'awaiting_prepayment':
       add('prepayment_due', 'client', addHours(base, 24));
       add('prepayment_overdue', 'seller', addHours(base, 48));
+      eventSoon();
       break;
 
     case 'scheduled':
@@ -99,6 +111,7 @@ export function planReminders(input: {
         add('event_tomorrow', 'client', new Date(version.scheduledAt.getTime() - DAY_MS));
         add('event_passed', 'seller', new Date(version.scheduledAt.getTime() + 2 * HOUR_MS));
       }
+      eventSoon();
       break;
 
     case 'awaiting_acceptance':

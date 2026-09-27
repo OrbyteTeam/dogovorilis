@@ -769,9 +769,12 @@ export const RECEIPT_PREPARING = '📄 Готовлю квитанцию — п�
 /** Пометка к напоминанию, которое у демо-сделки пришло через 2 минуты вместо суток (domain/reminder/plan.ts). */
 export const DEMO_ACCELERATED_NOTE = '🧪 в демо — ускорено: в настоящей сделке это напоминание придёт через сутки.';
 
+/** Виды со своими текстами и данными: «через 30 минут» (eventSoon) и утренняя сводка (dailyDigest). */
+export type PlainReminderKind = Exclude<ReminderKind, 'event_soon' | 'daily_digest'>;
+
 /** Кому адресовано — решает план (§10.2); текст написан под эту сторону. `accelerated` — демо-сделка, срок ускорен. */
 export function reminderText(
-  kind: ReminderKind,
+  kind: PlainReminderKind,
   a: { id: string; title: string; sumKopecks: number; scheduledAt: Date | null; deadline: Date | null; accelerated?: boolean },
 ): string {
   const text = reminderBody(kind, a);
@@ -779,7 +782,7 @@ export function reminderText(
 }
 
 function reminderBody(
-  kind: ReminderKind,
+  kind: PlainReminderKind,
   a: { id: string; title: string; sumKopecks: number; scheduledAt: Date | null },
 ): string {
   const sum = formatMoney(a.sumKopecks);
@@ -810,6 +813,74 @@ function reminderBody(
     case 'refund_due':
       return `Сделка #${a.id} отменена двое суток назад, возврат ${sum} клиенту не отмечен. Верните тем же способом, каким получили, и нажмите «${BTN.refundSent}» в карточке.`;
   }
+}
+
+/**
+ * «⏰ Через 30 минут» (ЗАДАЧА_04 B1). Исполнителю — кто придёт и что с предоплатой, клиенту — к кому и что.
+ * Адреса отдельным полем нет (он в «Уточнениях») — в текст не добавляем; карточка — по кнопке «Открыть».
+ */
+export function eventSoon(a: {
+  to: 'seller' | 'client';
+  title: string;
+  clientName: string;
+  sellerName: string;
+  prepayment: 'received' | 'awaiting' | 'none';
+  prepaymentKopecks: number;
+}): string {
+  const title = esc(oneLine(a.title));
+  if (a.to === 'client') return `⏰ Через 30 минут — ${title} у ${esc(oneLine(a.sellerName))}.`;
+  const prepayment =
+    a.prepayment === 'none'
+      ? 'Без предоплаты.'
+      : a.prepayment === 'received'
+        ? 'Предоплата: получена.'
+        : `Предоплата: ждём ${formatMoney(a.prepaymentKopecks)}.`;
+  return `⏰ Через 30 минут: ${esc(oneLine(a.clientName))} — ${title}. ${prepayment}`;
+}
+
+/** «1 запись», «3 записи», «5 записей», «21 запись». */
+export function recordsWord(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${n} запись`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} записи`;
+  return `${n} записей`;
+}
+
+export type DigestLine = {
+  scheduledAt: Date;
+  title: string;
+  /** null — клиент ещё не открыл ссылку */
+  clientName: string | null;
+  status: DealStatus;
+  prepaymentKopecks: number;
+  demo: boolean;
+};
+
+/** Что с записью — словом (ЗАДАЧА_04 B2): для согласованной — есть ли предоплата, для остальных — чего ждём. */
+function digestState(l: DigestLine): string {
+  if (l.status === 'scheduled') return l.prepaymentKopecks > 0 ? 'предоплата получена' : 'без предоплаты';
+  return statusShort(l.status, 'seller');
+}
+
+/** Сколько записей показываем в сводке; остальное — в «📅 Расписание» (лимит сообщения MAX — 4000 символов). */
+const DIGEST_MAX_LINES = 20;
+
+/**
+ * Утренняя сводка исполнителю (ЗАДАЧА_04 B2): «📅 Сегодня, вт 29 сен — 3 записи (МСК):» и по строке на запись
+ * «10:00 — Саша · Маникюр с покрытием · предоплата получена». Строки уже отсортированы по времени.
+ */
+export function dailyDigest(a: { day: Date; lines: DigestLine[]; now?: Date }): string {
+  const now = a.now ?? new Date();
+  const { day } = dayAndTime(a.day, undefined, now);
+  const head = `📅 Сегодня, ${day[0].toLowerCase()}${day.slice(1)} — ${recordsWord(a.lines.length)} (МСК):`;
+  const rows = a.lines.slice(0, DIGEST_MAX_LINES).map((l) => {
+    const who = l.demo ? 'демо-клиент' : l.clientName ? esc(clip(oneLine(l.clientName), 40)) : 'клиент не открыл ссылку';
+    const parts = [`${dayAndTime(l.scheduledAt, undefined, now).time} — ${who}`, esc(clip(oneLine(l.title), 60)), digestState(l)];
+    return `${parts.join(' · ')}${l.demo ? ' · демо' : ''}`;
+  });
+  const more = a.lines.length > DIGEST_MAX_LINES ? [`…и ещё ${a.lines.length - DIGEST_MAX_LINES} — в «${BTN.schedule}»`] : [];
+  return [head, ...rows, ...more].join('\n');
 }
 
 // --- подписи кнопок. Ровно те, что в SPEC §5.5, §6.4, §6.5 и DESIGN §6 ---
@@ -857,6 +928,7 @@ export const BTN = {
   refundSent: '✅ Вернул(а)',
   refundReceived: '✅ Возврат получил(а)',
   open: 'Открыть',
+  schedule: '📅 Расписание',
   back: '↩️ Назад',
   keepDeal: '↩️ Не отменять',
 };

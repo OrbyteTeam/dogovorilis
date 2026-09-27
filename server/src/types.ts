@@ -50,7 +50,11 @@ export type ReminderKind =
   | 'payment_overdue'
   | 'receipt_due'
   | 'receipt_deadline'
-  | 'refund_due';
+  | 'refund_due'
+  /** За 30 минут до срока — обеим сторонам (ЗАДАЧА_04 B1). */
+  | 'event_soon'
+  /** Утренняя сводка исполнителю: напоминание не по сделке, а по пользователю (reminders.user_id, ЗАДАЧА_04 B2). */
+  | 'daily_digest';
 
 /** Типы событий сделки (SPEC §5.4). */
 export type DealEventType =
@@ -119,6 +123,8 @@ export type SellerProfile = {
   transferEnabled: boolean;
   linkEnabled: boolean;
   defaultCancelRule: CancelRule;
+  /** Утренняя сводка: минуты от полуночи по МСК (360…720, шаг 30); null — выключена (ЗАДАЧА_04 B2). */
+  digestTime: number | null;
 };
 
 /** Строка списка «Мои сделки» (SPEC §7.4): плоская, без версий, платежей и событий. */
@@ -134,6 +140,18 @@ export type DealListItem = {
   prepaymentKopecks: number;
   paidKopecks: number;
   updatedAt: Date;
+};
+
+/** Запись дня для утренней сводки исполнителя (ЗАДАЧА_04 B2): сделка с датой в пределах суток по МСК. */
+export type DayScheduleItem = {
+  publicId: string;
+  status: DealStatus;
+  demo: boolean;
+  title: string;
+  scheduledAt: Date;
+  prepaymentKopecks: number;
+  /** имя клиента из профиля MAX; null — клиент ещё не открыл ссылку */
+  clientName: string | null;
 };
 
 export type Deal = {
@@ -227,7 +245,9 @@ export type CardMessage = {
 
 export type Reminder = {
   id: number;
-  dealId: number;
+  /** null — у напоминания нет сделки (daily_digest): получатель тогда в userId. */
+  dealId: number | null;
+  userId: number | null;
   kind: ReminderKind;
   recipientRole: 'seller' | 'client';
   dueAt: Date;

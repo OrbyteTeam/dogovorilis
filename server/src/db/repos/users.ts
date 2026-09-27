@@ -6,7 +6,10 @@ const USER_COLS =
   'max_user_id, first_name, last_name, username, dialog_chat_id, locale, phone, phone_verified_at';
 
 const PROFILE_COLS =
-  'user_id, display_name, tax_mode, payout_details, transfer_enabled, link_enabled, default_cancel_rule';
+  'user_id, display_name, tax_mode, payout_details, transfer_enabled, link_enabled, default_cancel_rule, digest_time';
+
+/** Время сводки по умолчанию — 08:00 МСК (DEFAULT в 0005_digest_and_soon.sql). */
+export const DEFAULT_DIGEST_TIME = 480;
 
 type UserRow = {
   max_user_id: number;
@@ -27,6 +30,7 @@ type ProfileRow = {
   transfer_enabled: boolean;
   link_enabled: boolean;
   default_cancel_rule: CancelRule;
+  digest_time: number | null;
 };
 
 function mapUser(r: UserRow): User {
@@ -51,6 +55,7 @@ function mapProfile(r: ProfileRow): SellerProfile {
     transferEnabled: r.transfer_enabled,
     linkEnabled: r.link_enabled,
     defaultCancelRule: r.default_cancel_rule,
+    digestTime: r.digest_time,
   };
 }
 
@@ -118,6 +123,11 @@ export async function getProfile(q: Queryable, userId: number): Promise<SellerPr
   return res.rows[0] ? mapProfile(res.rows[0]) : null;
 }
 
+/**
+ * Создать или обновить профиль. `digestTime`: undefined — не трогать (у нового профиля — 08:00),
+ * null — сводка выключена, число — минуты от полуночи по МСК. Так старый клиент мини-приложения,
+ * который поля не знает, не выключает сводку молча.
+ */
 export async function upsertProfile(
   q: Queryable,
   p: {
@@ -128,12 +138,14 @@ export async function upsertProfile(
     transferEnabled: boolean;
     linkEnabled: boolean;
     defaultCancelRule: CancelRule;
+    digestTime?: number | null;
   },
 ): Promise<SellerProfile> {
+  const setDigest = p.digestTime !== undefined;
   const res = await q.query<ProfileRow>(
     `INSERT INTO seller_profiles
-       (user_id, display_name, tax_mode, payout_details, transfer_enabled, link_enabled, default_cancel_rule)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (user_id, display_name, tax_mode, payout_details, transfer_enabled, link_enabled, default_cancel_rule, digest_time)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $8::boolean THEN $9::smallint ELSE $10::smallint END)
      ON CONFLICT (user_id) DO UPDATE SET
        display_name        = EXCLUDED.display_name,
        tax_mode            = EXCLUDED.tax_mode,
@@ -141,6 +153,7 @@ export async function upsertProfile(
        transfer_enabled    = EXCLUDED.transfer_enabled,
        link_enabled        = EXCLUDED.link_enabled,
        default_cancel_rule = EXCLUDED.default_cancel_rule,
+       digest_time         = CASE WHEN $8::boolean THEN EXCLUDED.digest_time ELSE seller_profiles.digest_time END,
        updated_at          = now()
      RETURNING ${PROFILE_COLS}`,
     [
@@ -151,6 +164,9 @@ export async function upsertProfile(
       p.transferEnabled,
       p.linkEnabled,
       p.defaultCancelRule,
+      setDigest,
+      setDigest ? p.digestTime : null,
+      DEFAULT_DIGEST_TIME,
     ],
   );
   return mapProfile(res.rows[0]!);

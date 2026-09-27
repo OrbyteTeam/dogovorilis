@@ -284,6 +284,11 @@ export function n13Keyboard(publicId: string): AttachmentRequest {
   ]);
 }
 
+/** Утренняя сводка (ЗАДАЧА_04 B2): «📅 Расписание» открывает мини-приложение на «Моих сделках». */
+export function digestKeyboard(botUsername: string): AttachmentRequest {
+  return keyboard([[openApp(BTN.schedule, botUsername, 'deals')]]);
+}
+
 /** Одна кнопка «Открыть» — для коротких уведомлений и напоминаний. */
 export function openKeyboard(publicId: string): AttachmentRequest {
   return keyboard([[Keyboard.button.callback(BTN.open, cb('op', publicId))]]);

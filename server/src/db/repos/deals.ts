@@ -1,6 +1,6 @@
 // Таблица deals (SPEC §8). Переходы статусов — только через lock* + update, под транзакцией домена (SPEC §5.2).
 import type { Queryable } from '../pool.js';
-import type { Deal, DealListItem, DealStatus, TemplateKey } from '../../types.js';
+import type { DayScheduleItem, Deal, DealListItem, DealStatus, TemplateKey } from '../../types.js';
 import { TERMINAL_STATUSES } from '../../types.js';
 
 const COLS = `id, public_id, seller_user_id, client_user_id, demo, template, current_version, status,
@@ -275,5 +275,47 @@ export async function listItemsForUser(
     prepaymentKopecks: Number(r.prepayment_kopecks),
     paidKopecks: Number(r.paid_kopecks),
     updatedAt: r.updated_at,
+  }));
+}
+
+type DayScheduleRow = {
+  public_id: string;
+  status: DealStatus;
+  demo: boolean;
+  title: string;
+  scheduled_at: Date;
+  prepayment_kopecks: string | number;
+  client_first_name: string | null;
+  client_last_name: string | null;
+};
+
+/**
+ * Записи исполнителя на сутки [from, to) в указанных статусах — состав утренней сводки (ЗАДАЧА_04 B2).
+ * Считается заново в момент отправки: что изменилось с момента планирования, в сводку попадёт как есть.
+ */
+export async function listDaySchedule(
+  q: Queryable,
+  a: { sellerUserId: number; from: Date; to: Date; statuses: readonly DealStatus[] },
+): Promise<DayScheduleItem[]> {
+  const res = await q.query<DayScheduleRow>(
+    `SELECT d.public_id, d.status, d.demo, v.title, v.scheduled_at, v.prepayment_kopecks,
+            u.first_name AS client_first_name, u.last_name AS client_last_name
+     FROM deals d
+     JOIN deal_versions v ON v.deal_id = d.id AND v.version = d.current_version
+     LEFT JOIN users u ON u.max_user_id = d.client_user_id
+     WHERE d.seller_user_id = $1 AND d.status = ANY($2::text[])
+       AND v.scheduled_at >= $3 AND v.scheduled_at < $4
+     ORDER BY v.scheduled_at, d.id`,
+    [a.sellerUserId, [...a.statuses], a.from, a.to],
+  );
+  return res.rows.map((r) => ({
+    publicId: r.public_id,
+    status: r.status,
+    demo: r.demo,
+    title: r.title,
+    scheduledAt: r.scheduled_at,
+    prepaymentKopecks: Number(r.prepayment_kopecks),
+    // Как displayName в карточке: у пользователя MAX без имени — «без имени», а не «клиента нет».
+    clientName: r.client_first_name === null ? null : [r.client_first_name, r.client_last_name].filter(Boolean).join(' ').trim() || 'без имени',
   }));
 }

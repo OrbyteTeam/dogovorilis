@@ -11,6 +11,7 @@ import type { User } from '../../../types.js';
 import { rublesToKopecks } from '../../../domain/money.js';
 import { templateByKey } from '../../../domain/templates.js';
 import * as dealService from '../../../domain/deal/service.js';
+import { rescheduleDigest } from '../../../domain/reminder/digest.js';
 import { sendCard } from '../../bot/cards.js';
 import { verifyInitData } from '../auth.js';
 import { createDealSchema, dealListQuerySchema, profileSchema } from '../schemas.js';
@@ -85,8 +86,13 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
         transferEnabled: parsed.data.transfer_enabled,
         linkEnabled: parsed.data.link_enabled,
         defaultCancelRule: parsed.data.default_cancel_rule,
+        digestTime: parsed.data.digest_time,
       }),
     );
+    // Сменили время сводки — сегодняшняя переносится или гасится (ЗАДАЧА_04 B2); нет поля — сводку не трогаем.
+    if (parsed.data.digest_time !== undefined) {
+      await rescheduleDigest(user.maxUserId, parsed.data.digest_time, new Date(), cfg().APP_TIMEZONE);
+    }
     return { profile: profileView(profile) };
   });
 
@@ -108,6 +114,7 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
           transferEnabled: body.profile!.transfer_enabled,
           linkEnabled: body.profile!.link_enabled,
           defaultCancelRule: body.profile!.default_cancel_rule,
+          digestTime: body.profile!.digest_time,
         }),
       );
     }
