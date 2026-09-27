@@ -1,6 +1,6 @@
-// Форма сделки — docs/SPEC.md §7.2 (таблица полей и правил), §7.5 (правка условий), §7.6 (шаблоны);
-// вид — docs/DESIGN.md §4–§5. Одна форма на создание и на правку (T5): режим задаёт заголовок, предзаполнение и кнопку,
-// а куда отправлять — решает экран-владелец через onSubmit.
+// Форма сделки — docs/SPEC.md §7.2 (таблица полей и правил), §7.5 (правка условий и повтор), §7.6 (шаблоны);
+// вид — docs/DESIGN.md §4–§5. Одна форма на создание, правку (T5) и повтор: режим задаёт заголовок, предзаполнение
+// и кнопку, а куда отправлять — решает экран-владелец через onSubmit.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Input, Panel, Radio, Switch, Textarea, Typography } from '@maxhub/max-ui';
 
@@ -55,8 +55,14 @@ function toInt(value: string): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
-/** Режим формы: создание с нуля или правка условий существующей сделки (T5, `#/deals/:id/edit`). */
-export type DealFormMode = { kind: 'create' } | { kind: 'edit'; source: DealDetails };
+/**
+ * Режим формы: создание с нуля, правка условий (T5, `#/deals/:id/edit`) или повтор закрытой сделки
+ * (`#/new?from=:id`: всё как было, кроме даты).
+ */
+export type DealFormMode =
+  | { kind: 'create' }
+  | { kind: 'edit'; source: DealDetails }
+  | { kind: 'repeat'; source: DealDetails };
 
 interface FormValues {
   templateKey: TemplateKey | null;
@@ -93,12 +99,14 @@ function initialValues(me: MeResponse, mode: DealFormMode): FormValues {
     };
   }
   const src = mode.source;
+  // Повтор — новая встреча: дату не копируем (прежняя почти всегда в прошлом). Была без даты — остаётся «Без даты».
+  const keepDate = mode.kind === 'edit' && src.scheduled_at !== null;
   return {
     templateKey: src.template,
     title: src.title,
     description: src.description ?? '',
     noDate: src.scheduled_at === null,
-    scheduledLocal: src.scheduled_at ? isoToMoscowInput(new Date(src.scheduled_at)) : '',
+    scheduledLocal: keepDate && src.scheduled_at ? isoToMoscowInput(new Date(src.scheduled_at)) : '',
     totalRaw: String(src.total_rub),
     ...prepayFrom(src.total_rub, src.prepayment_rub),
     cancelRule: src.cancel_rule,
@@ -119,6 +127,10 @@ export interface NewScreenProps {
 export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }: NewScreenProps) {
   const showToast = useToast();
   const editing = mode.kind === 'edit';
+  const repeating = mode.kind === 'repeat';
+  /** «Тот же клиент» — только при повторе сделки, у которой был настоящий клиент. */
+  const sameClientName =
+    mode.kind === 'repeat' && mode.source.same_client_available ? (mode.source.client?.name ?? 'прежний клиент') : null;
   // Блок «О вас» — только когда профиля ещё нет (SPEC §7.2) и никогда при правке: сделка уже подписана.
   const needProfile = me.profile === null && !editing;
   const [init] = useState(() => initialValues(me, mode));
@@ -150,6 +162,18 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
   const [sending, setSending] = useState(false);
   /** Текст последнего сбоя сети/сервера — под ним кнопка «Повторить». */
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [sameClient, setSameClient] = useState(sameClientName !== null);
+  const dateRef = useRef<HTMLInputElement>(null);
+
+  // Повтор: «Когда» пустое и в фокусе — это единственное, что обычно надо заполнить (ЗАДАЧА_04 F).
+  useEffect(() => {
+    if (!repeating || init.noDate) return;
+    try {
+      dateRef.current?.focus();
+    } catch {
+      /* фокус не обязателен */
+    }
+  }, [repeating, init.noDate]);
 
   const minDateValue = useMemo(() => isoToMoscowInput(new Date(Date.now() + LEAD_TIME_MS)), []);
 
@@ -232,7 +256,12 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
   const terms = JSON.stringify([title.trim(), description.trim(), noDate ? null : scheduledLocal, totalRaw, prepaymentRub, cancelRule]);
   const [initialTerms] = useState(terms);
   // Подтверждение закрытия, пока в форме есть несохранённые данные (SPEC §7.1): отличие от того, с чего форма началась.
-  const draft = JSON.stringify([terms, templateKey, needProfile ? [displayName.trim(), taxMode, payoutDetails.trim()] : null]);
+  const draft = JSON.stringify([
+    terms,
+    templateKey,
+    sameClient,
+    needProfile ? [displayName.trim(), taxMode, payoutDetails.trim()] : null,
+  ]);
   const [initialDraft] = useState(draft);
   const dirty = draft !== initialDraft;
 
@@ -313,6 +342,10 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
       cancel_rule: cancelRule,
     };
     if (needProfile) payload.profile = buildProfile();
+    if (mode.kind === 'repeat') {
+      payload.repeat_of = mode.source.public_id;
+      if (sameClientName !== null) payload.same_client = sameClient;
+    }
 
     setSending(true);
     setSubmitError(null);
@@ -342,14 +375,42 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
       >
         <div className="dg-head">
           <Typography.Headline variant="large-strong" asChild>
-            <h1>{editing ? `Изменить условия #${mode.source.public_id}` : 'Новая сделка'}</h1>
+            <h1>
+              {mode.kind === 'edit'
+                ? `Изменить условия #${mode.source.public_id}`
+                : mode.kind === 'repeat'
+                  ? `Повторить #${mode.source.public_id}`
+                  : 'Новая сделка'}
+            </h1>
           </Typography.Headline>
           {editing ? (
             <Typography.Text variant="body" color="secondary">
               Клиент получит новую версию и подтвердит её заново
             </Typography.Text>
           ) : null}
+          {repeating ? (
+            <Typography.Text variant="body" color="secondary">
+              Условия — как в прошлый раз. Выберите новую дату и проверьте остальное
+            </Typography.Text>
+          ) : null}
         </div>
+
+        {sameClientName !== null ? (
+          <section className="dg-card" aria-labelledby="deal-client">
+            <Typography.Text variant="title" asChild>
+              <h2 id="deal-client">Клиент</h2>
+            </Typography.Text>
+            <ControlRow
+              title={`Тот же клиент: ${sameClientName}`}
+              subtitle={
+                sameClient
+                  ? 'Карточка сразу уйдёт клиенту в чат с ботом — ссылку пересылать не нужно'
+                  : 'Будет обычная ссылка — отправите её клиенту сами'
+              }
+              control={<Switch checked={sameClient} onChange={(event) => setSameClient(event.currentTarget.checked)} />}
+            />
+          </section>
+        ) : null}
 
         {needProfile ? (
           <section className="dg-card" aria-labelledby="about-you">
@@ -470,6 +531,7 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
           >
             <div className="dg-field">
               <input
+                ref={dateRef}
                 id="deal-date"
                 className="dg-datetime"
                 type="datetime-local"
@@ -585,12 +647,14 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
         ) : null}
 
         <Button type="submit" variant="primary" size="large" stretched loading={sending} disabled={sending}>
-          {editing ? 'Отправить новые условия' : 'Создать карточку'}
+          {editing ? 'Отправить новые условия' : sameClientName !== null && sameClient ? 'Создать и отправить клиенту' : 'Создать карточку'}
         </Button>
 
         <Typography.Text variant="description" color="tertiary">
           {editing ? (
             'Карточка обновится у вас и у клиента, а клиенту придёт перечень изменений.'
+          ) : sameClientName !== null && sameClient ? (
+            `Карточка сразу уйдёт клиенту (${sameClientName}), а вам — в чат с ботом.`
           ) : (
             <>
               Карточка появится в вашем чате с ботом — оттуда её можно отправить клиенту ссылкой.

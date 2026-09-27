@@ -18,7 +18,7 @@ type State =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
   | { kind: 'form'; deal: DealDetails }
-  | { kind: 'locked'; reason: LockReason }
+  | { kind: 'locked'; reason: LockReason; canRepeat?: boolean }
   | { kind: 'sent'; response: UpdateDealResponse };
 
 const LOCK_TEXT: Record<LockReason, { title: string; text: string }> = {
@@ -28,7 +28,7 @@ const LOCK_TEXT: Record<LockReason, { title: string; text: string }> = {
   },
   finished: {
     title: 'Сделка уже завершена',
-    text: 'Условия завершённой сделки не меняются. Если нужно ещё раз — создайте новую сделку',
+    text: 'Условия завершённой сделки не меняются',
   },
   client: {
     title: 'Условия меняет исполнитель',
@@ -59,9 +59,11 @@ export interface EditDealScreenProps {
   me: MeResponse;
   templates: Template[];
   onDeals: () => void;
+  /** Завершённую сделку править нельзя, но можно повторить (`#/new?from=:id`). */
+  onRepeat: (publicId: string) => void;
 }
 
-export function EditDealScreen({ publicId, me, templates, onDeals }: EditDealScreenProps) {
+export function EditDealScreen({ publicId, me, templates, onDeals, onRepeat }: EditDealScreenProps) {
   const showToast = useToast();
   const [state, setState] = useState<State>({ kind: 'loading' });
 
@@ -69,7 +71,9 @@ export function EditDealScreen({ publicId, me, templates, onDeals }: EditDealScr
     setState({ kind: 'loading' });
     try {
       const deal = await api.deal(publicId);
-      setState(deal.can_edit ? { kind: 'form', deal } : { kind: 'locked', reason: lockReason(deal) });
+      setState(
+        deal.can_edit ? { kind: 'form', deal } : { kind: 'locked', reason: lockReason(deal), canRepeat: deal.can_repeat },
+      );
     } catch (error) {
       if (error instanceof ApiError && error.status === 403) {
         setState({ kind: 'locked', reason: 'forbidden' });
@@ -124,8 +128,12 @@ export function EditDealScreen({ publicId, me, templates, onDeals }: EditDealScr
   }
 
   if (state.kind === 'locked') {
-    const { title, text } = LOCK_TEXT[state.reason];
+    const { title } = LOCK_TEXT[state.reason];
+    const offerRepeat = state.reason === 'finished' && state.canRepeat === true;
+    // Совет «повторите» — только вместе с кнопкой «Повторить»: демо-сделки, например, не повторяются.
+    const text = offerRepeat ? `${LOCK_TEXT.finished.text}. Если нужно ещё раз — повторите её с новой датой` : LOCK_TEXT[state.reason].text;
     const actions = [{ label: 'Мои сделки', onClick: onDeals }];
+    if (offerRepeat) actions.unshift({ label: 'Повторить', onClick: () => onRepeat(publicId) });
     if (state.reason !== 'forbidden') actions.push({ label: 'Открыть в чате', onClick: openChat });
     return <NoticeScreen title={title} text={text} actions={actions} />;
   }

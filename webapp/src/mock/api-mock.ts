@@ -157,9 +157,9 @@ const MOCK_DEAL_ROWS: MockDeal[] = [
   { id: 'Cr3Chng120', role: 'seller', status: 'changes_requested', title: 'Маникюр с дизайном на все пальцы, долгое название', at: [3, '12:00'], total: 3200, prepay: 1600, client: 'Ольга' },
   { id: 'Cl2Past110', role: 'seller', status: 'closed', title: 'Маникюр с покрытием', at: [-2, '11:00'], total: 2500, prepay: 750, client: 'Саша', description: 'Френч, форма миндаль' },
   { id: 'Cn1Cancel9', role: 'seller', status: 'cancelled', title: 'Педикюр', at: [-1, '09:00'], total: 3000, prepay: 900, client: 'Вера' },
-  { id: 'NoDateRep1', role: 'seller', status: 'awaiting_confirmation', title: 'Ремонт / выезд мастера', at: null, total: 4000, prepay: 0, description: 'Адрес: ул. Ленина, 5. Диагностика стиральной машины' },
-  { id: 'ExpNoDate1', role: 'seller', status: 'expired', title: 'Изделие на заказ', at: null, total: 6000, prepay: 3000 },
-  { id: 'Later30day', role: 'seller', status: 'scheduled', title: 'Занятие 60 минут', at: [30, '19:00'], total: 2000, prepay: 2000, client: 'Игорь' },
+  { id: 'NoDateRep1', role: 'seller', status: 'awaiting_confirmation', title: 'Ремонт / выезд мастера', at: null, total: 4000, prepay: 0, template: 'repair', description: 'Адрес: ул. Ленина, 5. Диагностика стиральной машины' },
+  { id: 'ExpNoDate1', role: 'seller', status: 'expired', title: 'Изделие на заказ', at: null, total: 6000, prepay: 3000, template: 'free', cancel: 'nonrefundable' },
+  { id: 'Later30day', role: 'seller', status: 'scheduled', title: 'Занятие 60 минут', at: [30, '19:00'], total: 2000, prepay: 2000, client: 'Игорь', template: 'lesson' },
   { id: 'Cli5Lesson', role: 'client', status: 'awaiting_prepayment', title: 'Занятие 60 минут', at: [5, '16:00'], total: 2000, prepay: 2000 },
   { id: 'Cli3Closed', role: 'client', status: 'closed', title: 'Стрижка', at: [-3, '13:00'], total: 1200, prepay: 0 },
 ];
@@ -299,45 +299,44 @@ function updateDeal(publicId: string, body: UpdateDealRequest): UpdateDealRespon
 
 const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
+/** VITE_MOCK_CLIENT_DIALOG=0 — у прежнего клиента нет диалога с ботом: повтор «тому же клиенту» идёт обычной ссылкой. */
+const CLIENT_DIALOG = import.meta.env.VITE_MOCK_CLIENT_DIALOG !== '0';
+
+let createdCount = 0;
+
+/** POST /api/deals: новая сделка попадает в «Мои сделки»; повтор с тем же клиентом — как ЗАДАЧА_04 F на сервере. */
 function createDeal(body: CreateDealRequest): CreateDealResponse {
-  const publicId = 'MK7Q2XD4LP';
-  const link = `https://max.ru/${BOT}?start=d_${publicId}`;
-  const now = new Date().toISOString();
+  createdCount += 1;
+  const publicId = `MK7Q2XD4L${createdCount % 10}`;
+  const source = body.repeat_of ? findRow(body.repeat_of) : null;
+  if (body.same_client && (!source || source.role !== 'seller' || !source.client)) {
+    throw new ApiError(403, 'forbidden', 'Этого клиента нельзя подставить в новую сделку');
+  }
+  const withClient = Boolean(body.same_client && source?.client && CLIENT_DIALOG);
+  const row: MockDeal = {
+    id: publicId,
+    role: 'seller',
+    status: 'awaiting_confirmation',
+    title: body.title,
+    at: null,
+    iso: body.scheduled_at ?? null,
+    total: body.total_rub,
+    prepay: body.prepayment_rub,
+    description: body.description ?? null,
+    template: body.template,
+    cancel: body.cancel_rule,
+    client: withClient ? source?.client : undefined,
+  };
+  MOCK_DEAL_ROWS.unshift(row);
+  const deal = dealView(row);
   return {
-    deal: {
-      public_id: publicId,
-      status: 'awaiting_confirmation',
-      status_text: 'Ждём подтверждения клиента',
-      template: body.template,
-      demo: false,
-      seller: { name: body.profile?.display_name ?? DEMO_PROFILE.display_name },
-      client: null,
-      version: {
-        version: 1,
-        title: body.title,
-        description: body.description ?? null,
-        scheduled_at: body.scheduled_at ?? null,
-        total_kopecks: body.total_rub * 100,
-        prepayment_kopecks: body.prepayment_rub * 100,
-        cancel_rule: body.cancel_rule,
-        photo_max_token: null,
-      },
-      remaining_kopecks: (body.total_rub - body.prepayment_rub) * 100,
-      paid_kopecks: 0,
-      link,
-      timestamps: {
-        created_at: now,
-        confirmed_at: null,
-        done_at: null,
-        accepted_at: null,
-        paid_at: null,
-        closed_at: null,
-        cancelled_at: null,
-      },
-    },
-    link,
+    deal,
+    link: deal.link,
     share_text: `Подтвердите нашу договорённость: ${body.title}`,
     card_sent: CARD_SENT,
+    client_card_sent: withClient,
+    client: body.same_client && source?.client ? { name: source.client } : null,
+    client_no_dialog: Boolean(body.same_client && source?.client && !CLIENT_DIALOG),
   };
 }
 
