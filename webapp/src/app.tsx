@@ -155,7 +155,7 @@ function Router() {
   if (state.status === 'error') return <ErrorScreen message={state.message} onRetry={() => void load()} />;
 
   if (route.name === 'deals') {
-    return <DealsScreen onNewDeal={() => navigate({ name: 'new' })} />;
+    return <DealsScreen me={state.data.me} onNewDeal={() => navigate({ name: 'new' })} />;
   }
 
   if (route.name === 'settings') {

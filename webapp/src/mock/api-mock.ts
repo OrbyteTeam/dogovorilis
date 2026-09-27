@@ -1,7 +1,17 @@
 // DEV-ONLY заглушка API для визуальной проверки экранов без сервера: включается VITE_MOCK_API=1.
 // В прод-бандл не попадает — импорт в api.ts стоит под `import.meta.env.DEV` (мёртвая ветка вырезается сборкой).
 // Данные повторяют контракт docs/SPEC.md §7.8 и шаблоны §7.6.
-import type { CreateDealRequest, CreateDealResponse, MeResponse, SellerProfile, TemplatesResponse } from '../types';
+import { moscowInputToIso } from '../format';
+import { addDays, dayKey } from '../schedule';
+import type {
+  CreateDealRequest,
+  CreateDealResponse,
+  DealListItem,
+  DealStatus,
+  MeResponse,
+  SellerProfile,
+  TemplatesResponse,
+} from '../types';
 
 const BOT = String(import.meta.env.VITE_BOT_USERNAME ?? 'dogovorilis_bot').trim();
 const CARD_SENT = import.meta.env.VITE_MOCK_CARD_SENT !== '0';
@@ -94,6 +104,82 @@ const TEMPLATES: TemplatesResponse = {
   ],
 };
 
+// ───────────── «Мои сделки»: набор на разные дни, роли и статусы (VITE_MOCK_DEALS=none|seller|client) ─────────────
+
+const MOCK_DEALS = String(import.meta.env.VITE_MOCK_DEALS ?? 'all');
+
+const SHORT: Record<DealStatus, { seller: string; client: string }> = {
+  awaiting_confirmation: { seller: 'ждём подтверждения', client: 'подтвердите условия' },
+  changes_requested: { seller: 'клиент предложил изменения', client: 'ждём новые условия' },
+  declined: { seller: 'клиент отказался', client: 'вы отказались' },
+  expired: { seller: 'срок истёк', client: 'срок истёк' },
+  awaiting_prepayment: { seller: 'ждём предоплату', client: 'внесите предоплату' },
+  scheduled: { seller: 'запланировано', client: 'запланировано' },
+  awaiting_acceptance: { seller: 'ждём приёмку', client: 'примите работу' },
+  remarks: { seller: 'есть замечания', client: 'ждём исправлений' },
+  awaiting_payment: { seller: 'ждём остаток', client: 'оплатите остаток' },
+  paid: { seller: 'оплачено, нужен чек', client: 'ждём чек' },
+  closed: { seller: 'закрыта', client: 'закрыта' },
+  cancelled: { seller: 'отменена', client: 'отменена' },
+};
+
+interface MockDeal {
+  id: string;
+  role: 'seller' | 'client';
+  status: DealStatus;
+  title: string;
+  /** Сдвиг в днях от сегодня и время МСК; null — без даты. */
+  at: [number, string] | null;
+  total: number;
+  prepay: number;
+  demo?: boolean;
+  description?: string;
+  client?: string;
+}
+
+const MOCK_DEAL_ROWS: MockDeal[] = [
+  { id: 'Sc0Today10', role: 'seller', status: 'scheduled', title: 'Маникюр с покрытием', at: [0, '10:00'], total: 2500, prepay: 750, client: 'Саша' },
+  { id: 'Pp0Today14', role: 'seller', status: 'awaiting_prepayment', title: 'Покрытие гель-лак', at: [0, '14:00'], total: 1800, prepay: 540, client: 'Марина' },
+  { id: 'Cf1Tmrw183', role: 'seller', status: 'awaiting_confirmation', title: 'Коррекция и окрашивание бровей', at: [1, '18:30'], total: 1500, prepay: 0 },
+  { id: 'Dm2Demo150', role: 'seller', status: 'scheduled', title: 'Маникюр с покрытием', at: [2, '15:00'], total: 2500, prepay: 750, demo: true, client: 'Анна' },
+  { id: 'Cr3Chng120', role: 'seller', status: 'changes_requested', title: 'Маникюр с дизайном на все пальцы, долгое название', at: [3, '12:00'], total: 3200, prepay: 1600, client: 'Ольга' },
+  { id: 'Cl2Past110', role: 'seller', status: 'closed', title: 'Маникюр с покрытием', at: [-2, '11:00'], total: 2500, prepay: 750, client: 'Саша', description: 'Френч, форма миндаль' },
+  { id: 'Cn1Cancel9', role: 'seller', status: 'cancelled', title: 'Педикюр', at: [-1, '09:00'], total: 3000, prepay: 900, client: 'Вера' },
+  { id: 'NoDateRep1', role: 'seller', status: 'awaiting_confirmation', title: 'Ремонт / выезд мастера', at: null, total: 4000, prepay: 0, description: 'Адрес: ул. Ленина, 5. Диагностика стиральной машины' },
+  { id: 'ExpNoDate1', role: 'seller', status: 'expired', title: 'Изделие на заказ', at: null, total: 6000, prepay: 3000 },
+  { id: 'Later30day', role: 'seller', status: 'scheduled', title: 'Занятие 60 минут', at: [30, '19:00'], total: 2000, prepay: 2000, client: 'Игорь' },
+  { id: 'Cli5Lesson', role: 'client', status: 'awaiting_prepayment', title: 'Занятие 60 минут', at: [5, '16:00'], total: 2000, prepay: 2000 },
+  { id: 'Cli3Closed', role: 'client', status: 'closed', title: 'Стрижка', at: [-3, '13:00'], total: 1200, prepay: 0 },
+];
+
+function mockIso(at: [number, string] | null): string | null {
+  if (!at) return null;
+  return moscowInputToIso(`${addDays(dayKey(new Date()), at[0])}T${at[1]}`);
+}
+
+function listItem(row: MockDeal): DealListItem {
+  return {
+    public_id: row.id,
+    status: row.status,
+    status_text: SHORT[row.status][row.role],
+    status_short: SHORT[row.status][row.role],
+    demo: row.demo ?? false,
+    role: row.role,
+    title: row.title,
+    scheduled_at: mockIso(row.at),
+    total_kopecks: row.total * 100,
+    prepayment_kopecks: row.prepay * 100,
+    paid_kopecks: 0,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function listDeals(): { items: DealListItem[] } {
+  if (MOCK_DEALS === 'none') return { items: [] };
+  const rows = MOCK_DEAL_ROWS.filter((row) => MOCK_DEALS === 'all' || row.role === MOCK_DEALS);
+  return { items: rows.map(listItem) };
+}
+
 const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
 function createDeal(body: CreateDealRequest): CreateDealResponse {
@@ -142,6 +228,7 @@ export async function mockRequest<T>(method: string, path: string, body?: unknow
   await delay(300);
   if (method === 'GET' && path === '/me') return me() as unknown as T;
   if (method === 'GET' && path === '/templates') return TEMPLATES as unknown as T;
+  if (method === 'GET' && path.startsWith('/deals?')) return listDeals() as unknown as T;
   if (method === 'PUT' && path === '/me/profile') return { profile: saveProfile(body as SellerProfile) } as unknown as T;
   if (method === 'POST' && path === '/deals') {
     const request = body as CreateDealRequest;
