@@ -500,6 +500,12 @@
   padding: 0 var(--spacing-size-xl) var(--spacing-size-xl);
 }
 
+/* Имя клиента после названия — тем же размером, но тише названия */
+.dg-deal__client {
+  font-weight: var(--font-weight-body);
+  color: var(--text-secondary);
+}
+
 /* Бейдж «демо» в названии */
 .dg-tag {
   display: inline-block;

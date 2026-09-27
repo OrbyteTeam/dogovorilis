@@ -21,12 +21,19 @@ export interface DealRowProps {
 }
 
 export function DealRow({ item, lead, meta, actions }: DealRowProps) {
-  const title: ReactNode = item.demo ? (
+  // Исполнителю после названия — имя клиента: «Маникюр с покрытием · Саша». Клиенту имя клиента не нужно — это он сам.
+  const clientName = item.role === 'seller' ? item.client_name?.trim() : null;
+  const title: ReactNode = (
     <>
-      {item.title} <span className="dg-tag">демо</span>
+      {item.title}
+      {clientName ? <span className="dg-deal__client">{` · ${clientName}`}</span> : null}
+      {item.demo ? (
+        <>
+          {' '}
+          <span className="dg-tag">демо</span>
+        </>
+      ) : null}
     </>
-  ) : (
-    item.title
   );
   return (
     <div className="dg-deal">

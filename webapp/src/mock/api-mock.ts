@@ -166,6 +166,7 @@ function listItem(row: MockDeal): DealListItem {
     demo: row.demo ?? false,
     role: row.role,
     title: row.title,
+    client_name: row.role === 'seller' ? (row.client ?? null) : null,
     scheduled_at: mockIso(row.at),
     total_kopecks: row.total * 100,
     prepayment_kopecks: row.prepay * 100,

@@ -130,6 +130,8 @@ export interface DealListItem {
   demo: boolean;
   role: 'seller' | 'client';
   title: string;
+  /** Имя клиента для строки исполнителя; null — клиент ещё не открыл ссылку; нет поля — сервер старше (ЗАДАЧА_04 C). */
+  client_name?: string | null;
   scheduled_at: string | null;
   total_kopecks: number;
   prepayment_kopecks: number;
