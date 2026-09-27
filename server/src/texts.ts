@@ -7,7 +7,7 @@
 // БД и SDK. Так тексты проверяются юнит-тестами без окружения, а часовой пояс берётся по умолчанию
 // из domain/time.ts (APP_TIMEZONE подставляется на уровне транспорта, если когда-то понадобится).
 
-import type { CancelRule, CardRole, DealStatus, PaymentProvider, PaymentRail, PaymentStatus, ReminderKind, Role } from './types.js';
+import type { CancelRule, CardRole, DealStatus, PaymentProvider, PaymentRail, PaymentStatus, ReminderKind, Role, TermsField } from './types.js';
 import { formatMoney, prepaymentPercent } from './domain/money.js';
 import { dayAndTime, formatDateShort, formatDateTime, formatDateTimeShort, formatDayMonth } from './domain/time.js';
 
@@ -203,7 +203,7 @@ const STATUS_TEXT: Record<DealStatus, (a: StatusArgs) => { seller: string; clien
     client: 'Подтвердите условия',
   }),
   changes_requested: () => ({
-    seller: 'Клиент предложил изменения — оставьте как есть или создайте новую сделку',
+    seller: 'Клиент предложил изменения — измените условия или оставьте как есть',
     client: 'Ждём новые условия от исполнителя',
   }),
   declined: () => ({
@@ -312,6 +312,9 @@ export type CardView = {
   /** Отмена после «Я перевёл(а)» без подтверждения исполнителя — сверить поступление (ЗАДАЧА_03 F7). */
   claimLine?: string | null;
   clientLink: string | null;
+  /** Номер текущей версии условий и когда она создана: при версии > 1 — строка «Версия N · условия изменены …» (T5). */
+  version?: number;
+  versionCreatedAt?: Date | null;
 };
 
 const CARD_MAX_LINES = 12;
@@ -335,6 +338,10 @@ export function card(v: CardView): string {
     if (v.role === 'client_demo') head.push(DEMO_CARD_PREFIX);
     head.push(`${statusEmoji(v.status)} **${esc(oneLine(v.title))}** · #${v.publicId}`);
     head.push(`Статус: ${statusText(v.status, v.role, v)}`);
+    const versionAt = head.length;
+    if (v.version && v.version > 1 && v.versionCreatedAt) {
+      head.push(`Версия ${v.version} · условия изменены ${formatDateTimeShort(v.versionCreatedAt)}`);
+    }
 
     const description = v.description ? esc(clip(oneLine(v.description), descBudget)) : '—';
     const money =
@@ -367,14 +374,17 @@ export function card(v: CardView): string {
     ];
 
     // Гарантия DESIGN §6: не больше 12 строк. В реальных статусах строк ≤ 12 и так; на всякий
-    // случай убираем необязательные в порядке возрастания важности: макет → ссылка → строка чека.
-    const countLines = () => head.length + terms.filter(Boolean).length + parties.filter(Boolean).length;
+    // случай убираем необязательные в порядке возрастания важности: макет → ссылка → версия → строка чека.
+    const countLines = () => head.filter(Boolean).length + terms.filter(Boolean).length + parties.filter(Boolean).length;
     const dropOrder: (() => void)[] = [
       () => {
         terms[4] = null; // 🖼 макет приложён
       },
       () => {
         parties[linkAt] = null; // 🔗 ссылка для клиента (она же в кнопке «Скопировать ссылку»)
+      },
+      () => {
+        if (head.length > versionAt) head.splice(versionAt, 1); // «Версия N · условия изменены …»
       },
       () => {
         parties[receiptAt] = null; // строка чека
@@ -510,12 +520,49 @@ export function N2(a: { client: string; id: string; prepaymentKopecks: number; s
 }
 
 export function N3(a: { client: string; id: string; text: string }): string {
-  // Экрана правки условий (T5) пока нет — честно говорим, как поступить (ЗАДАЧА_03 S4).
-  return `✏️ ${esc(a.client)} предлагает изменения по #${a.id}:\n${quote(esc(a.text))}\n\nСогласны с изменениями — создайте новую сделку с нужными условиями («${BTN.newDeal}» или «${BTN.exampleDeal}») и отмените эту. Не согласны — «${BTN.keepAsIs}».`;
+  return `✏️ ${esc(a.client)} предлагает изменения по #${a.id}:\n${quote(esc(a.text))}\n\nИзмените условия или оставьте как есть.`;
 }
 
-export function N4(a: { id: string; version: number }): string {
-  return `🔄 Исполнитель обновил условия #${a.id} (версия ${a.version}). Проверьте карточку.`;
+/** Значения новой версии для перечня в N4. */
+export type TermsValues = {
+  title: string;
+  scheduledAt: Date | null;
+  totalKopecks: number;
+  prepaymentKopecks: number;
+  cancelRule: CancelRule;
+};
+
+/**
+ * Что изменилось в новой версии — словами, по порядку карточки: «срок → сб, 27 сен, 14:00 (МСК); сумма → 3 000 ₽,
+ * предоплата → 600 ₽». Сумма и предоплата — одной группой через запятую, остальное — через «;».
+ */
+export function termsChanges(changed: readonly TermsField[], v: TermsValues): string {
+  const has = (f: TermsField) => changed.includes(f);
+  const money = [
+    has('total') ? `сумма → ${formatMoney(v.totalKopecks)}` : null,
+    has('prepayment') ? `предоплата → ${v.prepaymentKopecks > 0 ? formatMoney(v.prepaymentKopecks) : 'без предоплаты'}` : null,
+  ].filter(Boolean);
+  const groups = [
+    has('title') ? `что делаем → «${esc(oneLine(v.title))}»` : null,
+    has('description') ? 'уточнения → изменены' : null,
+    has('scheduled_at') ? `срок → ${v.scheduledAt ? formatDateTime(v.scheduledAt) : 'без даты'}` : null,
+    money.length ? money.join(', ') : null,
+    has('cancel_rule') ? `правило отмены → ${cancelRuleText(v.cancelRule).toLowerCase()}` : null,
+  ].filter(Boolean);
+  return groups.join('; ');
+}
+
+/** N4 (SPEC §6.5): клиенту — новая версия условий и только то, что в ней изменилось. */
+export function N4(a: { id: string; version: number; changed?: readonly TermsField[]; terms?: TermsValues }): string {
+  const list = a.changed?.length && a.terms ? termsChanges(a.changed, a.terms) : '';
+  return `✏️ Исполнитель изменил условия #${a.id} (версия ${a.version})${list ? `: ${list}` : ''}. Проверьте и подтвердите.`;
+}
+
+/** Ответ исполнителю после T5 (N4a): дошла ли новая версия до клиента. */
+export function TERMS_UPDATED(a: { id: string; version: number; client: 'notified' | 'no_client' | 'not_delivered' }): string {
+  if (a.client === 'notified') return `✏️ Условия #${a.id} обновлены, клиент получил версию ${a.version}.`;
+  if (a.client === 'no_client') return `✏️ Условия #${a.id} обновлены — клиент увидит версию ${a.version}, когда откроет ссылку.`;
+  return `✏️ Условия #${a.id} обновлены — клиент увидит версию ${a.version} в карточке, когда вернётся в чат с ботом.`;
 }
 
 export function N5(a: { id: string }): string {
@@ -743,6 +790,9 @@ export const E11 = 'Оплата по ссылке не подключена. Д
 export const E12 = 'Исполнитель не указал реквизиты для перевода. Попросите его заполнить их в Настройках.';
 export const E13 = 'Подождите: повторно сообщить о переводе можно через 10 минут после прошлого раза — за это время исполнитель проверит поступление.';
 
+/** «Подтверждаю» на карточке прежней версии: исполнитель успел изменить условия (T5, SPEC §5.2 T3). */
+export const VERSION_CHANGED = 'Условия изменились — посмотрите новую версию.';
+
 /** Двойной тап «Оплатить по ссылке», пока провайдер ещё создаёт первую ссылку (ЗАДАЧА_03 F3). */
 export const LINK_IN_PROGRESS = 'Ссылка формируется, секунду — нажмите ещё раз.';
 
@@ -882,6 +932,13 @@ export function dailyDigest(a: { day: Date; lines: DigestLine[]; now?: Date }): 
   const more = a.lines.length > DIGEST_MAX_LINES ? [`…и ещё ${a.lines.length - DIGEST_MAX_LINES} — в «${BTN.schedule}»`] : [];
   return [head, ...rows, ...more].join('\n');
 }
+
+// --- ответы API мини-приложения на правку условий (SPEC §7.8). Экран показывает свой текст по коду, это — запасной ---
+
+export const API_DEAL_NOT_FOUND = 'Сделка не найдена';
+export const API_FORBIDDEN_DEAL = 'Это не ваша сделка';
+export const API_NOT_EDITABLE = 'Условия можно изменить, только пока клиент их не подтвердил';
+export const API_NO_CHANGES = 'Условия не изменились — отправлять клиенту нечего';
 
 // --- подписи кнопок. Ровно те, что в SPEC §5.5, §6.4, §6.5 и DESIGN §6 ---
 

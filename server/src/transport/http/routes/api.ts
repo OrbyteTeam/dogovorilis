@@ -4,18 +4,21 @@ import { cfg } from '../../../config.js';
 import { inTx } from '../../../db/pool.js';
 import * as dealsRepo from '../../../db/repos/deals.js';
 import * as usersRepo from '../../../db/repos/users.js';
-import { AppError, UnauthorizedError, ValidationError } from '../../../errors.js';
+import { AppError, DealNotEditableError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from '../../../errors.js';
 import type { MaxGateway } from '../../../integrations/max/gateway.js';
 import { log } from '../../../logger.js';
-import type { User } from '../../../types.js';
+import * as texts from '../../../texts.js';
+import type { DealBundle, User } from '../../../types.js';
+import { PUBLIC_ID_RE } from '../../../domain/ids.js';
 import { rublesToKopecks } from '../../../domain/money.js';
 import { templateByKey } from '../../../domain/templates.js';
 import * as dealService from '../../../domain/deal/service.js';
 import { rescheduleDigest } from '../../../domain/reminder/digest.js';
 import { sendCard } from '../../bot/cards.js';
+import { publishNewVersion } from '../../bot/outcome.js';
 import { verifyInitData } from '../auth.js';
-import { createDealSchema, dealListQuerySchema, profileSchema } from '../schemas.js';
-import { dealListItemView, dealView, profileView, shareText, templatesView, userView } from '../views.js';
+import { createDealSchema, dealListQuerySchema, profileSchema, updateDealSchema, type CreateDealBody } from '../schemas.js';
+import { dealEditView, dealListItemView, dealView, profileView, shareText, templatesView, userView } from '../views.js';
 
 /** Простой счётчик запросов на пользователя: 60/мин (SPEC §17). */
 const RATE_LIMIT = 60;
@@ -71,6 +74,32 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
     // Расписание группирует сделки по дням на клиенте — отдаём до 200 строк (ЗАДАЧА_04 C3).
     const items = await inTx((c) => dealsRepo.listItemsForUser(c, user.maxUserId, { ...parsed.data, limit: 200 }));
     return { items: items.map(dealListItemView) };
+  });
+
+  // Карточка сделки для форм правки и повтора — только участнику (SPEC §7.8).
+  app.get<{ Params: { publicId: string } }>('/api/deals/:publicId', async (req, reply) => {
+    const user = me(req);
+    try {
+      const bundle = await dealService.getBundle(checkedPublicId(req.params.publicId));
+      return dealEditView(bundle, viewerRole(bundle, user.maxUserId));
+    } catch (e) {
+      return sendError(reply, e);
+    }
+  });
+
+  // T5: новая версия условий — только исполнитель, только до подтверждения клиентом (SPEC §5.2, §7.8).
+  app.put<{ Params: { publicId: string } }>('/api/deals/:publicId', async (req, reply) => {
+    const user = me(req);
+    const parsed = updateDealSchema.safeParse(req.body);
+    if (!parsed.success) return fail(reply, 400, 'validation', firstIssue(parsed.error.issues));
+    try {
+      const actor = { userId: user.maxUserId, role: 'seller' as const };
+      const result = await dealService.newVersion(checkedPublicId(req.params.publicId), actor, termsOf(parsed.data));
+      const { clientNotified } = deps.max ? await publishNewVersion(deps.max, result) : { clientNotified: false };
+      return { deal: dealView(result.bundle), version: result.bundle.deal.currentVersion, client_notified: clientNotified };
+    } catch (e) {
+      return sendError(reply, e);
+    }
   });
 
   app.put('/api/me/profile', async (req, reply) => {
@@ -195,17 +224,57 @@ function firstIssue(issues: { message: string; path: (string | number | symbol)[
   return i ? i.message : 'Проверьте заполнение полей';
 }
 
-function fail(reply: FastifyReply, status: number, code: string, message: string) {
+function fail(reply: FastifyReply, status: number, code: string, message: string, extra?: Record<string, unknown>) {
   reply.code(status);
-  return { error: { code, message } };
+  return { error: { code, message, ...extra } };
+}
+
+/** public_id не того вида — такой сделки нет (404), в БД не ходим. */
+function checkedPublicId(publicId: string): string {
+  if (!PUBLIC_ID_RE.test(publicId)) throw new NotFoundError(`сделка ${publicId}`);
+  return publicId;
+}
+
+/** Роль смотрящего; в демо он и исполнитель, и клиент — главная роль исполнителя. Посторонний — 403. */
+function viewerRole(bundle: DealBundle, userId: number): 'seller' | 'client' {
+  const roles = dealService.participantRole(bundle.deal, userId);
+  if (roles.includes('seller')) return 'seller';
+  if (roles.includes('client')) return 'client';
+  throw new ForbiddenError('not_participant');
+}
+
+/** Тело формы → условия новой версии (рубли → копейки); пустые «Уточнения» — null. */
+function termsOf(body: Omit<CreateDealBody, 'template'>): dealService.NewVersionInput {
+  return {
+    title: body.title,
+    description: body.description ?? null,
+    scheduledAt: body.scheduled_at ? new Date(body.scheduled_at) : null,
+    totalKopecks: rublesToKopecks(body.total_rub),
+    prepaymentKopecks: rublesToKopecks(body.prepayment_rub),
+    cancelRule: body.cancel_rule,
+    photoMaxToken: body.photo_max_token,
+  };
 }
 
 function sendError(reply: FastifyReply, e: unknown) {
   if (e instanceof UnauthorizedError) return fail(reply, 401, e.code, 'Откройте мини-приложение внутри MAX');
   if (e instanceof ValidationError) return fail(reply, 400, 'validation', e.message);
+  if (e instanceof DealNotEditableError) return fail(reply, 409, e.code, texts.API_NOT_EDITABLE, { status: e.status });
   if (e instanceof AppError) {
-    const status = e.code === 'forbidden' ? 403 : e.code === 'deal_not_found' ? 404 : e.code === 'invalid_transition' ? 409 : 500;
-    return fail(reply, status, e.code, status === 500 ? 'Внутренняя ошибка, попробуйте позже' : e.message);
+    switch (e.code) {
+      case 'forbidden':
+        return fail(reply, 403, 'forbidden', texts.API_FORBIDDEN_DEAL);
+      case 'deal_not_found':
+        return fail(reply, 404, 'not_found', texts.API_DEAL_NOT_FOUND);
+      case 'no_changes':
+        return fail(reply, 409, 'no_changes', texts.API_NO_CHANGES);
+      case 'invalid_transition':
+        return fail(reply, 409, e.code, e.message);
+      default:
+        break;
+    }
+    log.error({ err: e.message, code: e.code }, 'API: ошибка домена');
+    return fail(reply, 500, 'internal', 'Внутренняя ошибка, попробуйте позже');
   }
   log.error({ err: (e as Error).message }, 'API: необработанная ошибка');
   return fail(reply, 500, 'internal', 'Внутренняя ошибка, попробуйте позже');

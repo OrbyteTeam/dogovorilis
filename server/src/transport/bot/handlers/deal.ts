@@ -54,8 +54,8 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
       await openCard(ctx, deps, bundle, viewRole, userId, chatId);
       return;
 
-    case 'cf':
-      await publishResult(ctx, deps, await dealService.confirm(parsed.publicId, actor), viewRole);
+    case 'cf': // `cf:<id>:<v>` — подтверждается версия с кнопки; без неё — версия 1 (карточки до T5, SPEC §13)
+      await publishResult(ctx, deps, await dealService.confirm(parsed.publicId, actor, undefined, parsed.arg ? Number(parsed.arg) : 1), viewRole);
       return;
 
     case 'cr':

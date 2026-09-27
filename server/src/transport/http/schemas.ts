@@ -33,6 +33,12 @@ export const createDealSchema = z.object({
   profile: profileSchema.optional(),
 });
 
+/**
+ * PUT /api/deals/:publicId (T5): та же схема, что у создания, — форма одна. Шаблон и профиль при правке
+ * не используются, поэтому необязательны; прочие лишние поля zod отбрасывает.
+ */
+export const updateDealSchema = createDealSchema.extend({ template: templateSchema.optional() });
+
 /** Query для GET /api/deals (SPEC §7.8); отсутствующие параметры — значения по умолчанию. */
 export const dealListQuerySchema = z.object({
   role: z.enum(['seller', 'client', 'all']).default('all'),

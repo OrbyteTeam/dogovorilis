@@ -192,9 +192,9 @@ pino JSON; каждый входящий update/запрос — `request_id`; �
 |---|---|---|---|---|---|---|
 | T1 | — | `POST /api/deals` | seller | валидная версия v1 | `awaiting_confirmation` | `expires_at = now + 72h`; событие `deal.created`; карточка исполнителю; напоминания `client_not_opened`(+24h), `confirmation_expired`(+72h) |
 | T2 | `awaiting_confirmation` | клиент открыл ссылку (`bot_started` с `d_<id>`) | client | клиента ещё нет или это тот же клиент | без смены статуса | `client_user_id`, `client_joined_at`; событие `client.joined`; карточка клиенту; исполнителю уведомление N1; отмена `client_not_opened` |
-| T3 | `awaiting_confirmation` | кнопка «Подтверждаю» | client | версия = текущая | `awaiting_prepayment` если `prepayment > 0`, иначе `scheduled` | `confirmed_at` в версии и сделке; событие `version.confirmed`; напоминания: `prepayment_due`(+24h), `prepayment_overdue`(+48h) **или** `event_tomorrow`/`event_passed` (§10); карточки обеих сторон; исполнителю N2 |
+| T3 | `awaiting_confirmation` | кнопка «Подтверждаю» (`cf:<id>:<v>`) | client | версия = текущая: сверяется под `FOR UPDATE`; не совпала — перехода нет, ответ карточкой с заметкой «Условия изменились — посмотрите новую версию»; кнопка без версии (карточки до ЗАДАЧА_04) проходит, только если текущая версия 1 | `awaiting_prepayment` если `prepayment > 0`, иначе `scheduled` | `confirmed_at` в версии и сделке; событие `version.confirmed`; напоминания: `prepayment_due`(+24h), `prepayment_overdue`(+48h) **или** `event_tomorrow`/`event_passed` (§10); карточки обеих сторон; исполнителю N2 |
 | T4 | `awaiting_confirmation` | «Предложить изменения» + текст | client | текст 1–500 симв. | `changes_requested` | событие `version.change_requested {text}`; исполнителю N3 с текстом и кнопками «Изменить условия» (open_app) / «Оставить как есть» |
-| T5 | `changes_requested` | `PUT /api/deals/:id` (новая версия) | seller | — | `awaiting_confirmation` | `current_version + 1`, `expires_at = now + 72h`; событие `version.created {version}`; карточки обеих сторон; клиенту N4 |
+| T5 | `awaiting_confirmation`, `changes_requested` | «✏️ Изменить условия» (open_app `edit_<id>`) → `PUT /api/deals/:id` | seller | изменилось хотя бы одно поле условий (иначе 409 `no_changes`); из других статусов — 409 `deal_not_editable` | `awaiting_confirmation` | новая строка `deal_versions` (прежние не редактируются), `current_version + 1`, `status_changed_at = now` (напоминания перепланируются от новой версии), `expires_at = now + 72h`, `confirmed_at = NULL`; событие `version.created {version, changed[]}`; карточки обеих сторон (строка «Версия N · условия изменены …»); клиенту N4 с перечнем изменившихся полей; исполнителю «Условия #{id} обновлены, клиент получил версию N» |
 | T6 | `changes_requested` | «Оставить как есть» | seller | — | `awaiting_confirmation` | `expires_at` обновить; клиенту N5 (та же версия) |
 | T7 | `awaiting_confirmation` | «Отказаться» → «Да, отказаться» | client | — | `declined` | событие `deal.declined`; исполнителю N6; все напоминания → cancelled |
 | T8 | `awaiting_confirmation`, `changes_requested` | таймер 72 ч | system | — | `expired` | событие `deal.expired`; обеим N7 (клиенту — только если открывал) |
@@ -314,6 +314,7 @@ provider_payment_id, текст). `seq` — монотонный внутри с
 ```
 {статус-эмодзи} **{title}** · #{public_id}
 Статус: {статус-текст для роли}
+{Версия {n} · условия изменены {дд.мм чч:мм (МСК)}}   ← только если версия > 1 (время создания текущей версии)
 
 📌 {description или «—»}
 🗓 {дата-время или «без даты»}
@@ -337,7 +338,10 @@ provider_payment_id, текст). `seq` — монотонный внутри с
 Карточка исполнителя с ссылкой (клиент не открыл): под текстом строка «🔗 Ссылка для клиента: `https://max.ru/{bot}?start=d_{id}`»
 и кнопки: [📤 Отправить в MAX (link → `https://max.ru/:share?text={urlencoded «Подтвердите нашу договорённость: {название}, {дата} (МСК)\n{ссылка}»}`) — ссылка ровно
 один раз: у `:share` документирован только `text` (CONTRACTS §5.3); мини-приложение передаёт тот же текст без ссылки, а ссылку — отдельным `link` в `shareMaxContent` (ЗАДАЧА_04 A1)]
-[📋 Скопировать ссылку (clipboard, payload = ссылка)] / [✏️ Изменить условия (open_app, payload `d_{id}`)] [🧪 Открыть как клиент (callback `dm:{id}`)] / [🚫 Отменить (callback `cn:{id}`)].
+[📋 Скопировать ссылку (clipboard, payload = ссылка)] / [✏️ Изменить условия (open_app, payload `edit_{id}`)] [🧪 Открыть как клиент (callback `dm:{id}`)] / [🚫 Отменить (callback `cn:{id}`)].
+«✏️ Изменить условия» есть у исполнителя в `awaiting_confirmation` (и до, и после входа клиента) и в `changes_requested` — своим рядом
+(подпись длинная). Лимит 12 строк держится выбрасыванием необязательных строк в порядке: макет → ссылка для клиента → строка версии →
+строка чека. Кнопка клиента «✅ Подтверждаю» несёт номер версии: `cf:{id}:{v}`.
 
 **Ответ на нажатие — всегда карточкой (правило, 22.09).** `POST /answers` в MAX **правит сообщение, на кнопке
 которого нажали**. Поэтому любое нажатие кнопки на сообщении-карточке отвечается перерисованной карточкой
@@ -364,8 +368,9 @@ provider_payment_id, текст). `seq` — монотонный внутри с
 |---|---|---|
 | N1 | seller | «👀 {client} открыл(а) карточку #{id}.» |
 | N2 | seller | «✅ {client} подтвердил(а) условия #{id}. {Ждём предоплату {sum} / Всё согласовано на {дата}}.» |
-| N3 | seller | «✏️ {client} предлагает изменения по #{id}:\n> {text}» + кнопки [Изменить условия (open_app `d_{id}`)] [Оставить как есть (`ka:{id}`)] |
-| N4 | client | «🔄 Исполнитель обновил условия #{id} (версия {v}). Проверьте карточку.» |
+| N3 | seller | «✏️ {client} предлагает изменения по #{id}:\n> {text}\n\nИзмените условия или оставьте как есть.» + кнопки [✏️ Изменить условия (open_app `edit_{id}`)] [Оставить как есть (`ka:{id}`)] [🚫 Отменить (`cn:{id}`)] |
+| N4 | client | «✏️ Исполнитель изменил условия #{id} (версия {v}): срок → сб, 27 сен, 14:00 (МСК); сумма → 3 000 ₽, предоплата → 600 ₽. Проверьте и подтвердите.» — только изменившиеся поля, по порядку: что делаем → «{название}»; уточнения → изменены; срок → {дата} / без даты; сумма → {sum}, предоплата → {sum} / без предоплаты; правило отмены → {текст правила} + [Открыть] |
+| N4a | seller (в ответ на T5) | «✏️ Условия #{id} обновлены, клиент получил версию {v}.» / клиента ещё нет — «… — клиент увидит версию {v}, когда откроет ссылку.» / N4 не доставлен (нет диалога) — «… — клиент увидит версию {v} в карточке, когда вернётся в чат с ботом.» + [Открыть] |
 | N5 | client | «ℹ️ Исполнитель оставил условия #{id} без изменений. Подтвердите или откажитесь.» |
 | N6 | seller | «⛔ {client} отказался(ась) от #{id}.» |
 | N7 | обе | «⌛ Срок подтверждения #{id} истёк (72 ч). Сделка закрыта. Можно создать новую.» |
@@ -530,8 +535,8 @@ React 19.2.8 + MAX UI 0.5.0 (`docs/DESIGN.md`), hash-роутинг (`/app/#/new
 | `GET /api/templates` | — | `Template[]` (§7.6) |
 | `POST /api/deals` | `{ template, title, description?, scheduled_at? (ISO), total_rub (int), prepayment_rub (int), cancel_rule, photo_max_token?, profile? (если профиля нет — те же поля, что PUT /api/me/profile) }` | `{ deal: DealView, link: string, share_text: string, card_sent: boolean }` |
 | `GET /api/deals?role=seller\|client\|all&filter=active\|awaiting_payment\|done\|all` | — | `{ items: DealListItem[] }` |
-| `GET /api/deals/:publicId` | — | `{ deal: DealView, versions: Version[], payments: Payment[], events: Event[], receipt: Receipt \| null }` (403, если не участник) |
-| `PUT /api/deals/:publicId` | как POST без `template`/`profile` | `DealView` (только исполнитель; только T5) |
+| `GET /api/deals/:publicId` | — | только участнику (иначе 403 `forbidden`; нет сделки — 404 `not_found`): `{ public_id, status, version, role: 'seller'\|'client', demo, template, title, description \| null, scheduled_at: ISO \| null, total_rub, prepayment_rub, cancel_rule, client: {name} \| null, can_edit, can_repeat, same_client_available }` — предзаполнение форм правки (T5) и повтора; суммы — целые рубли текущей версии; `can_edit` — исполнитель и статус `awaiting_confirmation`/`changes_requested`; `can_repeat` — исполнитель, статус терминальный, не демо; `same_client_available` — `can_repeat` и у сделки настоящий клиент (не демо) |
+| `PUT /api/deals/:publicId` | как POST (`template`, `profile`, `repeat_of`, `same_client` игнорируются и необязательны) | T5, только исполнитель (иначе 403 `forbidden`): `{ deal: DealView, version, client_notified }`; статус не `awaiting_confirmation`/`changes_requested` — 409 `{ error: { code: 'deal_not_editable', message, status } }`; ни одно поле условий не изменилось (название, уточнения — пустые и `null` равны, дата, сумма, предоплата, правило отмены) — 409 `no_changes` |
 | `POST /api/deals/:publicId/actions` | `{ action: 'done'\|'cancel'\|'keep_as_is'\|'fixed'\|'close_without_receipt'\|'remind_client', reason?: string }` | `DealView` / 409 |
 | `POST /api/uploads` (Should) | multipart `file` | `{ max_token }` (сервер грузит в MAX `POST /uploads?type=image`) |
 | `GET /api/deals/:publicId/receipt.pdf` | — | PDF (только участник; генерируется по требованию, кэш не нужен) |
@@ -733,11 +738,11 @@ DDL — `server/migrations/0001_init.sql` (первичен). Ключевые �
 | Ссылка | Формат | Где приходит |
 |---|---|---|
 | Клиенту в сделку | `https://max.ru/{bot}?start=d_{public_id}` | `bot_started.payload = 'd_<id>'` (≤ 128 симв.) |
-| Мини-приложение, экран | `https://max.ru/{bot}?startapp=new` \| `deals` \| `settings` \| `d_{public_id}` | `initDataUnsafe.start_param` (только `A-Za-z0-9_-`, ≤ 512) |
+| Мини-приложение, экран | `https://max.ru/{bot}?startapp=new` \| `deals` \| `settings` \| `d_{public_id}` \| `edit_{public_id}` | `initDataUnsafe.start_param` (только `A-Za-z0-9_-`, ≤ 512); кнопки open_app бота передают то же в `payload`: `edit_<id>` — «✏️ Изменить условия» (T5) |
 | Шеринг | `https://max.ru/:share?text={urlencoded}` | экран «Отправить в MAX» |
 Payload `d_<id>`: `^d_[A-Za-z0-9]{10}$`; всё иное в `?start=` — игнорируется (меню S1). Ссылка — секрет-возможность (unguessable id),
 других прав доступа к ней нет; повторное открытие тем же клиентом — идемпотентно.
-Callback payload кнопок: `^[a-z]{2}(:[a-z])?:[A-Za-z0-9]{10}(:[A-Za-z0-9]+)?$`, коды: `cf` подтвердить, `cr` предложить изменения, `dc` отказаться, `dc:y` подтвердить отказ,
+Callback payload кнопок: `^[a-z]{2}(:[a-z])?:[A-Za-z0-9]{10}(:[A-Za-z0-9]+)?$`, коды: `cf` подтвердить (`cf:<id>:<v>` — номер версии условий; без `:<v>` — только версия 1, §5.2 T3), `cr` предложить изменения, `dc` отказаться, `dc:y` подтвердить отказ,
 `pl` оплата по ссылке, `pt` перевод, `tr:c|g|n|x` (перевёл / получил / не вижу / отмена рейла), `pc` проверить оплату, `pe` эмулировать (tbank demo), `nl` новая ссылка, `dn` выполнено, `ac` принять,
 `rm` замечания, `fx` исправлено, `rc` приложить чек, `nc` закрыть без чека, `nc:y` подтвердить закрытие без чека, `cn` отменить, `cn:y` подтвердить отмену (`cn:y:<id>:none` — без причины), `ka` оставить как есть,
 `rs` напомнить клиенту, `dm` демо, `op` открыть карточку, `pdf` квитанция, `rf:s|c` возврат (§5.3); кнопки меню без id сделки:
@@ -764,7 +769,7 @@ Callback payload кнопок: `^[a-z]{2}(:[a-z])?:[A-Za-z0-9]{10}(:[A-Za-z0-9]+
 **Must:** §5 полностью (T1–T17); §6 команды, карточки, уведомления N1–N15, ввод §6.6, ошибки §6.7; §7 экраны New/Done/Deals/Settings
 (без фото); §9.1 оба рейла; §9.2 ЮKassa **или** §9.3 Т-Банк (тот, что в `PAYMENT_PROVIDER`; второй — Should); §9.4; §10 полностью;
 §11; §12; §13; §14 тесты; Docker/README/презентация.
-**Should:** второй провайдер; §7.5 экран сделки с таймлайном; §7.7 телефон (`request_contact`/`requestContact` + HMAC) как подпись;
+**Should:** второй провайдер; экрана сделки нет: карточка в чате; правка — §7.5; §7.7 телефон (`request_contact`/`requestContact` + HMAC) как подпись;
 кнопка «Отправить в MAX» через `shareMaxContent`; тёмная тема (MAX UI даёт автоматически); история версий в PDF; экспорт списка сделок CSV.
 **Could:** фото/макет в карточке; этапы (несколько платежей); QR на квитанции; локализация `user_locale`; групповой чат «карточка в общем чате».
 **Won't (в этой версии, осознанно):** приём денег «на себя» и любые расчёты между сторонами (103-ФЗ); автоформирование чека НПД

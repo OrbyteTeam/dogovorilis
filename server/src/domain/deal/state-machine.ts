@@ -60,8 +60,7 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     to: (ctx) => (ctx.prepaymentKopecks > 0 ? 'awaiting_prepayment' : 'scheduled'),
   },
   { id: 'T4', from: ['awaiting_confirmation'], action: 'request_changes', roles: ['client'], to: 'changes_requested' },
-  // T5: новая версия условий. §5.2 называет только `changes_requested`, но §7.5 и §7.8 разрешают «Изменить условия»
-  // и в `awaiting_confirmation` («после сохранения — T5») — целевой статус там тот же, поэтому оба исходных статуса.
+  // T5: новая версия условий — пока клиент не подтвердил: и в ожидании подтверждения, и после «Предложить изменения».
   { id: 'T5', from: ['changes_requested', 'awaiting_confirmation'], action: 'new_version', roles: ['seller'], to: 'awaiting_confirmation' },
   { id: 'T6', from: ['changes_requested'], action: 'keep_as_is', roles: ['seller'], to: 'awaiting_confirmation' },
   { id: 'T7', from: ['awaiting_confirmation'], action: 'decline', roles: ['client'], to: 'declined' },
@@ -87,6 +86,9 @@ export const TRANSITIONS: readonly TransitionRule[] = [
   { id: 'T16', from: SELLER_CANCELLABLE, action: 'cancel', roles: ['seller'], to: 'cancelled' },
   { id: 'T17', from: ['awaiting_prepayment', 'scheduled'], action: 'cancel', roles: ['client'], to: 'cancelled' },
 ];
+
+/** Статусы, в которых исполнитель может изменить условия (T5): до подтверждения клиентом. */
+export const EDITABLE_STATUSES: readonly DealStatus[] = TRANSITIONS.find((r) => r.id === 'T5')!.from;
 
 function resolveTo(rule: TransitionRule, ctx: TransitionContext): DealStatus {
   return typeof rule.to === 'function' ? rule.to(ctx) : rule.to;

@@ -28,7 +28,9 @@ import {
   N15,
   N2,
   N3,
+  N4,
   N8,
+  TERMS_UPDATED,
   P1,
   P2,
   S1,
@@ -283,6 +285,13 @@ describe('карточка (SPEC §6.4, DESIGN §6)', () => {
     expect(card(view({ clientLink: LINK }))).toContain(`\`${LINK}\``);
   });
 
+  it('версия > 1 — строка «Версия N · условия изменены …» под статусом; у версии 1 её нет', () => {
+    const at = new Date('2026-09-26T11:24:00Z');
+    const lines = card(view({ version: 2, versionCreatedAt: at })).split('\n');
+    expect(lines[2]).toBe(`Версия 2 · условия изменены ${formatDateTimeShort(at)}`);
+    expect(card(view({ version: 1, versionCreatedAt: at }))).not.toContain('Версия');
+  });
+
   it('многострочное описание не увеличивает число строк', () => {
     const text = card(view({ description: 'Первая строка\nвторая строка\n\nтретья' }));
     expect(text).toContain('📌 Первая строка вторая строка третья');
@@ -321,6 +330,23 @@ describe('карточка (SPEC §6.4, DESIGN §6)', () => {
     expect(text).toContain('…'); // описание обрезано, а не выкинуто
   });
 
+  it('версия + реквизиты перевода в демо-карточке: 12 строк, строка версии уступает место', () => {
+    const text = card(
+      view({
+        status: 'awaiting_prepayment',
+        role: 'client_demo',
+        demo: true,
+        clientName: 'демо-клиент (вы)',
+        hasPhoto: true,
+        version: 2,
+        versionCreatedAt: new Date('2026-09-26T11:24:00Z'),
+        transferLines: ['💸 Переведите **500 ₽** по реквизитам:', '`СБП +7 900`', '🧪 Перевод продукт не видит'],
+      }),
+    );
+    expect(text.split('\n').length).toBeLessThanOrEqual(12);
+    expect(text).toContain('💸 Переведите'); // реквизиты важнее строки версии
+  });
+
   it('лимиты соблюдаются для всех статусов и ролей', () => {
     for (const status of ALL_STATUSES) {
       for (const role of CARD_ROLES) {
@@ -342,6 +368,8 @@ describe('карточка (SPEC §6.4, DESIGN §6)', () => {
               linkExpiresAt: null,
             }),
             receiptLine: receiptLine({ attachedAt: null, deadline: new Date('2026-10-09T20:59:00Z'), taxModeNone: false }),
+            version: 3,
+            versionCreatedAt: new Date('2026-09-26T11:24:00Z'),
           }),
         );
         expect(text.split('\n').length, `${status}/${role}`).toBeLessThanOrEqual(12);
@@ -520,9 +548,31 @@ describe('уведомления (SPEC §6.5)', () => {
   it('N3 и N11 оформляют пользовательский текст цитатой и экранируют его', () => {
     const n3 = N3({ client: 'Иван И.', id: ID, text: 'Давайте 15:00\nи *без* предоплаты' });
     expect(n3.startsWith(`✏️ Иван И. предлагает изменения по #${ID}:\n> Давайте 15:00\n> и \\*без\\* предоплаты\n\n`)).toBe(true);
-    // Экрана правки условий (T5) нет — N3 честно говорит, что делать (ЗАДАЧА_03 S4)
-    expect(n3).toContain('создайте новую сделку');
+    // Правка условий (T5) есть — N3 больше не отправляет создавать новую сделку (ЗАДАЧА_04 E)
+    expect(n3.endsWith('\n\nИзмените условия или оставьте как есть.')).toBe(true);
+    expect(n3).not.toContain('новую сделку');
     expect(N11({ client: 'Иван И.', id: ID, text: '# плохо' })).toContain('> \\# плохо');
+  });
+
+  it('N4 перечисляет только изменившиеся поля, в порядке карточки', () => {
+    const terms = { title: 'Маникюр *люкс*', scheduledAt: SCHEDULED, totalKopecks: 300_000, prepaymentKopecks: 60_000, cancelRule: 'free_48h' as const };
+    expect(N4({ id: ID, version: 2, changed: ['total', 'scheduled_at', 'prepayment'], terms })).toBe(
+      `✏️ Исполнитель изменил условия #${ID} (версия 2): срок → ${formatDateTime(SCHEDULED)}; сумма → ${formatMoney(300_000)}, предоплата → ${formatMoney(60_000)}. Проверьте и подтвердите.`,
+    );
+    const all = N4({ id: ID, version: 3, changed: ['title', 'description', 'scheduled_at', 'total', 'prepayment', 'cancel_rule'], terms: { ...terms, scheduledAt: null, prepaymentKopecks: 0 } });
+    expect(all).toContain('что делаем → «Маникюр \\*люкс\\*»; уточнения → изменены; срок → без даты; ');
+    expect(all).toContain('предоплата → без предоплаты; правило отмены → отмена без потери предоплаты за 48 ч');
+    expect(N4({ id: ID, version: 2, changed: ['description'], terms })).toBe(
+      `✏️ Исполнитель изменил условия #${ID} (версия 2): уточнения → изменены. Проверьте и подтвердите.`,
+    );
+    // старое событие без перечня — общий текст
+    expect(N4({ id: ID, version: 2 })).toBe(`✏️ Исполнитель изменил условия #${ID} (версия 2). Проверьте и подтвердите.`);
+  });
+
+  it('ответ исполнителю после правки условий — по тому, дошла ли версия до клиента', () => {
+    expect(TERMS_UPDATED({ id: ID, version: 2, client: 'notified' })).toBe(`✏️ Условия #${ID} обновлены, клиент получил версию 2.`);
+    expect(TERMS_UPDATED({ id: ID, version: 2, client: 'no_client' })).toContain('когда откроет ссылку');
+    expect(TERMS_UPDATED({ id: ID, version: 2, client: 'not_delivered' })).toContain('когда вернётся в чат с ботом');
   });
 
   it('имя клиента экранируется во всех уведомлениях, где оно есть', () => {

@@ -3,6 +3,7 @@
 // Ограничения платформы: ≤ 7 кнопок в ряду и ≤ 3 для link/open_app (CONTRACTS §1.2, §1.9).
 import { Keyboard } from '@maxhub/max-bot-api';
 import type { Button } from '@maxhub/max-bot-api/types';
+import { botUsername } from '../../config.js';
 import { BTN, shareInvite } from '../../texts.js';
 import type { AttachmentRequest } from '../../integrations/max/gateway.js';
 import type { CardRole, DealBundle, Payment, PaymentKind } from '../../types.js';
@@ -51,6 +52,14 @@ const callback = (text: string, payload: string) => Keyboard.button.callback(tex
 const link = (text: string, url: string) => Keyboard.button.link(text, url);
 const clipboard = (text: string, payload: string) => Keyboard.button.clipboard(text, payload);
 const openApp = (text: string, bot: string, payload?: string) => Keyboard.button.openApp(text, bot, undefined, payload);
+
+/**
+ * «✏️ Изменить условия» (T5): мини-приложение открывается сразу на форме правки — start_param `edit_<id>` (SPEC §13).
+ * Подпись длинная — всегда своим рядом (≤ 3 open_app/link в ряду, CONTRACTS §1.9).
+ */
+export function editTermsButton(bot: string, publicId: string): Button {
+  return openApp(BTN.editTerms, bot, `edit_${publicId}`);
+}
 
 /**
  * Главное меню (SPEC §6.2): пять кнопок. Демо и сделка-пример спрятаны за «🧪 Попробовать» —
@@ -116,18 +125,20 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
 
   if (isSeller) {
     switch (status) {
-      // «✏️ Изменить условия» (T5) скрыта, пока нет экрана редактирования в мини-приложении (ЗАДАЧА_04):
-      // open_app с `d_<id>` открывал экран «Готово», то есть кнопка вела в никуда (ЗАДАЧА_03 S4).
+      // «✏️ Изменить условия» (T5) — пока клиент не подтвердил: и до его входа по ссылке, и после (SPEC §5.5).
       case 'awaiting_confirmation':
         if (!bundle.deal.clientUserId) {
           const invite = shareInvite(bundle.version.title, bundle.version.scheduledAt);
           rows.push(...pair(link(BTN.sendToMax, shareUrl(o.dealLink, invite)), clipboard(BTN.copyLink, o.dealLink)));
+          rows.push([editTermsButton(o.botUsername, id)]);
           if (o.demoMode) rows.push([callback(BTN.openAsClient, cb('dm', id))]);
         } else {
+          rows.push([editTermsButton(o.botUsername, id)]);
           rows.push([callback(BTN.remindClient, cb('rs', id))]);
         }
         break;
       case 'changes_requested':
+        rows.push([editTermsButton(o.botUsername, id)]);
         rows.push([callback(BTN.keepAsIs, cb('ka', id))]);
         break;
       case 'awaiting_prepayment':
@@ -164,7 +175,8 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
   // клиент (и демо-клиент)
   switch (status) {
     case 'awaiting_confirmation':
-      rows.push([callback(BTN.confirm, cb('cf', id))]);
+      // Версия на кнопке: подтверждается ровно то, что клиент видит (T3; после T5 старая кнопка не сработает).
+      rows.push([callback(BTN.confirm, cb('cf', id, undefined, bundle.deal.currentVersion))]);
       rows.push(...pair(callback(BTN.requestChanges, cb('cr', id)), callback(BTN.decline, cb('dc', id))));
       break;
     case 'changes_requested':
@@ -261,9 +273,10 @@ export function cancelReasonKeyboard(publicId: string): AttachmentRequest {
   ]);
 }
 
-/** Кнопки уведомлений N3 (предложены изменения) и N11 (замечания). «Изменить условия» — после ЗАДАЧА_04 (T5). */
+/** Кнопки уведомлений N3 (предложены изменения: изменить условия, оставить как есть, отменить) и N11 (замечания). */
 export function n3Keyboard(publicId: string): AttachmentRequest {
   return keyboard([
+    [editTermsButton(botUsername(), publicId)],
     [Keyboard.button.callback(BTN.keepAsIs, cb('ka', publicId))],
     [Keyboard.button.callback(BTN.cancelDeal, cb('cn', publicId))],
   ]);

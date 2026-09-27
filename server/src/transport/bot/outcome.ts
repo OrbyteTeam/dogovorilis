@@ -5,8 +5,11 @@ import type { MaxGateway } from '../../integrations/max/gateway.js';
 import * as dealService from '../../domain/deal/service.js';
 import type { ServiceResult } from '../../domain/deal/service.js';
 import type { ApplyResult } from '../../domain/payment/rails.js';
+import { log } from '../../logger.js';
+import * as texts from '../../texts.js';
 import { syncCards } from './cards.js';
-import { notifyForEvents } from './notify.js';
+import { openKeyboard } from './keyboards.js';
+import { deliver, notifyForEvents } from './notify.js';
 import { renderAndSendReceipt } from './receipt.js';
 
 /** Сделка закрылась именно этим результатом (T15): пора отправлять квитанцию. */
@@ -43,4 +46,25 @@ export async function notifyPaymentEvents(max: MaxGateway, applied: ApplyResult)
   if (!applied.events.length) return;
   const bundle = applied.transition?.bundle ?? (await dealService.getBundleById(applied.payment.dealId));
   await notifyForEvents(max, bundle, applied.events);
+}
+
+/**
+ * T5 из мини-приложения (PUT /api/deals/:id): обе карточки перерисованы (у клиента снова «Подтверждаю» с новой
+ * версией), клиенту N4 с перечнем изменений, исполнителю в чат — дошла ли версия до клиента (N4a).
+ * Сбой доставки версию не отменяет: она уже записана, повтор запроса вернул бы 409 no_changes.
+ */
+export async function publishNewVersion(max: MaxGateway, result: ServiceResult): Promise<{ clientNotified: boolean }> {
+  const { bundle } = result;
+  try {
+    await syncCards(max, bundle);
+    const delivered = await notifyForEvents(max, bundle, result.events);
+    const clientNotified = delivered.some((d) => d.to === 'client' && d.delivered);
+    const client = clientNotified ? 'notified' : bundle.deal.clientUserId === null ? 'no_client' : 'not_delivered';
+    const text = texts.TERMS_UPDATED({ id: bundle.deal.publicId, version: bundle.deal.currentVersion, client });
+    await deliver(max, bundle, { to: 'seller', text, keyboard: openKeyboard(bundle.deal.publicId) });
+    return { clientNotified };
+  } catch (e) {
+    log.warn({ deal: bundle.deal.publicId, err: (e as Error).message }, 'новая версия записана, но не доставлена сторонам');
+    return { clientNotified: false };
+  }
 }

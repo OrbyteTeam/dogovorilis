@@ -8,7 +8,7 @@ import * as usersRepo from '../../db/repos/users.js';
 import type { AttachmentRequest, MaxGateway } from '../../integrations/max/gateway.js';
 import { log } from '../../logger.js';
 import * as texts from '../../texts.js';
-import { livePayment, remaining, type DealBundle, type DealEvent } from '../../types.js';
+import { livePayment, remaining, TERMS_FIELDS, type DealBundle, type DealEvent, type TermsField } from '../../types.js';
 import { receiptDeadline } from '../../domain/time.js';
 import { taxModeOf } from '../../domain/deal/service.js';
 import { displayName, refundLinesFor } from './cards.js';
@@ -56,10 +56,15 @@ export function noticesFor(bundle: DealBundle, event: DealEvent): Notice[] {
         },
       ];
 
-    case 'version.created':
-      return event.payload.kept_as_is
-        ? [{ to: 'client', text: texts.N5({ id }), keyboard: openKeyboard(id) }]
-        : [{ to: 'client', text: texts.N4({ id, version: Number(event.payload.version ?? bundle.deal.currentVersion) }), keyboard: openKeyboard(id) }];
+    case 'version.created': {
+      if (event.payload.kept_as_is) return [{ to: 'client', text: texts.N5({ id }), keyboard: openKeyboard(id) }];
+      // N4 перечисляет только изменившиеся поля (T5); значения — из новой версии, она уже текущая.
+      const changed = Array.isArray(event.payload.changed)
+        ? (event.payload.changed as unknown[]).filter((f): f is TermsField => TERMS_FIELDS.includes(f as TermsField))
+        : [];
+      const text = texts.N4({ id, version: Number(event.payload.version ?? bundle.deal.currentVersion), changed, terms: bundle.version });
+      return [{ to: 'client', text, keyboard: openKeyboard(id) }];
+    }
 
     case 'deal.declined':
       return [{ to: 'seller', text: texts.N6({ client, id }) }];
@@ -168,13 +173,19 @@ function refundSumOf(bundle: DealBundle): number {
   return claimed?.amountKopecks ?? bundle.version.prepaymentKopecks;
 }
 
-/** Отправить уведомления по списку событий одного перехода. */
-export async function notifyForEvents(max: MaxGateway, bundle: DealBundle, events: DealEvent[]): Promise<void> {
+/** Отправить уведомления по списку событий одного перехода. Возвращает, кому что дошло (T5: `client_notified`). */
+export async function notifyForEvents(
+  max: MaxGateway,
+  bundle: DealBundle,
+  events: DealEvent[],
+): Promise<Array<{ to: Side; delivered: boolean }>> {
+  const out: Array<{ to: Side; delivered: boolean }> = [];
   for (const event of events) {
     for (const notice of noticesFor(bundle, event)) {
-      await deliver(max, bundle, notice);
+      out.push({ to: notice.to, delivered: await deliver(max, bundle, notice) });
     }
   }
+  return out;
 }
 
 /** Ручное напоминание клиенту (кнопка «Напомнить клиенту», N16). */

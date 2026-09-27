@@ -23,6 +23,9 @@ export type AppErrorCode =
   | 'validation'
   | 'rate_limited'
   | 'trial_limit'          // «Слишком много пробных сделок» (сделка-пример и демо из чата)
+  | 'deal_not_editable'    // T5 не из awaiting_confirmation / changes_requested → 409 в API
+  | 'no_changes'           // новая версия совпадает с текущей → 409 в API
+  | 'version_mismatch'     // «Подтверждаю» старой версии после T5 → «Условия изменились»
   | 'internal';            // E10
 
 export class AppError extends Error {
@@ -131,5 +134,29 @@ export class TrialLimitError extends AppError {
   constructor(readonly trial: 'example' | 'demo') {
     super('trial_limit', `лимит пробных сделок «${trial}» за час исчерпан`);
     this.name = 'TrialLimitError';
+  }
+}
+
+/** Условия правятся только до подтверждения клиентом (T5 из awaiting_confirmation / changes_requested). */
+export class DealNotEditableError extends AppError {
+  constructor(readonly status: DealStatus) {
+    super('deal_not_editable', `условия нельзя изменить в статусе ${status}`, { status });
+    this.name = 'DealNotEditableError';
+  }
+}
+
+/** Новая версия ничем не отличается от текущей — создавать её и беспокоить клиента незачем. */
+export class NoChangesError extends AppError {
+  constructor() {
+    super('no_changes', 'условия не изменились');
+    this.name = 'NoChangesError';
+  }
+}
+
+/** Клиент нажал «Подтверждаю» на карточке прежней версии: исполнитель успел изменить условия (T5). */
+export class VersionMismatchError extends AppError {
+  constructor(readonly expected: number, readonly current: number) {
+    super('version_mismatch', `подтверждается версия ${expected}, текущая — ${current}`, { expected, current });
+    this.name = 'VersionMismatchError';
   }
 }
