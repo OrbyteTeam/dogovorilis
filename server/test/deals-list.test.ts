@@ -21,6 +21,7 @@ function item(p: Partial<DealListItem> & { scheduledAt: Date | null }): DealList
     prepaymentKopecks: 50_000,
     paidKopecks: 0,
     updatedAt: NOW,
+    clientName: null,
     ...p,
   };
 }

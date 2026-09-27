@@ -57,6 +57,7 @@ export function dealListItemView(item: DealListItem) {
     prepayment_kopecks: item.prepaymentKopecks,
     paid_kopecks: item.paidKopecks,
     updated_at: item.updatedAt.toISOString(),
+    client_name: item.clientName,
   };
 }
 

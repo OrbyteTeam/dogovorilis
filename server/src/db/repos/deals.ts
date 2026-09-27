@@ -46,6 +46,8 @@ type DealListItemRow = {
   total_kopecks: string | number;
   prepayment_kopecks: string | number;
   paid_kopecks: string | number;
+  client_first_name: string | null;
+  client_last_name: string | null;
 };
 
 function mapDeal(r: DealRow): Deal {
@@ -252,9 +254,11 @@ export async function listItemsForUser(
   const res = await q.query<DealListItemRow>(
     `SELECT d.public_id, d.status, d.demo, d.seller_user_id, d.updated_at,
             v.title, v.scheduled_at, v.total_kopecks, v.prepayment_kopecks,
-            COALESCE(p.paid, 0) AS paid_kopecks
+            COALESCE(p.paid, 0) AS paid_kopecks,
+            cu.first_name AS client_first_name, cu.last_name AS client_last_name
      FROM deals d
      JOIN deal_versions v ON v.deal_id = d.id AND v.version = d.current_version
+     LEFT JOIN users cu ON cu.max_user_id = d.client_user_id AND NOT d.demo
      LEFT JOIN LATERAL (
        SELECT SUM(amount_kopecks) AS paid FROM payments
        WHERE deal_id = d.id AND status = 'succeeded'
@@ -275,6 +279,8 @@ export async function listItemsForUser(
     prepaymentKopecks: Number(r.prepayment_kopecks),
     paidKopecks: Number(r.paid_kopecks),
     updatedAt: r.updated_at,
+    // Как в карточке (displayName): имя и фамилия из MAX; у демо-сделки клиента-человека нет — null.
+    clientName: r.client_first_name === null ? null : [r.client_first_name, r.client_last_name].filter(Boolean).join(' ').trim() || 'без имени',
   }));
 }
 
