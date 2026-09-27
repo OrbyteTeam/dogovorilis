@@ -24,6 +24,14 @@ export function isAvailable(): boolean {
   return (initData()?.length ?? 0) > 0;
 }
 
+/**
+ * «Мы внутри MAX, но вход не подтвердился» отличаем от «открыто в браузере» по наличию initData (ЗАДАЧА_04 D1).
+ * В dev-заглушке VITE_MOCK_AUTH_FAIL=1 считаем, что внутри, — чтобы увидеть экран отказа входа без телефона.
+ */
+export function insideMax(): boolean {
+  return isAvailable() || (import.meta.env.DEV && import.meta.env.VITE_MOCK_AUTH_FAIL === '1');
+}
+
 export function initData(): string | null {
   try {
     const raw = webApp()?.initData;

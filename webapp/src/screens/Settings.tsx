@@ -5,7 +5,7 @@ import { Button, Input, Panel, Radio, Switch, Textarea, Typography } from '@maxh
 
 import { api, errorText } from '../api';
 import { ControlRow } from '../components/ControlRow';
-import { Field } from '../components/Field';
+import { Field, revealField } from '../components/Field';
 import { useToast } from '../components/Toast';
 import {
   CANCEL_RULE_LABEL,
@@ -75,6 +75,8 @@ export function SettingsScreen({ me, onSaved }: SettingsScreenProps) {
     if (Object.keys(errors).length > 0) {
       haptic('error');
       showToast('Проверьте выделенные поля', 'error');
+      const first = errors.display_name ? 'settings-field-name' : 'settings-field-payout';
+      window.requestAnimationFrame(() => revealField(first));
       return;
     }
     if (saving) return;
@@ -127,6 +129,7 @@ export function SettingsScreen({ me, onSaved }: SettingsScreenProps) {
           <Field
             label="Как вас подписать в карточке"
             htmlFor="settings-name"
+            anchorId="settings-field-name"
             hint="Клиент увидит это имя как исполнителя"
             error={shown('display_name')}
           >
@@ -152,6 +155,7 @@ export function SettingsScreen({ me, onSaved }: SettingsScreenProps) {
           <Field
             label="Реквизиты для перевода"
             htmlFor="settings-payout"
+            anchorId="settings-field-payout"
             hint="например: СБП +7 900 000-00-00, Т-Банк, получатель Анна А."
             error={shown('payout_details')}
           >

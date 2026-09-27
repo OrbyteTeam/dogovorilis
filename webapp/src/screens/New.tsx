@@ -5,7 +5,7 @@ import { Button, Input, Panel, Radio, Switch, Textarea, Typography } from '@maxh
 import { api, errorText } from '../api';
 import { disableClosingConfirmation, enableClosingConfirmation, haptic, userDisplayName } from '../bridge';
 import { ControlRow } from '../components/ControlRow';
-import { Field } from '../components/Field';
+import { Field, revealField } from '../components/Field';
 import { Segmented } from '../components/Segmented';
 import { TemplateChips } from '../components/TemplateChips';
 import { useToast } from '../components/Toast';
@@ -37,6 +37,11 @@ type PrepayMode = 'none' | 'p30' | 'p50' | 'custom';
 type FieldName = 'display_name' | 'payout_details' | 'title' | 'description' | 'scheduled_at' | 'total' | 'prepayment';
 
 type Errors = Partial<Record<FieldName, string>>;
+
+/** Порядок полей сверху вниз — к первому с ошибкой форма прокручивает и ставит в него фокус (ЗАДАЧА_04 D1). */
+const FIELD_ORDER: FieldName[] = ['display_name', 'payout_details', 'title', 'description', 'scheduled_at', 'total', 'prepayment'];
+const anchor = (field: FieldName) => `field-${field}`;
+const PREPAY_CUSTOM_ANCHOR = 'field-prepayment-custom';
 
 function digitsOnly(value: string, maxLength: number): string {
   return value.replace(/\D/g, '').replace(/^0+(?=\d)/, '').slice(0, maxLength);
@@ -224,6 +229,11 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
     if (Object.keys(errors).length > 0 || totalRub === null || prepaymentRub === null) {
       haptic('error');
       showToast('Проверьте выделенные поля', 'error');
+      const first = FIELD_ORDER.find((field) => errors[field]);
+      // После перерисовки: подсказки с ошибками уже на месте и не сдвинут поле из-под фокуса.
+      // Ошибка предоплаты при «Своей сумме» — про поле суммы предоплаты, а не про сегменты.
+      const target = first === 'prepayment' && prepayMode === 'custom' ? PREPAY_CUSTOM_ANCHOR : first && anchor(first);
+      if (target) window.requestAnimationFrame(() => revealField(target));
       return;
     }
     if (sending) return;
@@ -279,6 +289,7 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
             <Field
               label="Как вас подписать в карточке"
               htmlFor="display-name"
+              anchorId={anchor('display_name')}
               hint="Клиент увидит это имя как исполнителя"
               error={shown('display_name')}
             >
@@ -314,6 +325,7 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
             <Field
               label="Реквизиты для перевода"
               htmlFor="payout-details"
+              anchorId={anchor('payout_details')}
               hint="например: СБП +7 900 000-00-00, Т-Банк, получатель Анна А."
               error={shown('payout_details')}
             >
@@ -349,7 +361,7 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
             <TemplateChips items={templates} value={templateKey} onSelect={applyTemplate} />
           </Field>
 
-          <Field label="Что делаем" htmlFor="deal-title" error={shown('title')}>
+          <Field label="Что делаем" htmlFor="deal-title" anchorId={anchor('title')} error={shown('title')}>
             <Input
               id="deal-title"
               value={title}
@@ -363,6 +375,7 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
           <Field
             label="Уточнения"
             htmlFor="deal-description"
+            anchorId={anchor('description')}
             hint="Адрес, материалы, что входит в цену — всё, о чём договорились"
             error={shown('description')}
           >
@@ -377,7 +390,13 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
             />
           </Field>
 
-          <Field label="Когда" htmlFor="deal-date" hint="Время по Москве (МСК)" error={shown('scheduled_at')}>
+          <Field
+            label="Когда"
+            htmlFor="deal-date"
+            anchorId={anchor('scheduled_at')}
+            hint="Время по Москве (МСК)"
+            error={shown('scheduled_at')}
+          >
             <div className="dg-field">
               <input
                 id="deal-date"
@@ -407,7 +426,7 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
             </div>
           </Field>
 
-          <Field label="Сумма, ₽" htmlFor="deal-total" error={shown('total')}>
+          <Field label="Сумма, ₽" htmlFor="deal-total" anchorId={anchor('total')} error={shown('total')}>
             <Input
               id="deal-total"
               inputMode="numeric"
@@ -421,6 +440,7 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
 
           <Field
             label="Предоплата"
+            anchorId={anchor('prepayment')}
             error={shown('prepayment')}
             hint={
               prepaymentRub !== null && prepaymentRub > 0
@@ -446,7 +466,7 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
           </Field>
 
           {prepayMode === 'custom' ? (
-            <Field label="Сумма предоплаты, ₽" htmlFor="deal-prepayment">
+            <Field label="Сумма предоплаты, ₽" htmlFor="deal-prepayment" anchorId={PREPAY_CUSTOM_ANCHOR}>
               <Input
                 id="deal-prepayment"
                 inputMode="numeric"

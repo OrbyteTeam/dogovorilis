@@ -1,6 +1,7 @@
 // DEV-ONLY заглушка API для визуальной проверки экранов без сервера: включается VITE_MOCK_API=1.
 // В прод-бандл не попадает — импорт в api.ts стоит под `import.meta.env.DEV` (мёртвая ветка вырезается сборкой).
 // Данные повторяют контракт docs/SPEC.md §7.8 и шаблоны §7.6.
+import { ApiError } from '../api';
 import { moscowInputToIso } from '../format';
 import { addDays, dayKey } from '../schedule';
 import type {
@@ -224,8 +225,12 @@ function createDeal(body: CreateDealRequest): CreateDealResponse {
   };
 }
 
+/** VITE_MOCK_AUTH_FAIL=1 — сервер не принял initData (401): экран «Не удалось подтвердить вход через MAX». */
+const AUTH_FAIL = import.meta.env.VITE_MOCK_AUTH_FAIL === '1';
+
 export async function mockRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
   await delay(300);
+  if (AUTH_FAIL) throw new ApiError(401, 'init_data_invalid', 'Откройте мини-приложение внутри MAX');
   if (method === 'GET' && path === '/me') return me() as unknown as T;
   if (method === 'GET' && path === '/templates') return TEMPLATES as unknown as T;
   if (method === 'GET' && path.startsWith('/deals?')) return listDeals() as unknown as T;

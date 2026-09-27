@@ -38,6 +38,28 @@ export function ErrorScreen({ message, onRetry, retrying = false }: ErrorScreenP
   );
 }
 
+/**
+ * 401 внутри MAX: initData есть, но сервер его не принял (истёк срок, подпись не сошлась) — ЗАДАЧА_04 D1.
+ * Экран W0 «откройте внутри MAX» тут был бы неправдой: человек и так в MAX.
+ */
+export function AuthFailedScreen({ onRetry }: { onRetry: () => void }) {
+  return (
+    <Panel mode="secondary" centeredX centeredY className="dg-root">
+      <div className="dg-screen dg-screen_centered">
+        <Typography.Text variant="subheader" asChild>
+          <h1>Не удалось подтвердить вход через MAX</h1>
+        </Typography.Text>
+        <Typography.Text variant="body" color="secondary">
+          Закройте и откройте мини-приложение заново — MAX выдаст новые данные для входа.
+        </Typography.Text>
+        <Button variant="primary" size="large" stretched onClick={onRetry}>
+          Повторить
+        </Button>
+      </div>
+    </Panel>
+  );
+}
+
 /** Ник бота попадает в бандл при сборке (VITE_BOT_USERNAME): без Bridge спросить его у API нельзя. */
 const BOT_USERNAME = String(import.meta.env.VITE_BOT_USERNAME ?? '').trim();
 

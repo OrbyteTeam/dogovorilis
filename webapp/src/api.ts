@@ -1,5 +1,5 @@
 // Клиент внутреннего API мини-приложения — docs/SPEC.md §7.8 (контракт, коды ошибок) и §7.1 (авторизация по initData).
-import { DEV_NO_BRIDGE, initData } from './bridge';
+import { DEV_NO_BRIDGE, initData, insideMax } from './bridge';
 import type {
   CreateDealRequest,
   CreateDealResponse,
@@ -123,8 +123,12 @@ export const api = {
     get<DealsResponse>(`/deals?role=${q.role}&filter=${q.filter}`),
 };
 
+/** initData не принят сервером, хотя мини-приложение открыто внутри MAX (истёк или подпись не сошлась) — ЗАДАЧА_04 D1. */
+export const AUTH_FAILED_TEXT = 'Не удалось подтвердить вход через MAX. Закройте и откройте мини-приложение заново';
+
 /** Текст для пользователя по любой ошибке запроса (DESIGN.md §5). */
 export function errorText(error: unknown): string {
+  if (error instanceof ApiError && error.isAuth && insideMax()) return AUTH_FAILED_TEXT;
   if (error instanceof ApiError) return error.message;
   if (DEV_NO_BRIDGE && error instanceof Error) return error.message;
   return 'Что-то пошло не так. Попробуйте ещё раз';

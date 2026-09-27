@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { api, ApiError, errorText } from './api';
-import { backButton, DEV_NO_BRIDGE, isAvailable, startParam } from './bridge';
-import { BridgeMissingScreen, ErrorScreen, LoadingScreen } from './components/StateScreen';
+import { backButton, DEV_NO_BRIDGE, insideMax, isAvailable, startParam } from './bridge';
+import { AuthFailedScreen, BridgeMissingScreen, ErrorScreen, LoadingScreen } from './components/StateScreen';
 import { ToastProvider, useToast } from './components/Toast';
 import { DealsScreen } from './screens/Deals';
 import { DoneScreen } from './screens/Done';
@@ -151,7 +151,10 @@ function Router() {
   }, [load]);
 
   if (state.status === 'loading') return <LoadingScreen />;
-  if (state.status === 'unauthorized') return <BridgeMissingScreen />;
+  // 401: вне MAX — экран W0; внутри MAX (initData есть, но не принят) — «закройте и откройте заново» + «Повторить».
+  if (state.status === 'unauthorized') {
+    return insideMax() ? <AuthFailedScreen onRetry={() => void load()} /> : <BridgeMissingScreen />;
+  }
   if (state.status === 'error') return <ErrorScreen message={state.message} onRetry={() => void load()} />;
 
   if (route.name === 'deals') {
@@ -180,6 +183,7 @@ function Router() {
         me={state.data.me}
         result={recallDone(route.id)}
         onNewDeal={() => navigate({ name: 'new' })}
+        onDeals={() => navigate({ name: 'deals' })}
       />
     );
   }
