@@ -67,7 +67,8 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
     const user = me(req);
     const parsed = dealListQuerySchema.safeParse(req.query);
     if (!parsed.success) return fail(reply, 400, 'validation', firstIssue(parsed.error.issues));
-    const items = await inTx((c) => dealsRepo.listItemsForUser(c, user.maxUserId, parsed.data));
+    // Расписание группирует сделки по дням на клиенте — отдаём до 200 строк (ЗАДАЧА_04 C3).
+    const items = await inTx((c) => dealsRepo.listItemsForUser(c, user.maxUserId, { ...parsed.data, limit: 200 }));
     return { items: items.map(dealListItemView) };
   });
 

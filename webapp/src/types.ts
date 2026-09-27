@@ -120,6 +120,8 @@ export interface DealListItem {
   public_id: string;
   status: DealStatus;
   status_text: string;
+  /** Статус одним-двумя словами для строк списка и расписания: «ждём предоплату» (ЗАДАЧА_04 A2). */
+  status_short: string;
   demo: boolean;
   role: 'seller' | 'client';
   title: string;
