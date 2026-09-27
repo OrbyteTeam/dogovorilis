@@ -123,8 +123,23 @@ describe.skipIf(!DB)('API мини-приложения', () => {
       total_kopecks: 250_000,
       prepayment_kopecks: 75_000,
       paid_kopecks: 0,
+      client_name: null, // клиент ещё не открыл ссылку
     });
     expect(res.json.items[0].status_text).toBeTruthy();
+  });
+
+  it('GET /api/deals: client_name — имя клиента, открывшего ссылку (строка расписания, ЗАДАЧА_04 C2)', async () => {
+    const created = await h.api('POST', '/api/deals', SELLER, {
+      template: 'beauty', title: 'Маникюр с покрытием', total_rub: 2500, prepayment_rub: 0,
+      scheduled_at: null, cancel_rule: 'free_24h',
+      profile: { display_name: 'Анна Мастер', tax_mode: 'npd', payout_details: 'СБП', transfer_enabled: true, link_enabled: false, default_cancel_rule: 'free_24h' },
+    });
+    await h.start(SELLER + 1, 9_301, `d_${created.json.deal.public_id}`);
+
+    const seller = await h.api('GET', '/api/deals', SELLER);
+    expect(seller.json.items[0].client_name).toBe(`Пользователь${SELLER + 1}`);
+    const client = await h.api('GET', '/api/deals?role=client', SELLER + 1);
+    expect(client.json.items[0]).toMatchObject({ role: 'client', client_name: `Пользователь${SELLER + 1}` });
   });
 
   it('GET /api/deals: фильтры done и awaiting_payment не показывают новую сделку', async () => {
@@ -164,7 +179,7 @@ describe.skipIf(!DB)('API мини-приложения', () => {
 
     const res = await h.api('GET', '/api/deals?filter=all', SELLER);
     expect(res.json.items).toHaveLength(1);
-    expect(res.json.items[0]).toMatchObject({ demo: true, role: 'seller' });
+    expect(res.json.items[0]).toMatchObject({ demo: true, role: 'seller', client_name: null }); // клиент-человек в демо не показывается
   });
 
   it('GET /api/deals с неизвестным filter — 400 validation', async () => {

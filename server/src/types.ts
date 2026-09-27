@@ -140,6 +140,8 @@ export type DealListItem = {
   prepaymentKopecks: number;
   paidKopecks: number;
   updatedAt: Date;
+  /** Имя клиента для строки расписания (ЗАДАЧА_04 C2); null — клиента нет или сделка демо. */
+  clientName: string | null;
 };
 
 /** Запись дня для утренней сводки исполнителя (ЗАДАЧА_04 B2): сделка с датой в пределах суток по МСК. */
