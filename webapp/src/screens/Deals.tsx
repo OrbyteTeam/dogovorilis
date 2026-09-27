@@ -173,6 +173,12 @@ export function DealsScreen({ me, onNewDeal, onEdit, onRepeat }: DealsScreenProp
     }
   }
 
+  function openChat() {
+    if (!openBot(me.config.bot_username)) {
+      showToast('Не удалось открыть чат с ботом. Откройте его в MAX вручную', 'error');
+    }
+  }
+
   function actionsFor(item: DealListItem): DealRowAction[] {
     const actions: DealRowAction[] = [{ label: 'Открыть в чате', onClick: () => openInChat(item.public_id) }];
     if (item.role !== 'seller') return actions;
@@ -273,9 +279,14 @@ export function DealsScreen({ me, onNewDeal, onEdit, onRepeat }: DealsScreenProp
 
         {body}
 
-        <Typography.Text variant="description" color="tertiary">
-          Действия по сделке — на её карточке в чате с ботом: там кнопки подтверждения, оплаты и отмены.
-        </Typography.Text>
+        <footer className="dg-card dg-card_flat dg-card_row">
+          <Typography.Text variant="description" color="secondary">
+            Действия по сделке — на её карточке в чате
+          </Typography.Text>
+          <Button type="button" variant="secondary" size="small" onClick={openChat}>
+            Открыть чат
+          </Button>
+        </footer>
       </div>
     </Panel>
   );
