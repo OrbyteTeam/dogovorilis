@@ -3,7 +3,7 @@
 // Ограничения платформы: ≤ 7 кнопок в ряду и ≤ 3 для link/open_app (CONTRACTS §1.2, §1.9).
 import { Keyboard } from '@maxhub/max-bot-api';
 import type { Button } from '@maxhub/max-bot-api/types';
-import { BTN } from '../../texts.js';
+import { BTN, shareInvite } from '../../texts.js';
 import type { AttachmentRequest } from '../../integrations/max/gateway.js';
 import type { CardRole, DealBundle, Payment, PaymentKind } from '../../types.js';
 import { livePayment, remaining } from '../../types.js';
@@ -52,20 +52,34 @@ const link = (text: string, url: string) => Keyboard.button.link(text, url);
 const clipboard = (text: string, payload: string) => Keyboard.button.clipboard(text, payload);
 const openApp = (text: string, bot: string, payload?: string) => Keyboard.button.openApp(text, bot, undefined, payload);
 
-/** Главное меню (SPEC §6.2). Мини-приложение открывается кнопками open_app. */
+/**
+ * Главное меню (SPEC §6.2): пять кнопок. Демо и сделка-пример спрятаны за «🧪 Попробовать» —
+ * меню не перегружено пробными путями (ЗАДАЧА_04 A3). Мини-приложение открывается кнопками open_app.
+ */
 export function menuKeyboard(a: { botUsername: string; demoMode: boolean }): AttachmentRequest {
   const rows: Row[] = [
     ...pair(openApp(BTN.newDeal, a.botUsername, 'new'), openApp(BTN.myDeals, a.botUsername, 'deals')),
     ...pair(openApp(BTN.settings, a.botUsername, 'settings'), callback(BTN.help, 'help')),
+    [callback(BTN.tryIt, 'try')],
   ];
-  rows.push([callback(BTN.exampleDeal, 'ex:new')]);
-  if (a.demoMode) rows.push([callback(BTN.tryDemo, 'dm:new')]);
   return keyboard(rows);
 }
 
-/** Шеринг ссылки сделки в существующий чат MAX (SPEC §6.4). */
-export function shareUrl(link_: string): string {
-  return `https://max.ru/:share?text=${encodeURIComponent(`Подтвердите нашу договорённость: ${link_}`)}`;
+/** Пробные пути: демо одному (если DEMO_MODE) и сделка-пример для второго человека, плюс возврат в меню. */
+export function tryKeyboard(a: { demoMode: boolean }): AttachmentRequest {
+  const rows: Row[] = [];
+  if (a.demoMode) rows.push([callback(BTN.tryDemo, 'dm:new')]);
+  rows.push([callback(BTN.exampleDeal, 'ex:new')]);
+  rows.push([callback(BTN.menu, 'menu')]);
+  return keyboard(rows);
+}
+
+/**
+ * Шеринг ссылки сделки в существующий чат MAX (SPEC §6.4). У `:share` документирован только `text`
+ * (CONTRACTS §5.3), поэтому ссылка — внутри текста, ровно один раз, отдельной строкой.
+ */
+export function shareUrl(link_: string, invite: string): string {
+  return `https://max.ru/:share?text=${encodeURIComponent(`${invite}\n${link_}`)}`;
 }
 
 export type CardKeyboardOptions = {
@@ -106,7 +120,8 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
       // open_app с `d_<id>` открывал экран «Готово», то есть кнопка вела в никуда (ЗАДАЧА_03 S4).
       case 'awaiting_confirmation':
         if (!bundle.deal.clientUserId) {
-          rows.push(...pair(link(BTN.sendToMax, shareUrl(o.dealLink)), clipboard(BTN.copyLink, o.dealLink)));
+          const invite = shareInvite(bundle.version.title, bundle.version.scheduledAt);
+          rows.push(...pair(link(BTN.sendToMax, shareUrl(o.dealLink, invite)), clipboard(BTN.copyLink, o.dealLink)));
           if (o.demoMode) rows.push([callback(BTN.openAsClient, cb('dm', id))]);
         } else {
           rows.push([callback(BTN.remindClient, cb('rs', id))]);

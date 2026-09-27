@@ -1,21 +1,19 @@
-// Команды меню (SPEC §6.1) и демо-сделка из меню (§12).
-// Мини-приложение до привязки организаторами недоступно, поэтому /new всегда предлагает и путь через демо-сделку
-// (требование ЗАДАЧА_01, шаг «Что значит на заглушках»).
+// Команды меню (SPEC §6.1), экран «🧪 Попробовать» и пробные сделки из него (§12, ЗАДАЧА_04 A3).
 import { Keyboard, type Bot, type Context } from '@maxhub/max-bot-api';
-import { cfg, dealLink } from '../../../config.js';
+import { botUsername, cfg, dealLink } from '../../../config.js';
 import { inTx } from '../../../db/pool.js';
 import * as dealsRepo from '../../../db/repos/deals.js';
 import * as inputsRepo from '../../../db/repos/inputs.js';
 import * as usersRepo from '../../../db/repos/users.js';
 import type { Button } from '@maxhub/max-bot-api/types';
 import type { AttachmentRequest } from '../../../integrations/max/gateway.js';
+import type { DealListItem } from '../../../types.js';
 import * as texts from '../../../texts.js';
-import { formatMoney } from '../../../domain/money.js';
 import { demoDealDraft, exampleDealDraft } from '../../../domain/templates.js';
 import * as dealService from '../../../domain/deal/service.js';
 import { sendCard } from '../cards.js';
 import { cb } from '../callbacks.js';
-import { keyboard } from '../keyboards.js';
+import { keyboard, tryKeyboard } from '../keyboards.js';
 import { answerError, chatIdOf, menu, touchUser, type Deps } from './shared.js';
 
 export function registerMenu(bot: Bot, deps: Deps): void {
@@ -43,38 +41,53 @@ function openAppRow(text: string, payload: string): AttachmentRequest {
 async function cmdNew(ctx: Context, deps: Deps): Promise<void> {
   const chatId = chatIdOf(ctx);
   if (!chatId) return;
-  const rows: AttachmentRequest[] = [];
+  // Те же три пути, что в меню и на экране «🧪 Попробовать» (ЗАДАЧА_04 A3): форма, демо одному, сделка-пример.
   const bot = cfg().MAX_BOT_USERNAME || 'bot';
-  const buttons: Button[][] = [
-    [Keyboard.button.openApp(texts.BTN.newDeal, bot, undefined, 'new')],
-    [Keyboard.button.callback(texts.BTN.exampleDeal, 'ex:new')],
-  ];
+  const buttons: Button[][] = [[Keyboard.button.openApp(texts.BTN.newDeal, bot, undefined, 'new')]];
   if (cfg().DEMO_MODE) buttons.push([Keyboard.button.callback(texts.BTN.tryDemo, 'dm:new')]);
-  rows.push(keyboard(buttons));
-  await deps.max.send({ chatId }, texts.NEW_DEAL_PROMPT, rows);
+  buttons.push([Keyboard.button.callback(texts.BTN.exampleDeal, 'ex:new')]);
+  await deps.max.send({ chatId }, texts.NEW_DEAL_PROMPT, [keyboard(buttons)]);
 }
+
+/** Сколько строк в разделе «/deals»; остальное — в мини-приложении (ЗАДАЧА_04 A2). */
+const DEALS_PER_SECTION = 10;
 
 async function cmdDeals(ctx: Context, deps: Deps): Promise<void> {
   const chatId = chatIdOf(ctx);
   const userId = ctx.user?.user_id;
   if (!chatId || !userId) return;
-  const active = await inTx((c) => dealsRepo.listForUser(c, userId, { role: 'all', filter: 'active', limit: 5 }));
-  if (!active.length) {
-    await deps.max.send({ chatId }, 'Активных сделок нет. Создайте первую — это займёт полминуты.', [openAppRow(texts.BTN.newDeal, 'new')]);
+  const items = await inTx((c) => dealsRepo.listItemsForUser(c, userId, { role: 'all', filter: 'active', limit: 200 }));
+  if (!items.length) {
+    await deps.max.send({ chatId }, texts.DEALS_EMPTY, [openAppRow(texts.BTN.newDeal, 'new')]);
     return;
   }
-  const lines: string[] = ['Активные сделки:'];
+  const { text, rows } = dealsListMessage(items);
+  await deps.max.send({ chatId }, text, [keyboard(rows)]);
+}
+
+/**
+ * Два раздела — «Я исполнитель» / «Я клиент», пустой не показываем; строки по дате, без кода сделки;
+ * название — ссылка на карточку (диплинк `d_<id>`), под списком — кнопки «Пн 28 сен 14:00 · Маникюр».
+ * Демо-сделка (клиент — сам исполнитель) попадает только в раздел исполнителя.
+ */
+export function dealsListMessage(items: DealListItem[], now = new Date()): { text: string; rows: Button[][] } {
+  const byDate = (a: DealListItem, b: DealListItem) =>
+    (a.scheduledAt?.getTime() ?? Number.POSITIVE_INFINITY) - (b.scheduledAt?.getTime() ?? Number.POSITIVE_INFINITY) ||
+    b.updatedAt.getTime() - a.updatedAt.getTime();
+  const lines: string[] = [texts.DEALS_HEADER];
   const rows: Button[][] = [];
-  for (const deal of active) {
-    const bundle = await dealService.getBundleById(deal.id);
-    lines.push(
-      `${texts.statusEmoji(deal.status)} #${deal.publicId} · ${texts.esc(bundle.version.title)} · ${formatMoney(bundle.version.totalKopecks)}${deal.demo ? ' · демо' : ''}`,
-    );
-    rows.push([Keyboard.button.callback(`${texts.BTN.open} #${deal.publicId}`, cb('op', deal.publicId))]);
+  for (const [role, title] of [['seller', texts.DEALS_SELLER], ['client', texts.DEALS_CLIENT]] as const) {
+    const section = items.filter((i) => i.role === role).sort(byDate);
+    if (!section.length) continue;
+    lines.push('', title);
+    for (const item of section.slice(0, DEALS_PER_SECTION)) {
+      lines.push(texts.dealsLine(item, dealLink(item.publicId), now));
+      rows.push([Keyboard.button.callback(texts.dealsButton(item, now), cb('op', item.publicId))]);
+    }
+    if (section.length > DEALS_PER_SECTION) lines.push(texts.DEALS_MORE(section.length - DEALS_PER_SECTION));
   }
-  const bot = cfg().MAX_BOT_USERNAME || 'bot';
-  rows.push([Keyboard.button.openApp(texts.BTN.myDeals, bot, undefined, 'deals')]);
-  await deps.max.send({ chatId }, lines.join('\n'), [keyboard(rows)]);
+  rows.push([Keyboard.button.openApp(texts.BTN.myDeals, botUsername(), undefined, 'deals')]);
+  return { text: lines.join('\n'), rows };
 }
 
 async function cmdSettings(ctx: Context, deps: Deps): Promise<void> {
@@ -100,6 +113,17 @@ async function cmdCancelInput(ctx: Context, deps: Deps): Promise<void> {
 /** Кнопка «Как это работает» из меню. */
 export async function onHelpCallback(ctx: Context, deps: Deps): Promise<void> {
   await deps.max.answer(ctx.callback!.callback_id, texts.H1, [menu()]);
+}
+
+/** «🧪 Попробовать»: два пробных пути и возврат в меню — на месте сообщения с меню. */
+export async function onTryCallback(ctx: Context, deps: Deps): Promise<void> {
+  const demoMode = cfg().DEMO_MODE;
+  await deps.max.answer(ctx.callback!.callback_id, demoMode ? texts.TRY_PROMPT : texts.TRY_PROMPT_NO_DEMO, [tryKeyboard({ demoMode })]);
+}
+
+/** «↩️ Меню» с экрана «Попробовать». */
+export async function onMenuCallback(ctx: Context, deps: Deps): Promise<void> {
+  await deps.max.answer(ctx.callback!.callback_id, texts.S1, [menu()]);
 }
 
 /**

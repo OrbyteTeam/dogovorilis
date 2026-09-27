@@ -9,7 +9,7 @@ import * as texts from '../../texts.js';
 import { parseCallback } from './callbacks.js';
 import { onDealCallback } from './handlers/deal.js';
 import { registerInput, registerTextlessGuard } from './handlers/input.js';
-import { onDemoNew, onExampleNew, onHelpCallback, registerMenu } from './handlers/menu.js';
+import { onDemoNew, onExampleNew, onHelpCallback, onMenuCallback, onTryCallback, registerMenu } from './handlers/menu.js';
 import { onPaymentCallback } from './handlers/payment.js';
 import { registerStart } from './handlers/start.js';
 import { answerCallbackProblem, answerError, chatIdOf, menu, type Deps } from './handlers/shared.js';
@@ -85,6 +85,8 @@ export async function createBot(config: Config, opts?: { fetch?: typeof globalTh
     }
     try {
       if (parsed.kind === 'help') return void (await onHelpCallback(ctx, deps));
+      if (parsed.kind === 'try') return void (await onTryCallback(ctx, deps));
+      if (parsed.kind === 'menu') return void (await onMenuCallback(ctx, deps));
       if (parsed.kind === 'demo_new') return void (await onDemoNew(ctx, deps));
       if (parsed.kind === 'example_new') return void (await onExampleNew(ctx, deps));
       if (PAYMENT_CODES.has(parsed.code)) return void (await onPaymentCallback(ctx, deps, parsed));

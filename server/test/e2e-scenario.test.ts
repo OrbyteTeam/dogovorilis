@@ -431,9 +431,9 @@ describe.skipIf(!DB)('сквозной сценарий', () => {
       expect(h.max.texts().join('\n')).toContain(texts.S3);
     }, SCENARIO_TIMEOUT);
 
-    it('исполнитель открыл собственную ссылку → отвечаем, а не молчим (§14 п. 6)', async () => {
-      // Поймано живым прогоном 21.09: карточки у исполнителя уже есть, ensureCard правит их НА МЕСТЕ,
-      // в чате не появляется ничего нового — нажатие ссылки выглядит как «бот сломался».
+    it('исполнитель открыл собственную ссылку → карточки внизу чата, а не молчание (§14 п. 6)', async () => {
+      // Поймано живым прогоном 21.09: карточки у исполнителя уже есть, правка НА МЕСТЕ где-то выше
+      // выглядит как «бот сломался». С ЗАДАЧА_04 A2 так же открываются названия-ссылки в «/deals».
       await h.start(SELLER, SELLER_CHAT);
       await h.press(SELLER, SELLER_CHAT, 'dm:new', null);
       const id = await onlyDealPublicId(h);
@@ -441,9 +441,9 @@ describe.skipIf(!DB)('сквозной сценарий', () => {
       h.max.reset();
       await h.start(SELLER, SELLER_CHAT, `d_${id}`);
 
-      const said = h.max.texts().join('\n');
-      expect(said).toContain('клиент в ней вы сами'); // демо-сделка: кнопок шеринга в ней нет
-      expect(said).toContain(id);
+      const fresh = h.max.sent.filter((m) => m.kind === 'send' && m.text.includes(`#${id}`));
+      expect(fresh).toHaveLength(2); // своя карточка и демо-клиентская — новыми сообщениями
+      expect(h.max.texts().join('\n')).toContain(texts.CARD_MOVED(id)); // старые стали указателями
       // Клиентом он при этом не стал и второй карточки не получил.
       const cards = await h.query<{ role: string }>(
         'SELECT role FROM card_messages WHERE deal_id = (SELECT id FROM deals WHERE public_id = $1)',

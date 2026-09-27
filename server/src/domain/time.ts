@@ -96,6 +96,21 @@ export function formatDateTime(date: Date, tz: string = DEFAULT_TZ, now: Date = 
   return `${WEEKDAYS[p.weekday]}, ${p.day} ${MONTHS_SHORT[p.month - 1]}${year}, ${hh}:${mm} (${zoneLabel(tz)})`;
 }
 
+/**
+ * День и время для списков: `{ day: 'Пн 28 сен', time: '14:00' }`; год — если не текущий.
+ * Метку пояса список ставит один раз в заголовке, а не в каждой строке.
+ */
+export function dayAndTime(date: Date, tz: string = DEFAULT_TZ, now: Date = new Date()): { day: string; time: string } {
+  const p = partsIn(date, tz);
+  const cur = partsIn(now, tz);
+  const wd = WEEKDAYS[p.weekday];
+  const year = p.year === cur.year ? '' : ` ${p.year}`;
+  return {
+    day: `${wd[0].toUpperCase()}${wd.slice(1)} ${p.day} ${MONTHS_SHORT[p.month - 1]}${year}`,
+    time: `${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`,
+  };
+}
+
 /** «27.09» — короткая дата для строк оплаты и чека. */
 export function formatDateShort(date: Date, tz: string = DEFAULT_TZ): string {
   const p = partsIn(date, tz);

@@ -47,6 +47,7 @@ export function dealListItemView(item: DealListItem) {
       remainingKopecks: item.totalKopecks - item.prepaymentKopecks,
       scheduledAt: item.scheduledAt,
     }),
+    status_short: texts.statusShort(item.status, item.role),
     demo: item.demo,
     role: item.role,
     title: item.title,
@@ -98,6 +99,7 @@ export function dealView(bundle: DealBundle) {
   };
 }
 
+/** Текст приглашения БЕЗ ссылки: мини-приложение передаёт её в `shareMaxContent` отдельно (ЗАДАЧА_04 A1). */
 export function shareText(bundle: DealBundle): string {
-  return `Подтвердите нашу договорённость: ${dealLink(bundle.deal.publicId)}`;
+  return texts.shareInvite(bundle.version.title, bundle.version.scheduledAt);
 }

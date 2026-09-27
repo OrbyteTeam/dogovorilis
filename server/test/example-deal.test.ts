@@ -28,11 +28,24 @@ describe.skipIf(!DB)('сделка-пример из чата', () => {
     h.max.reset();
   });
 
-  it('кнопка есть в меню /start и в /new', async () => {
+  it('кнопка есть на экране «🧪 Попробовать» из меню /start и в /new (ЗАДАЧА_04 A3)', async () => {
     await h.start(SELLER, SELLER_CHAT);
+    const s1 = h.max.inChat(SELLER_CHAT).find((m) => m.text === texts.S1)!;
+    expect(s1.buttons.map((b) => b.payload)).toContain('try');
+    expect(s1.buttons.map((b) => b.payload)).not.toContain('ex:new'); // меню — пять кнопок, пробные пути за «Попробовать»
+
+    await h.press(SELLER, SELLER_CHAT, 'try', s1.mid);
+    const tryScreen = h.max.sent.find((m) => m.kind === 'answer')!;
+    expect(tryScreen.text).toBe(texts.TRY_PROMPT);
+    expect(tryScreen.buttons.map((b) => b.payload)).toEqual(['dm:new', 'ex:new', 'menu']);
+
+    h.max.reset();
+    await h.press(SELLER, SELLER_CHAT, 'menu', s1.mid);
+    expect(h.max.sent.find((m) => m.kind === 'answer')!.text).toBe(texts.S1);
+
     await h.say(SELLER, SELLER_CHAT, '/new');
-    const menus = h.max.inChat(SELLER_CHAT).filter((m) => m.buttons.some((b) => b.payload === 'ex:new'));
-    expect(menus.map((m) => m.text)).toEqual(expect.arrayContaining([texts.S1, texts.NEW_DEAL_PROMPT]));
+    const newPrompt = h.max.inChat(SELLER_CHAT).find((m) => m.text === texts.NEW_DEAL_PROMPT)!;
+    expect(newPrompt.buttons.map((b) => b.payload)).toEqual(expect.arrayContaining(['dm:new', 'ex:new']));
   }, TIMEOUT);
 
   it('создаёт настоящую сделку без клиента: ссылка и кнопки шеринга в карточке, меню остаётся', async () => {
@@ -48,7 +61,7 @@ describe.skipIf(!DB)('сделка-пример из чата', () => {
 
     const answer = h.max.sent.find((m) => m.kind === 'answer')!;
     expect(answer.text).toBe(texts.EXAMPLE_CREATED(id));
-    expect(answer.buttons.map((b) => b.payload)).toContain('ex:new'); // меню под ответом
+    expect(answer.buttons.map((b) => b.payload)).toContain('try'); // меню под ответом
 
     const card = h.max.byMid(await cardMid(h, id, 'seller'))!;
     expect(card.text).toContain(`start=d_${id}`);
@@ -78,6 +91,28 @@ describe.skipIf(!DB)('сделка-пример из чата', () => {
     expect(await dealStatus(h, id)).toBe('awaiting_prepayment');
   }, TIMEOUT);
 
+  it('/deals: исполнитель и клиент видят сделку каждый в своём разделе, название — ссылка на карточку (ЗАДАЧА_04 A2)', async () => {
+    await h.start(SELLER, SELLER_CHAT);
+    await h.press(SELLER, SELLER_CHAT, 'ex:new', null);
+    const id = await onlyDealPublicId(h);
+    await h.start(CLIENT, CLIENT_CHAT, `d_${id}`);
+    h.max.reset();
+
+    await h.say(SELLER, SELLER_CHAT, '/deals');
+    const sellerList = h.max.inChat(SELLER_CHAT).at(-1)!;
+    expect(sellerList.text).toContain(texts.DEALS_SELLER);
+    expect(sellerList.text).not.toContain(texts.DEALS_CLIENT);
+    expect(sellerList.text).toContain(`](https://max.ru/`);
+    expect(sellerList.text).toContain(`start=d_${id})`);
+    expect(sellerList.buttons.map((b) => b.payload)).toContain(`op:${id}`);
+
+    await h.say(CLIENT, CLIENT_CHAT, '/deals');
+    const clientList = h.max.inChat(CLIENT_CHAT).at(-1)!;
+    expect(clientList.text).toContain(texts.DEALS_CLIENT);
+    expect(clientList.text).not.toContain(texts.DEALS_SELLER);
+    expect(clientList.text).toContain('подтвердите условия');
+  }, TIMEOUT);
+
   it(`не больше ${TRIAL_LIMIT_PER_HOUR} сделок-примеров в час; демо считается отдельно`, async () => {
     await h.start(SELLER, SELLER_CHAT);
     for (let i = 0; i < TRIAL_LIMIT_PER_HOUR; i++) await h.press(SELLER, SELLER_CHAT, 'ex:new', null);
@@ -86,7 +121,7 @@ describe.skipIf(!DB)('сделка-пример из чата', () => {
     await h.press(SELLER, SELLER_CHAT, 'ex:new', null);
     const refused = h.max.sent.find((m) => m.kind === 'answer')!;
     expect(refused.text).toBe(texts.TOO_MANY_TRIALS);
-    expect(refused.buttons.map((b) => b.payload)).toContain('ex:new'); // меню не пропало
+    expect(refused.buttons.map((b) => b.payload)).toContain('try'); // меню не пропало
     const [{ n }] = await h.query<{ n: number }>('SELECT count(*)::int AS n FROM deals');
     expect(n).toBe(TRIAL_LIMIT_PER_HOUR);
 

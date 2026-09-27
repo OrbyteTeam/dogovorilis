@@ -117,7 +117,8 @@ export type ShareResult = 'shared' | 'fallback' | 'unavailable';
 
 /**
  * Отправка карточки клиенту: сначала нативный экран MAX, при отказе — ссылка `:share`
- * (SPEC §7.3, MAX_API.md §1 п. 6).
+ * (SPEC §7.3, MAX_API.md §1 п. 6). `text` — без ссылки: `shareMaxContent` получает её отдельным `link`,
+ * а у `:share` есть только `text`, туда ссылка дописывается один раз (ЗАДАЧА_04 A1 — была дважды).
  */
 export async function shareDeal({ text, link }: ShareDealParams): Promise<ShareResult> {
   const app = webApp();
@@ -129,7 +130,7 @@ export async function shareDeal({ text, link }: ShareDealParams): Promise<ShareR
       /* Bridge отверг вызов — идём в fallback */
     }
   }
-  const shareUrl = `https://max.ru/:share?text=${encodeURIComponent(`${text} ${link}`.trim())}`;
+  const shareUrl = `https://max.ru/:share?text=${encodeURIComponent(text.includes(link) ? text : `${text}\n${link}`)}`;
   try {
     if (app?.openLink) {
       app.openLink(shareUrl);

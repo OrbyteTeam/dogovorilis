@@ -9,7 +9,7 @@
 
 import type { CancelRule, CardRole, DealStatus, PaymentProvider, PaymentRail, PaymentStatus, ReminderKind, Role } from './types.js';
 import { formatMoney, prepaymentPercent } from './domain/money.js';
-import { formatDateShort, formatDateTime, formatDateTimeShort, formatDayMonth } from './domain/time.js';
+import { dayAndTime, formatDateShort, formatDateTime, formatDateTimeShort, formatDayMonth } from './domain/time.js';
 
 // --- инфраструктура ---
 
@@ -80,11 +80,9 @@ export function S4(id: string, demo: boolean): string {
   // и звать по этой ссылке некого: посторонний получит E4. Не отправляем человека искать
   // кнопки, которых он не найдёт.
   if (demo) {
-    return `Это ваша демо-сделка #${id} — клиент в ней вы сами. Обе карточки выше, я их обновил.
-Чтобы позвать настоящего клиента, создайте обычную сделку: «${BTN.newDeal}».`;
+    return `Это ваша демо-сделка #${id} — клиент в ней вы сами. Чтобы позвать настоящего клиента, создайте обычную сделку: «${BTN.newDeal}».`;
   }
-  return `Это ваша сделка #${id}, вы её исполнитель. Карточка выше — я её обновил.
-Чтобы пригласить клиента, отправьте ему ссылку кнопкой «${BTN.sendToMax}» или «${BTN.copyLink}» в карточке.`;
+  return `Это ваша сделка #${id}, вы её исполнитель. Чтобы пригласить клиента, отправьте ему ссылку кнопкой «${BTN.sendToMax}» или «${BTN.copyLink}» в карточке.`;
 }
 
 export const H1 = `Как это работает
@@ -98,9 +96,63 @@ export const H1 = `Как это работает
 
 export const INPUT_CANCELLED = 'Ввод отменён';
 
-// BTN объявлен ниже, а константа вычисляется при загрузке модуля, поэтому подпись кнопки — литералом.
+// BTN объявлен ниже, а константы вычисляются при загрузке модуля, поэтому подписи кнопок — литералами.
 export const NEW_DEAL_PROMPT = `Новая сделка: заполните форму в мини-приложении — условия под себя.
-Быстрый старт: «📝 Сделка-пример для клиента» создаёт настоящую сделку с условиями-примером, её ссылку можно сразу отправить клиенту.`;
+Посмотреть продукт за две минуты: «Демо: пройти одному» — обе стороны в этом чате; «Сделка-пример: позвать клиента» — готовая сделка, ссылку можно сразу отправить второму человеку.`;
+
+/** Экран «🧪 Попробовать» из меню (ЗАДАЧА_04 A3). */
+export const TRY_PROMPT = `Два способа посмотреть продукт за две минуты:
+• «Демо: пройти одному» — обе карточки придут сюда, вы нажимаете и за исполнителя, и за клиента.
+• «Сделка-пример: позвать клиента» — настоящая сделка с готовыми условиями: отправьте ссылку второму человеку, он подтвердит у себя.`;
+
+/** То же без демо (DEMO_MODE=false): остаётся одна сделка-пример. */
+export const TRY_PROMPT_NO_DEMO = `Посмотреть продукт за две минуты: «Сделка-пример: позвать клиента» — настоящая сделка с готовыми условиями. Отправьте ссылку второму человеку, он подтвердит у себя.`;
+
+/**
+ * Текст приглашения для шеринга — без ссылки: ссылка передаётся отдельно (`shareMaxContent({ text, link })`),
+ * иначе в сообщении она оказывается дважды (ЗАДАЧА_04 A1). Текст — не markdown, экранировать не нужно.
+ */
+export function shareInvite(title: string, scheduledAt: Date | null): string {
+  const what = oneLine(title);
+  return scheduledAt
+    ? `Подтвердите нашу договорённость: ${what}, ${formatDateTime(scheduledAt)}`
+    : `Подтвердите нашу договорённость: ${what}`;
+}
+
+// --- «/deals» в чате (ЗАДАЧА_04 A2) ---
+
+export const DEALS_HEADER = 'Активные сделки (время — МСК):';
+export const DEALS_SELLER = '**Я исполнитель**';
+export const DEALS_CLIENT = '**Я клиент**';
+export const DEALS_EMPTY = 'Активных сделок нет. Создайте первую — это займёт полминуты.';
+
+export function DEALS_MORE(n: number): string {
+  return `…и ещё ${n} — в «${BTN.myDeals}»`;
+}
+
+type DealsRow = { title: string; scheduledAt: Date | null; totalKopecks: number; status: DealStatus; role: 'seller' | 'client'; demo: boolean };
+
+function listDate(at: Date | null, now: Date): { day: string; time: string } | null {
+  return at ? dayAndTime(at, undefined, now) : null;
+}
+
+/** `Пн 28 сен, 14:00 · [Маникюр с покрытием](ссылка) · 2 500 ₽ · ждём предоплату` — без кода и эмодзи-статусов. */
+export function dealsLine(row: DealsRow, link: string, now = new Date()): string {
+  const d = listDate(row.scheduledAt, now);
+  const parts = [
+    d ? `${d.day}, ${d.time}` : 'без даты',
+    `[${esc(oneLine(row.title))}](${link})`,
+    formatMoney(row.totalKopecks),
+    statusShort(row.status, row.role),
+  ];
+  return `${parts.join(' · ')}${row.demo ? ' · демо' : ''}`;
+}
+
+/** Подпись кнопки под списком: `Пн 28 сен 14:00 · Маникюр`. Длинное название обрезается — MAX режет подписи сам. */
+export function dealsButton(row: Pick<DealsRow, 'title' | 'scheduledAt'>, now = new Date()): string {
+  const d = listDate(row.scheduledAt, now);
+  return `${d ? `${d.day} ${d.time}` : 'Без даты'} · ${clip(oneLine(row.title), 18)}`;
+}
 
 /** Ответ на «📝 Сделка-пример для клиента» (ЗАДАЧА_03 B). */
 export function EXAMPLE_CREATED(id: string): string {
@@ -200,6 +252,27 @@ const STATUS_TEXT: Record<DealStatus, (a: StatusArgs) => { seller: string; clien
 
 export function statusText(status: DealStatus, role: CardRole, a: StatusArgs): string {
   const pair = STATUS_TEXT[status](a);
+  return role === 'seller' ? pair.seller : pair.client;
+}
+
+// Статус одним-двумя словами — для строк списков и расписания, где эмодзи-статусы не используются (ЗАДАЧА_04 A2).
+const STATUS_SHORT: Record<DealStatus, { seller: string; client: string }> = {
+  awaiting_confirmation: { seller: 'ждём подтверждения', client: 'подтвердите условия' },
+  changes_requested: { seller: 'клиент предложил изменения', client: 'ждём новые условия' },
+  declined: { seller: 'клиент отказался', client: 'вы отказались' },
+  expired: { seller: 'срок истёк', client: 'срок истёк' },
+  awaiting_prepayment: { seller: 'ждём предоплату', client: 'внесите предоплату' },
+  scheduled: { seller: 'запланировано', client: 'запланировано' },
+  awaiting_acceptance: { seller: 'ждём приёмку', client: 'примите работу' },
+  remarks: { seller: 'есть замечания', client: 'ждём исправлений' },
+  awaiting_payment: { seller: 'ждём остаток', client: 'оплатите остаток' },
+  paid: { seller: 'оплачено, нужен чек', client: 'ждём чек' },
+  closed: { seller: 'закрыта', client: 'закрыта' },
+  cancelled: { seller: 'отменена', client: 'отменена' },
+};
+
+export function statusShort(status: DealStatus, role: CardRole): string {
+  const pair = STATUS_SHORT[status];
   return role === 'seller' ? pair.seller : pair.client;
 }
 
@@ -371,7 +444,9 @@ export function paymentLine(a: {
     }
     case 'received': {
       const verb = a.kind === 'prepayment' ? 'получена' : 'получен';
-      return a.at ? `${label} ${verb} ${formatDateTimeShort(a.at)}${rail}` : `${label} ${verb}${rail}`;
+      // Оплата тестовым магазином — прямо в строке, что денег не было (ЗАДАЧА_04 A4, SPEC §18).
+      const how = a.rail === 'link' && a.provider === 'yookassa' ? ' — ссылка ЮKassa, тестовый магазин, деньги не списывались' : rail;
+      return a.at ? `${label} ${verb} ${formatDateTimeShort(a.at)}${how}` : `${label} ${verb}${how}`;
     }
   }
 }
@@ -604,8 +679,14 @@ export function paymentStillPending(status: PaymentStatus): string {
 /** Сообщение клиенту при выдаче ссылки (SPEC §9.1 п. 2, §9.2 п. 4). */
 export function linkIssued(a: { sumKopecks: number; expiresAt: Date | null; provider: PaymentProvider }): string {
   // Срок и сумма уже в строке оплаты карточки под заметкой — здесь только что делать и пометка теста.
-  return `💳 Ссылка готова — нажмите «${BTN.goToPayment}». После оплаты карточка обновится сама.\n${testRailNotice(a.provider)}`;
+  // Форма тестового магазина принимает любые дату и CVC, но человек этого не знает (замечание тестировщика 26.09).
+  const hint = a.provider === 'yookassa' ? YOOKASSA_TEST_CARD_HINT : testRailNotice(a.provider);
+  return `💳 Ссылка готова — нажмите «${BTN.goToPayment}». После оплаты карточка обновится сама.\n${hint}`;
 }
+
+/** Тестовая карта ЮKassa — из документации провайдера (CONTRACTS §2, SPEC §9.2), не данные пользователя. */
+export const YOOKASSA_TEST_CARD_HINT =
+  '🧪 Тестовый магазин: подойдёт карта 5555 5555 5555 4444, любая будущая дата, любой CVC; деньги не списываются.';
 
 /** Строка про тестовую среду провайдера для карточки и сообщения об оплате по ссылке (§9.2 п.4, §18). */
 export function testRailNotice(provider: PaymentProvider): string {
@@ -735,11 +816,13 @@ function reminderBody(
 
 export const BTN = {
   newDeal: '➕ Новая сделка',
-  myDeals: '📂 Мои сделки',
+  myDeals: '📁 Мои сделки',
   settings: '⚙️ Настройки',
   help: '❓ Как это работает',
-  tryDemo: '🧪 Попробовать на демо-сделке',
-  exampleDeal: '📝 Сделка-пример для клиента',
+  tryIt: '🧪 Попробовать',
+  tryDemo: 'Демо: пройти одному',
+  exampleDeal: 'Сделка-пример: позвать клиента',
+  menu: '↩️ Меню',
   sendToMax: '📤 Отправить в MAX',
   copyLink: '📋 Скопировать ссылку',
   editTerms: '✏️ Изменить условия',

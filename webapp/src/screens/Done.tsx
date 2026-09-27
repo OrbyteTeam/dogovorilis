@@ -27,9 +27,8 @@ export function DoneScreen({ publicId, me, result, onNewDeal }: DoneScreenProps)
   const showToast = useToast();
   const bot = me.config.bot_username;
   const link = result?.link ?? botLink(bot, `d_${publicId}`);
-  const shareText =
-    result?.share_text ??
-    `Подтвердите нашу договорённость по сделке #${publicId}`;
+  // Текст приглашения без ссылки — ссылка уходит отдельным параметром (ЗАДАЧА_04 A1).
+  const shareText = result?.share_text ?? 'Подтвердите нашу договорённость';
 
   async function onCopy() {
     const ok = await copyToClipboard(link);

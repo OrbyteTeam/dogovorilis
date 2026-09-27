@@ -95,8 +95,8 @@ describe.skipIf(!DB)('рейл «ссылка» (ЮKassa)', () => {
 
       // Карточка сообщает про выданную ссылку и её срок (§9.1 п. 2).
       expect(await sellerCardText(id)).toContain('Ссылка на оплату');
-      // Клиент в ответе на нажатие видит пометку про тестовый магазин (§9.2 п. 4, §18).
-      expect(lastAnswer()).toContain('Тестовый магазин ЮKassa');
+      // Клиент в ответе на нажатие видит пометку про тестовый магазин и какую карту ввести (§9.2 п. 4, §18, ЗАДАЧА_04 A4).
+      expect(lastAnswer()).toContain(texts.YOOKASSA_TEST_CARD_HINT);
 
       yk.succeed(providerId);
       const res = await webhook('payment.succeeded', providerId, 'succeeded');
