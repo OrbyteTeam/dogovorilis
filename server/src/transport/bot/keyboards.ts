@@ -120,6 +120,8 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
     if (refundOpen && isSeller && !d.refundSentAt) rows.push([callback(BTN.refundSent, cb('rf', id, 's'))]);
     if (refundOpen && !isSeller) rows.push([callback(BTN.refundReceived, cb('rf', id, 'c'))]);
     rows.push([callback(BTN.receiptPdf, cb('pdf', id))]);
+    // «🔁 Повторить» (ЗАДАЧА_04 F): форма с условиями этой сделки, «тот же клиент» — если он был. Демо не повторяется.
+    if (isSeller && !d.demo) rows.push([openApp(BTN.repeat, o.botUsername, `repeat_${id}`)]);
     return keyboard(rows);
   }
 

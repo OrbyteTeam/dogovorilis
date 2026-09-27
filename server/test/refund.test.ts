@@ -53,12 +53,12 @@ describe.skipIf(!DB)('возврат после отмены', () => {
 
   it('обе стороны отмечают свой шаг: кнопки, строка в карточке, уведомления', async () => {
     const { id, sellerCard, clientCard } = await cancelledAfterPrepayment();
-    expect(labels(sellerCard)).toEqual([texts.BTN.refundSent, texts.BTN.receiptPdf]);
+    expect(labels(sellerCard)).toEqual([texts.BTN.refundSent, texts.BTN.receiptPdf, texts.BTN.repeat]);
     expect(labels(clientCard)).toEqual([texts.BTN.refundReceived, texts.BTN.receiptPdf]);
     expect(h.max.byMid(clientCard)!.text).toContain('ожидается возврат');
 
     await h.press(SELLER, SELLER_CHAT, `rf:s:${id}`, sellerCard);
-    expect(labels(sellerCard)).toEqual([texts.BTN.receiptPdf]);
+    expect(labels(sellerCard)).toEqual([texts.BTN.receiptPdf, texts.BTN.repeat]);
     expect(h.max.byMid(sellerCard)!.text).toContain('Исполнитель вернул 500');
     expect(h.max.inChat(CLIENT_CHAT).some((m) => m.text === texts.REFUND_SENT_NOTICE({ id, sumKopecks: 50_000 }))).toBe(true);
 

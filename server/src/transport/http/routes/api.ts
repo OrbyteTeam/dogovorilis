@@ -14,8 +14,8 @@ import { rublesToKopecks } from '../../../domain/money.js';
 import { templateByKey } from '../../../domain/templates.js';
 import * as dealService from '../../../domain/deal/service.js';
 import { rescheduleDigest } from '../../../domain/reminder/digest.js';
-import { sendCard } from '../../bot/cards.js';
-import { publishNewVersion } from '../../bot/outcome.js';
+import { displayName, sendCard } from '../../bot/cards.js';
+import { publishNewVersion, sendRepeatToClient } from '../../bot/outcome.js';
 import { verifyInitData } from '../auth.js';
 import { createDealSchema, dealListQuerySchema, profileSchema, updateDealSchema, type CreateDealBody } from '../schemas.js';
 import { dealEditView, dealListItemView, dealView, profileView, shareText, templatesView, userView } from '../views.js';
@@ -151,6 +151,8 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
     if (!templateByKey(body.template)) return fail(reply, 400, 'validation', 'Неизвестный шаблон');
 
     try {
+      // «🔁 Повторить» (ЗАДАЧА_04 F): своя сделка, не демо; «тот же клиент» — сразу с ним, если у него есть диалог.
+      const repeat = body.repeat_of ? await dealService.resolveRepeat(user.maxUserId, body.repeat_of, body.same_client === true) : null;
       const result = await dealService.createDeal({
         sellerUserId: user.maxUserId,
         template: body.template,
@@ -161,6 +163,8 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
         prepaymentKopecks: rublesToKopecks(body.prepayment_rub),
         cancelRule: body.cancel_rule,
         photoMaxToken: body.photo_max_token ?? null,
+        clientUserId: repeat?.attachClientId ?? undefined,
+        repeatOf: body.repeat_of,
       });
 
       // Карточку отправляем в чат исполнителя; если он ещё не нажимал «Начать», диалога нет — сообщаем это экрану «Готово».
@@ -169,11 +173,15 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
         const mid = await sendCard(deps.max, result.bundle, 'seller', { userId: user.maxUserId, chatId: user.dialogChatId });
         cardSent = mid !== null;
       }
+      const clientCardSent = deps.max && repeat?.attachClientId ? await sendRepeatToClient(deps.max, result.bundle) : false;
       return {
         deal: dealView(result.bundle),
         link: dealView(result.bundle).link,
         share_text: shareText(result.bundle),
         card_sent: cardSent,
+        client_card_sent: clientCardSent,
+        client: repeat?.client ? { name: displayName(repeat.client.firstName, repeat.client.lastName) } : null,
+        client_no_dialog: repeat?.clientNoDialog ?? false,
       };
     } catch (e) {
       return sendError(reply, e);

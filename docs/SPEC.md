@@ -257,8 +257,13 @@ provider_payment_id, текст). `seq` — монотонный внутри с
 | `remarks` | Исправлено, проверьте · Отменить | (ждём) |
 | `awaiting_payment` | Напомнить клиенту · Отменить | 💳 Оплатить по ссылке · 🔁 Перевести по реквизитам |
 | `paid` | 📎 Приложить чек · Закрыть без чека | (ждём чек) |
-| `closed` / `declined` / `expired` / `cancelled` | 📄 Квитанция PDF (повторно) | 📄 Квитанция PDF (повторно) |
+| `closed` / `declined` / `expired` / `cancelled` | у `cancelled` с незакрытым возвратом — ✅ Вернул(а) · 📄 Квитанция PDF (повторно) · 🔁 Повторить (open_app `repeat_<id>`; не у демо) | у `cancelled` с незакрытым возвратом — ✅ Возврат получил(а) · 📄 Квитанция PDF (повторно) |
 Кнопки рейлов показываются по §9.1. Кнопка «Напомнить клиенту» — ручное напоминание (не чаще 1 раза в 4 ч на сделку).
+«🔁 Повторить» открывает форму новой сделки с условиями этой (кроме даты); если у сделки был настоящий клиент — можно
+отправить новую карточку сразу ему (`POST /api/deals` с `repeat_of` и `same_client`, §7.8): клиент привязывается как при
+T2 (событие `client.joined {source:'repeat'}`, без `client_not_opened`), ему в диалог уходят приветствие «Исполнитель
+**{имя}** предлагает новую договорённость — проверьте условия и подтвердите» и карточка, исполнителю — карточка без
+ссылки и «📨 Карточка отправлена клиенту ({имя}) — ждём подтверждения». Нет диалога у клиента — обычная сделка со ссылкой.
 
 ## 6. Бот: команды, экраны, тексты
 
@@ -545,7 +550,7 @@ React 19.2.8 + MAX UI 0.5.0 (`docs/DESIGN.md`), hash-роутинг (`/app/#/new
 | `PUT /api/me/profile` | `{ display_name, tax_mode, payout_details?, transfer_enabled, link_enabled, default_cancel_rule }` | `SellerProfile` |
 | `POST /api/me/phone` | `{ phone, authDate, hash }` | `{ phone_verified: true }` / 400 `phone_hash_invalid` |
 | `GET /api/templates` | — | `Template[]` (§7.6) |
-| `POST /api/deals` | `{ template, title, description?, scheduled_at? (ISO), total_rub (int), prepayment_rub (int), cancel_rule, photo_max_token?, profile? (если профиля нет — те же поля, что PUT /api/me/profile) }` | `{ deal: DealView, link: string, share_text: string, card_sent: boolean }` |
+| `POST /api/deals` | `{ template, title, description?, scheduled_at? (ISO), total_rub (int), prepayment_rub (int), cancel_rule, photo_max_token?, profile? (если профиля нет — те же поля, что PUT /api/me/profile), repeat_of? (public_id), same_client? (bool) }` | `{ deal: DealView, link: string, share_text: string, card_sent: boolean, client_card_sent: boolean, client: {name} \| null, client_no_dialog: boolean }`. «Повторить» (§5.5): `repeat_of` — только своя сделка (иначе, и если её нет, 403 `forbidden`), демо — 400 `validation`; `same_client: true` — только если у прежней сделки настоящий клиент (иначе 403): есть у него диалог с ботом — сделка создаётся сразу с ним, карточка уходит ему (`client_card_sent`), нет — обычная сделка со ссылкой и `client_no_dialog: true`; `client` — его имя, если `same_client` просили |
 | `GET /api/deals?role=seller\|client\|all&filter=active\|awaiting_payment\|done\|all` | — | `{ items: DealListItem[] }` |
 | `GET /api/deals/:publicId` | — | только участнику (иначе 403 `forbidden`; нет сделки — 404 `not_found`): `{ public_id, status, version, role: 'seller'\|'client', demo, template, title, description \| null, scheduled_at: ISO \| null, total_rub, prepayment_rub, cancel_rule, client: {name} \| null, can_edit, can_repeat, same_client_available }` — предзаполнение форм правки (T5) и повтора; суммы — целые рубли текущей версии; `can_edit` — исполнитель и статус `awaiting_confirmation`/`changes_requested`; `can_repeat` — исполнитель, статус терминальный, не демо; `same_client_available` — `can_repeat` и у сделки настоящий клиент (не демо) |
 | `PUT /api/deals/:publicId` | как POST (`template`, `profile`, `repeat_of`, `same_client` игнорируются и необязательны) | T5, только исполнитель (иначе 403 `forbidden`): `{ deal: DealView, version, client_notified }`; статус не `awaiting_confirmation`/`changes_requested` — 409 `{ error: { code: 'deal_not_editable', message, status } }`; ни одно поле условий не изменилось (название, уточнения — пустые и `null` равны, дата, сумма, предоплата, правило отмены) — 409 `no_changes` |
@@ -750,7 +755,7 @@ DDL — `server/migrations/0001_init.sql` (первичен). Ключевые �
 | Ссылка | Формат | Где приходит |
 |---|---|---|
 | Клиенту в сделку | `https://max.ru/{bot}?start=d_{public_id}` | `bot_started.payload = 'd_<id>'` (≤ 128 симв.) |
-| Мини-приложение, экран | `https://max.ru/{bot}?startapp=new` \| `deals` \| `settings` \| `d_{public_id}` \| `edit_{public_id}` | `initDataUnsafe.start_param` (только `A-Za-z0-9_-`, ≤ 512); кнопки open_app бота передают то же в `payload`: `edit_<id>` — «✏️ Изменить условия» (T5) |
+| Мини-приложение, экран | `https://max.ru/{bot}?startapp=new` \| `deals` \| `settings` \| `d_{public_id}` \| `edit_{public_id}` \| `repeat_{public_id}` | `initDataUnsafe.start_param` (только `A-Za-z0-9_-`, ≤ 512); кнопки open_app бота передают то же в `payload`: `edit_<id>` — «✏️ Изменить условия» (T5), `repeat_<id>` — «🔁 Повторить» у завершённой сделки исполнителя (§5.5) |
 | Шеринг | `https://max.ru/:share?text={urlencoded}` | экран «Отправить в MAX» |
 Payload `d_<id>`: `^d_[A-Za-z0-9]{10}$`; всё иное в `?start=` — игнорируется (меню S1). Ссылка — секрет-возможность (unguessable id),
 других прав доступа к ней нет; повторное открытие тем же клиентом — идемпотентно.

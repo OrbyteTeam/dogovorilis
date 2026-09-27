@@ -5,9 +5,11 @@ import type { MaxGateway } from '../../integrations/max/gateway.js';
 import * as dealService from '../../domain/deal/service.js';
 import type { ServiceResult } from '../../domain/deal/service.js';
 import type { ApplyResult } from '../../domain/payment/rails.js';
+import { dealLink } from '../../config.js';
 import { log } from '../../logger.js';
 import * as texts from '../../texts.js';
-import { syncCards } from './cards.js';
+import type { DealBundle } from '../../types.js';
+import { displayName, sendCard, syncCards } from './cards.js';
 import { openKeyboard } from './keyboards.js';
 import { deliver, notifyForEvents } from './notify.js';
 import { renderAndSendReceipt } from './receipt.js';
@@ -67,4 +69,26 @@ export async function publishNewVersion(max: MaxGateway, result: ServiceResult):
     log.warn({ deal: bundle.deal.publicId, err: (e as Error).message }, 'новая версия записана, но не доставлена сторонам');
     return { clientNotified: false };
   }
+}
+
+/**
+ * «🔁 Повторить» с тем же клиентом (ЗАДАЧА_04 F): клиент уже привязан — приветствие и его карточка уходят ему в
+ * диалог сразу, без ссылки; исполнителю — что карточка отправлена. Не дошло — исполнителю ссылка, которая
+ * откроет карточку у этого клиента (повторный вход привязанного клиента идемпотентен, SPEC §6.3).
+ */
+export async function sendRepeatToClient(max: MaxGateway, bundle: DealBundle): Promise<boolean> {
+  const client = bundle.client;
+  if (!client?.dialogChatId) return false;
+  const name = displayName(client.firstName, client.lastName);
+  const sellerName = bundle.sellerProfile?.displayName || displayName(bundle.seller.firstName, bundle.seller.lastName);
+  let sent = false;
+  try {
+    await max.send({ chatId: client.dialogChatId }, texts.S2_REPEAT(sellerName));
+    sent = (await sendCard(max, bundle, 'client', { userId: client.maxUserId, chatId: client.dialogChatId })) !== null;
+  } catch (e) {
+    log.warn({ deal: bundle.deal.publicId, err: (e as Error).message }, 'карточка повторной сделки не доставлена клиенту');
+  }
+  const text = sent ? texts.REPEAT_CARD_SENT(name) : texts.REPEAT_CARD_FAILED(name, dealLink(bundle.deal.publicId));
+  await deliver(max, bundle, { to: 'seller', text });
+  return sent;
 }

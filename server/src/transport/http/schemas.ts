@@ -1,5 +1,6 @@
 // zod-схемы тел запросов мини-приложения (SPEC §7.8). Лишние поля отбрасываются, ошибки → 400 validation.
 import { z } from 'zod';
+import { PUBLIC_ID_RE } from '../../domain/ids.js';
 import { isValidDigestTime } from '../../domain/reminder/digest.js';
 
 export const cancelRuleSchema = z.enum(['free_24h', 'free_48h', 'nonrefundable', 'full_refund']);
@@ -31,6 +32,9 @@ export const createDealSchema = z.object({
   cancel_rule: cancelRuleSchema,
   photo_max_token: z.string().nullish(),
   profile: profileSchema.optional(),
+  // «🔁 Повторить» (ЗАДАЧА_04 F): какую сделку повторяем и отправить ли карточку сразу её клиенту.
+  repeat_of: z.string().regex(PUBLIC_ID_RE, 'Неверная ссылка на сделку').optional(),
+  same_client: z.boolean().optional(),
 });
 
 /**
