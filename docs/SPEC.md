@@ -561,12 +561,12 @@ React 19.2.8 + MAX UI 0.5.0 (`docs/DESIGN.md`), hash-роутинг (`/app/#/new
 (`server/src/transport/http/schemas.ts`); лишние поля отбрасываются.
 | Метод и путь | Тело / параметры | Ответ |
 |---|---|---|
-| `GET /api/me` | — | `{ user: {id, first_name, last_name, username, phone_verified}, profile: SellerProfile \| null, config: { provider: 'none'\|'yookassa'\|'tbank', demo: bool, bot_username } }` |
-| `PUT /api/me/profile` | `{ display_name, tax_mode, payout_details?, transfer_enabled, link_enabled, default_cancel_rule }` | `SellerProfile` |
+| `GET /api/me` | — | `{ user: {id, first_name, last_name, username, phone_verified}, profile: SellerProfile \| null, config: { provider: 'none'\|'yookassa'\|'tbank', demo: bool, bot_username } }`; в `SellerProfile` — `digest_time: number \| null` (минуты от полуночи МСК, §10.2) |
+| `PUT /api/me/profile` | `{ display_name, tax_mode, payout_details?, transfer_enabled, link_enabled, default_cancel_rule, digest_time? }` (`digest_time`: 360…720 шаг 30 или `null` — выключить; нет поля — не менять) | `SellerProfile` |
 | `POST /api/me/phone` | `{ phone, authDate, hash }` | `{ phone_verified: true }` / 400 `phone_hash_invalid` |
 | `GET /api/templates` | — | `Template[]` (§7.6) |
 | `POST /api/deals` | `{ template, title, description?, scheduled_at? (ISO), total_rub (int), prepayment_rub (int), cancel_rule, photo_max_token?, profile? (если профиля нет — те же поля, что PUT /api/me/profile), repeat_of? (public_id), same_client? (bool) }` | `{ deal: DealView, link: string, share_text: string, card_sent: boolean, client_card_sent: boolean, client: {name} \| null, client_no_dialog: boolean }`. «Повторить» (§5.5): `repeat_of` — только своя сделка (иначе, и если её нет, 403 `forbidden`), демо — 400 `validation`; `same_client: true` — только если у прежней сделки настоящий клиент (иначе 403): есть у него диалог с ботом — сделка создаётся сразу с ним, карточка уходит ему (`client_card_sent`), нет — обычная сделка со ссылкой и `client_no_dialog: true`; `client` — его имя, если `same_client` просили |
-| `GET /api/deals?role=seller\|client\|all&filter=active\|awaiting_payment\|done\|all` | — | `{ items: DealListItem[] }` |
+| `GET /api/deals?role=seller\|client\|all&filter=active\|awaiting_payment\|done\|all` | — | `{ items: DealListItem[] }` — до 200 строк; в строке `scheduled_at`, `status_short` (статус словом), `client_name` (\| null) |
 | `GET /api/deals/:publicId` | — | только участнику (иначе 403 `forbidden`; нет сделки — 404 `not_found`): `{ public_id, status, version, role: 'seller'\|'client', demo, template, title, description \| null, scheduled_at: ISO \| null, total_rub, prepayment_rub, cancel_rule, client: {name} \| null, can_edit, can_repeat, same_client_available }` — предзаполнение форм правки (T5) и повтора; суммы — целые рубли текущей версии; `can_edit` — исполнитель и статус `awaiting_confirmation`/`changes_requested`; `can_repeat` — исполнитель, статус терминальный, не демо; `same_client_available` — `can_repeat` и у сделки настоящий клиент (не демо) |
 | `PUT /api/deals/:publicId` | как POST (`template`, `profile`, `repeat_of`, `same_client` игнорируются и необязательны) | T5, только исполнитель (иначе 403 `forbidden`): `{ deal: DealView, version, client_notified }`; статус не `awaiting_confirmation`/`changes_requested` — 409 `{ error: { code: 'deal_not_editable', message, status } }`; ни одно поле условий не изменилось (название, уточнения — пустые и `null` равны, дата, сумма, предоплата, правило отмены) — 409 `no_changes` |
 | `POST /api/deals/:publicId/actions` | `{ action: 'done'\|'cancel'\|'keep_as_is'\|'fixed'\|'close_without_receipt'\|'remind_client', reason?: string }` | `DealView` / 409 |
@@ -849,8 +849,9 @@ Callback payload кнопок: `^[a-z]{2}(:[a-z])?:[A-Za-z0-9]{10}(:[A-Za-z0-9]+
 - **Как мини-приложение привязывается к боту на хакатоне?** URL `PUBLIC_BASE_URL/app/` отправляет Екатерина через форму организаторов
   (https://sbor-ssylok-dlya-mini-prilojeniy.testograf.ru/, из письма с токеном) после деплоя на VPS. Кабинета business.max.ru у команды нет,
   поэтому URL должен быть стабильным с первой подачи; до привязки сценарий проходится через демо-сделку из меню (§12) и команду `/new`.
-- **Что делать исполнителю с «Предложить изменения», пока мини-приложение не привязано?** Кнопки «Оставить как есть» и «Отменить» работают
-  всегда; редактирование условий — только через мини-приложение (Must) — либо новая сделка. Текстовое редактирование в боте — Won't.
+- **Что делать исполнителю с «Предложить изменения»?** «✏️ Изменить условия» в уведомлении N3 открывает мини-приложение сразу на
+  форме этой сделки (`edit_<id>`, §7.5) — клиент получает версию 2 с перечнем изменений (T5). «Оставить как есть» и «Отменить» работают
+  всегда. Текстовое редактирование в боте — Won't.
 - **Как узнать, какое событие приходит при повторном нажатии диплинка?** Проверить в шаге 0 ЗАДАЧА_01 с логированием `DEBUG=max:*`;
   обработчик принимает оба источника (§6.3).
 - **Что считать «основным сценарием» для жюри?** Создать сделку → отправить/открыть как клиент → подтвердить → предоплата (перевод «перевёл/получил» или тестовая ссылка) → выполнено → принято → остаток → чек → квитанция PDF обеим сторонам. Порядок проверки — README §«Сценарий проверки».
