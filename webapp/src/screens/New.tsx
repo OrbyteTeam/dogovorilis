@@ -1,8 +1,10 @@
-// Экран «Новая сделка» — docs/SPEC.md §7.2 (таблица полей и правил), §7.6 (шаблоны); вид — docs/DESIGN.md §4–§5.
+// Форма сделки — docs/SPEC.md §7.2 (таблица полей и правил), §7.5 (правка условий), §7.6 (шаблоны);
+// вид — docs/DESIGN.md §4–§5. Одна форма на создание и на правку (T5): режим задаёт заголовок, предзаполнение и кнопку,
+// а куда отправлять — решает экран-владелец через onSubmit.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Input, Panel, Radio, Switch, Textarea, Typography } from '@maxhub/max-ui';
 
-import { api, errorText } from '../api';
+import { errorText, isRetryable } from '../api';
 import { disableClosingConfirmation, enableClosingConfirmation, haptic, userDisplayName } from '../bridge';
 import { ControlRow } from '../components/ControlRow';
 import { Field, revealField } from '../components/Field';
@@ -13,7 +15,7 @@ import { CANCEL_RULE_LABEL, CANCEL_RULE_TEXT, CANCEL_RULES, formatRub, isoToMosc
 import type {
   CancelRule,
   CreateDealRequest,
-  CreateDealResponse,
+  DealDetails,
   MeResponse,
   SellerProfile,
   TaxMode,
@@ -53,42 +55,101 @@ function toInt(value: string): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
+/** Режим формы: создание с нуля или правка условий существующей сделки (T5, `#/deals/:id/edit`). */
+export type DealFormMode = { kind: 'create' } | { kind: 'edit'; source: DealDetails };
+
+interface FormValues {
+  templateKey: TemplateKey | null;
+  title: string;
+  description: string;
+  noDate: boolean;
+  scheduledLocal: string;
+  totalRaw: string;
+  prepayMode: PrepayMode;
+  prepayCustomRaw: string;
+  cancelRule: CancelRule;
+}
+
+/** Предоплата прежней сделки → сегмент: 0 → «Нет», ровно 30 % / 50 % (с округлением вверх) → сегмент, иначе «Своя». */
+function prepayFrom(totalRub: number, prepaymentRub: number): Pick<FormValues, 'prepayMode' | 'prepayCustomRaw'> {
+  if (prepaymentRub <= 0) return { prepayMode: 'none', prepayCustomRaw: '' };
+  if (prepaymentRub === Math.ceil((totalRub * 30) / 100)) return { prepayMode: 'p30', prepayCustomRaw: '' };
+  if (prepaymentRub === Math.ceil((totalRub * 50) / 100)) return { prepayMode: 'p50', prepayCustomRaw: '' };
+  return { prepayMode: 'custom', prepayCustomRaw: String(prepaymentRub) };
+}
+
+function initialValues(me: MeResponse, mode: DealFormMode): FormValues {
+  if (mode.kind === 'create') {
+    return {
+      templateKey: null,
+      title: '',
+      description: '',
+      noDate: true,
+      scheduledLocal: '',
+      totalRaw: '',
+      prepayMode: 'none',
+      prepayCustomRaw: '',
+      cancelRule: me.profile?.default_cancel_rule ?? 'free_24h',
+    };
+  }
+  const src = mode.source;
+  return {
+    templateKey: src.template,
+    title: src.title,
+    description: src.description ?? '',
+    noDate: src.scheduled_at === null,
+    scheduledLocal: src.scheduled_at ? isoToMoscowInput(new Date(src.scheduled_at)) : '',
+    totalRaw: String(src.total_rub),
+    ...prepayFrom(src.total_rub, src.prepayment_rub),
+    cancelRule: src.cancel_rule,
+  };
+}
 
 export interface NewScreenProps {
   me: MeResponse;
   templates: Template[];
-  /** `savedProfile` — профиль, сохранённый этим же запросом; null, если он уже был. */
-  onCreated: (result: CreateDealResponse, savedProfile: SellerProfile | null) => void;
+  mode?: DealFormMode;
+  /**
+   * Отправка. Разрешился — экран-владелец сам решил, что дальше (переход, экран успеха, тост и остаться).
+   * Бросил — форма покажет тост, а при сбое сети или сервера ещё и «Повторить».
+   */
+  onSubmit: (payload: CreateDealRequest) => Promise<void>;
 }
 
-export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
+export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }: NewScreenProps) {
   const showToast = useToast();
-  const needProfile = me.profile === null;
+  const editing = mode.kind === 'edit';
+  // Блок «О вас» — только когда профиля ещё нет (SPEC §7.2) и никогда при правке: сделка уже подписана.
+  const needProfile = me.profile === null && !editing;
+  const [init] = useState(() => initialValues(me, mode));
+  const initTemplate = templates.find((t) => t.key === init.templateKey) ?? null;
 
-  // Блок «О вас» — только когда профиля ещё нет (SPEC §7.2).
   const [displayName, setDisplayName] = useState(() => me.profile?.display_name ?? userDisplayName() ?? '');
   const [taxMode, setTaxMode] = useState<TaxMode>(me.profile?.tax_mode ?? 'npd');
   const [payoutDetails, setPayoutDetails] = useState(me.profile?.payout_details ?? '');
 
-  const [templateKey, setTemplateKey] = useState<TemplateKey | null>(null);
-  const [templateHint, setTemplateHint] = useState<string | null>(null);
-  const [dateRequired, setDateRequired] = useState(false);
-  const templateTitle = useRef('');
+  const [templateKey, setTemplateKey] = useState<TemplateKey | null>(init.templateKey);
+  const [templateHint, setTemplateHint] = useState<string | null>(initTemplate?.hint ?? null);
+  const [dateRequired, setDateRequired] = useState(initTemplate?.date_required ?? false);
+  // Название «из шаблона» — его можно заменить другим шаблоном; своё название пользователя не трогаем.
+  const templateTitle = useRef(initTemplate && initTemplate.title === init.title ? init.title : '');
 
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [noDate, setNoDate] = useState(true);
-  const [scheduledLocal, setScheduledLocal] = useState('');
-  const [totalRaw, setTotalRaw] = useState('');
-  const [prepayMode, setPrepayMode] = useState<PrepayMode>('none');
-  const [prepayCustomRaw, setPrepayCustomRaw] = useState('');
+  const [title, setTitle] = useState(init.title);
+  const [description, setDescription] = useState(init.description);
+  const [noDate, setNoDate] = useState(init.noDate);
+  const [scheduledLocal, setScheduledLocal] = useState(init.scheduledLocal);
+  const [totalRaw, setTotalRaw] = useState(init.totalRaw);
+  const [prepayMode, setPrepayMode] = useState<PrepayMode>(init.prepayMode);
+  const [prepayCustomRaw, setPrepayCustomRaw] = useState(init.prepayCustomRaw);
   /** Процент из шаблона, которого нет в сегментах (например 100 %): сумма пересчитывается за «Своя сумма». */
   const [autoPercent, setAutoPercent] = useState<number | null>(null);
-  const [cancelRule, setCancelRule] = useState<CancelRule>(me.profile?.default_cancel_rule ?? 'free_24h');
+  const [cancelRule, setCancelRule] = useState<CancelRule>(init.cancelRule);
 
   const [touched, setTouched] = useState<Partial<Record<FieldName, boolean>>>({});
   const [submitted, setSubmitted] = useState(false);
   const [sending, setSending] = useState(false);
+  /** Текст последнего сбоя сети/сервера — под ним кнопка «Повторить». */
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const minDateValue = useMemo(() => isoToMoscowInput(new Date(Date.now() + LEAD_TIME_MS)), []);
 
@@ -167,15 +228,13 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
 
   const markTouched = (field: FieldName) => setTouched((prev) => ({ ...prev, [field]: true }));
 
-  // Подтверждение закрытия, пока в форме есть несохранённые данные (SPEC §7.1).
-  const dirty =
-    templateKey !== null ||
-    title.trim() !== '' ||
-    description.trim() !== '' ||
-    totalRaw !== '' ||
-    prepayCustomRaw !== '' ||
-    (!noDate && scheduledLocal !== '') ||
-    (needProfile && (displayName.trim() !== '' || payoutDetails.trim() !== ''));
+  // Снимок условий: при правке «ничего не изменили» проверяем по нему ещё до запроса (сервер ответил бы 409 no_changes).
+  const terms = JSON.stringify([title.trim(), description.trim(), noDate ? null : scheduledLocal, totalRaw, prepaymentRub, cancelRule]);
+  const [initialTerms] = useState(terms);
+  // Подтверждение закрытия, пока в форме есть несохранённые данные (SPEC §7.1): отличие от того, с чего форма началась.
+  const draft = JSON.stringify([terms, templateKey, needProfile ? [displayName.trim(), taxMode, payoutDetails.trim()] : null]);
+  const [initialDraft] = useState(draft);
+  const dirty = draft !== initialDraft;
 
   useEffect(() => {
     if (dirty) enableClosingConfirmation();
@@ -236,29 +295,34 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
       if (target) window.requestAnimationFrame(() => revealField(target));
       return;
     }
+    if (editing && terms === initialTerms) {
+      showToast('Вы ничего не изменили');
+      return;
+    }
     if (sending) return;
 
+    const trimmedDescription = description.trim();
     const payload: CreateDealRequest = {
       template: templateKey ?? 'free',
       title: title.trim(),
+      // Пустые уточнения при правке — явный null: иначе «стереть уточнения» не отличить от «не трогать».
+      description: trimmedDescription === '' ? null : trimmedDescription,
       scheduled_at: noDate ? null : moscowInputToIso(scheduledLocal),
       total_rub: totalRub,
       prepayment_rub: prepaymentRub,
       cancel_rule: cancelRule,
     };
-    const trimmedDescription = description.trim();
-    if (trimmedDescription) payload.description = trimmedDescription;
     if (needProfile) payload.profile = buildProfile();
 
     setSending(true);
+    setSubmitError(null);
     try {
-      const result = await api.createDeal(payload);
-      disableClosingConfirmation();
-      haptic('success');
-      onCreated(result, payload.profile ?? null);
+      await onSubmit(payload);
     } catch (error) {
       haptic('error');
-      showToast(errorText(error), 'error');
+      const text = errorText(error);
+      showToast(text, 'error');
+      if (isRetryable(error)) setSubmitError(text);
     } finally {
       setSending(false);
     }
@@ -276,9 +340,16 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
           void submit();
         }}
       >
-        <Typography.Headline variant="large-strong" asChild>
-          <h1>Новая сделка</h1>
-        </Typography.Headline>
+        <div className="dg-head">
+          <Typography.Headline variant="large-strong" asChild>
+            <h1>{editing ? `Изменить условия #${mode.source.public_id}` : 'Новая сделка'}</h1>
+          </Typography.Headline>
+          {editing ? (
+            <Typography.Text variant="body" color="secondary">
+              Клиент получит новую версию и подтвердит её заново
+            </Typography.Text>
+          ) : null}
+        </div>
 
         {needProfile ? (
           <section className="dg-card" aria-labelledby="about-you">
@@ -502,13 +573,30 @@ export function NewScreen({ me, templates, onCreated }: NewScreenProps) {
           </Field>
         </section>
 
+        {submitError ? (
+          <section className="dg-card dg-card_flat" role="alert">
+            <Typography.Text variant="body" color="secondary">
+              {`Не отправилось: ${submitError}`}
+            </Typography.Text>
+            <Button type="button" variant="secondary" size="medium" stretched disabled={sending} onClick={() => void submit()}>
+              Повторить
+            </Button>
+          </section>
+        ) : null}
+
         <Button type="submit" variant="primary" size="large" stretched loading={sending} disabled={sending}>
-          Создать карточку
+          {editing ? 'Отправить новые условия' : 'Создать карточку'}
         </Button>
 
         <Typography.Text variant="description" color="tertiary">
-          Карточка появится в вашем чате с ботом — оттуда её можно отправить клиенту ссылкой.
-          {me.config.demo ? ' Демо-режим включён: в карточке будет кнопка «Открыть как клиент».' : ''}
+          {editing ? (
+            'Карточка обновится у вас и у клиента, а клиенту придёт перечень изменений.'
+          ) : (
+            <>
+              Карточка появится в вашем чате с ботом — оттуда её можно отправить клиенту ссылкой.
+              {me.config.demo ? ' Демо-режим включён: в карточке будет кнопка «Открыть как клиент».' : ''}
+            </>
+          )}
           {me.config.provider === 'none' ? ' Оплата по ссылке на этом сервере не подключена (тестовая среда).' : ''}
         </Typography.Text>
       </form>

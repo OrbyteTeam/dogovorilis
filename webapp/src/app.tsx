@@ -3,19 +3,28 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { api, ApiError, errorText } from './api';
-import { backButton, DEV_NO_BRIDGE, insideMax, isAvailable, startParam } from './bridge';
+import { backButton, DEV_NO_BRIDGE, haptic, insideMax, isAvailable, startParam } from './bridge';
 import { AuthFailedScreen, BridgeMissingScreen, ErrorScreen, LoadingScreen } from './components/StateScreen';
 import { ToastProvider, useToast } from './components/Toast';
 import { DealsScreen } from './screens/Deals';
 import { DoneScreen } from './screens/Done';
+import { EditDealScreen } from './screens/EditDeal';
 import { NewScreen } from './screens/New';
 import { SettingsScreen } from './screens/Settings';
-import type { CreateDealResponse, MeResponse, SellerProfile, Template } from './types';
+import type { CreateDealRequest, CreateDealResponse, MeResponse, SellerProfile, Template } from './types';
 
-type Route = { name: 'new' } | { name: 'done'; id: string } | { name: 'deals' } | { name: 'settings' };
+type Route =
+  | { name: 'new' }
+  | { name: 'done'; id: string }
+  | { name: 'deals' }
+  | { name: 'edit'; id: string }
+  | { name: 'settings' };
 
 /** Формат public_id — SPEC §13: `^d_[A-Za-z0-9]{10}$`. */
 const DEEPLINK_RE = /^d_([A-Za-z0-9]{10})$/;
+/** Правка условий из карточки бота: `edit_<id>` → `#/deals/<id>/edit` (ЗАДАЧА_04 E). */
+const EDIT_PARAM_RE = /^edit_([A-Za-z0-9]{10})$/;
+const EDIT_HASH_RE = /^\/deals\/([A-Za-z0-9]{10})\/edit$/;
 const DONE_STORAGE_PREFIX = 'dogovorilis:done:';
 
 /** Кэш результата создания на время сессии: sessionStorage в MAX WebView может быть недоступен. */
@@ -50,6 +59,8 @@ function parseHash(hash: string): Route | null {
   if (path === '/new') return { name: 'new' };
   if (path === '/deals') return { name: 'deals' };
   if (path === '/settings') return { name: 'settings' };
+  const edit = EDIT_HASH_RE.exec(path);
+  if (edit) return { name: 'edit', id: edit[1] };
   const done = /^\/done\/([A-Za-z0-9]{1,32})$/.exec(path);
   if (done) return { name: 'done', id: done[1] };
   return null;
@@ -59,12 +70,13 @@ function routeToHash(route: Route): string {
   if (route.name === 'done') return `#/done/${route.id}`;
   if (route.name === 'deals') return '#/deals';
   if (route.name === 'settings') return '#/settings';
+  if (route.name === 'edit') return `#/deals/${route.id}/edit`;
   return '#/new';
 }
 
 /**
  * Старт по `start_param` (SPEC §7.1, §13): `new` → форма, `d_<id>` → экран «Готово» с ссылкой,
- * `deals` → список сделок (§7.4), `settings` → профиль (§7.7).
+ * `deals` → список сделок (§7.4), `settings` → профиль (§7.7), `edit_<id>` → правка условий (§7.5).
  */
 function resolveInitialRoute(): { route: Route; notice: string | null } {
   const fromHash = parseHash(window.location.hash);
@@ -73,6 +85,8 @@ function resolveInitialRoute(): { route: Route; notice: string | null } {
   const param = (startParam() ?? '').trim();
   const deeplink = DEEPLINK_RE.exec(param);
   if (deeplink) return { route: { name: 'done', id: deeplink[1] }, notice: null };
+  const edit = EDIT_PARAM_RE.exec(param);
+  if (edit) return { route: { name: 'edit', id: edit[1] }, notice: null };
   if (param === 'deals') return { route: { name: 'deals' }, notice: null };
   if (param === 'settings') return { route: { name: 'settings' }, notice: null };
   return { route: { name: 'new' }, notice: null };
@@ -117,13 +131,14 @@ function Router() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  // BackButton — на всех экранах, кроме корневого #/new (SPEC §7.1).
+  // BackButton — на всех экранах, кроме корневого #/new (SPEC §7.1). С правки — назад к «Моим сделкам», откуда пришли.
   useEffect(() => {
     if (route.name === 'new') {
       backButton.hide();
       return;
     }
-    const onBack = () => navigate({ name: 'new' });
+    const target: Route = route.name === 'edit' ? { name: 'deals' } : { name: 'new' };
+    const onBack = () => navigate(target);
     backButton.onClick(onBack);
     backButton.show();
     return () => {
@@ -158,7 +173,25 @@ function Router() {
   if (state.status === 'error') return <ErrorScreen message={state.message} onRetry={() => void load()} />;
 
   if (route.name === 'deals') {
-    return <DealsScreen me={state.data.me} onNewDeal={() => navigate({ name: 'new' })} />;
+    return (
+      <DealsScreen
+        me={state.data.me}
+        onNewDeal={() => navigate({ name: 'new' })}
+        onEdit={(id) => navigate({ name: 'edit', id })}
+      />
+    );
+  }
+
+  if (route.name === 'edit') {
+    return (
+      <EditDealScreen
+        key={route.id}
+        publicId={route.id}
+        me={state.data.me}
+        templates={state.data.templates}
+        onDeals={() => navigate({ name: 'deals' })}
+      />
+    );
   }
 
   if (route.name === 'settings') {
@@ -188,24 +221,23 @@ function Router() {
     );
   }
 
-  return (
-    <NewScreen
-      me={state.data.me}
-      templates={state.data.templates}
-      onCreated={(result, savedProfile) => {
-        rememberDone(result);
-        // Профиль сохранён вместе со сделкой: без этого «Создать ещё одну» снова покажет пустой блок «О вас».
-        if (savedProfile) {
-          setState((prev) =>
-            prev.status === 'ready'
-              ? { ...prev, data: { ...prev.data, me: { ...prev.data.me, profile: savedProfile } } }
-              : prev,
-          );
-        }
-        navigate({ name: 'done', id: result.deal.public_id });
-      }}
-    />
-  );
+  async function createDeal(payload: CreateDealRequest): Promise<void> {
+    const result = await api.createDeal(payload);
+    haptic('success');
+    rememberDone(result);
+    // Профиль сохранён вместе со сделкой: без этого «Создать ещё одну» снова покажет пустой блок «О вас».
+    const savedProfile = payload.profile;
+    if (savedProfile) {
+      setState((prev) =>
+        prev.status === 'ready'
+          ? { ...prev, data: { ...prev.data, me: { ...prev.data.me, profile: savedProfile } } }
+          : prev,
+      );
+    }
+    navigate({ name: 'done', id: result.deal.public_id });
+  }
+
+  return <NewScreen me={state.data.me} templates={state.data.templates} onSubmit={createDeal} />;
 }
 
 export function App() {

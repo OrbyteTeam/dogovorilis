@@ -5,13 +5,19 @@ import { ApiError } from '../api';
 import { moscowInputToIso } from '../format';
 import { addDays, dayKey } from '../schedule';
 import type {
+  CancelRule,
   CreateDealRequest,
   CreateDealResponse,
+  DealDetails,
   DealListItem,
   DealStatus,
+  DealView,
   MeResponse,
   SellerProfile,
+  TemplateKey,
   TemplatesResponse,
+  UpdateDealRequest,
+  UpdateDealResponse,
 } from '../types';
 
 const BOT = String(import.meta.env.VITE_BOT_USERNAME ?? 'dogovorilis_bot').trim();
@@ -131,11 +137,16 @@ interface MockDeal {
   title: string;
   /** Сдвиг в днях от сегодня и время МСК; null — без даты. */
   at: [number, string] | null;
+  /** Точный момент после правки — перекрывает `at`. */
+  iso?: string | null;
   total: number;
   prepay: number;
   demo?: boolean;
-  description?: string;
+  description?: string | null;
   client?: string;
+  template?: TemplateKey;
+  cancel?: CancelRule;
+  version?: number;
 }
 
 const MOCK_DEAL_ROWS: MockDeal[] = [
@@ -153,9 +164,10 @@ const MOCK_DEAL_ROWS: MockDeal[] = [
   { id: 'Cli3Closed', role: 'client', status: 'closed', title: 'Стрижка', at: [-3, '13:00'], total: 1200, prepay: 0 },
 ];
 
-function mockIso(at: [number, string] | null): string | null {
-  if (!at) return null;
-  return moscowInputToIso(`${addDays(dayKey(new Date()), at[0])}T${at[1]}`);
+function mockIso(row: MockDeal): string | null {
+  if (row.iso !== undefined) return row.iso;
+  if (!row.at) return null;
+  return moscowInputToIso(`${addDays(dayKey(new Date()), row.at[0])}T${row.at[1]}`);
 }
 
 function listItem(row: MockDeal): DealListItem {
@@ -168,7 +180,7 @@ function listItem(row: MockDeal): DealListItem {
     role: row.role,
     title: row.title,
     client_name: row.role === 'seller' ? (row.client ?? null) : null,
-    scheduled_at: mockIso(row.at),
+    scheduled_at: mockIso(row),
     total_kopecks: row.total * 100,
     prepayment_kopecks: row.prepay * 100,
     paid_kopecks: 0,
@@ -180,6 +192,110 @@ function listDeals(): { items: DealListItem[] } {
   if (MOCK_DEALS === 'none') return { items: [] };
   const rows = MOCK_DEAL_ROWS.filter((row) => MOCK_DEALS === 'all' || row.role === MOCK_DEALS);
   return { items: rows.map(listItem) };
+}
+
+const EDITABLE: readonly DealStatus[] = ['awaiting_confirmation', 'changes_requested'];
+const TERMINAL: readonly DealStatus[] = ['declined', 'expired', 'closed', 'cancelled'];
+
+function notFound(): never {
+  throw new ApiError(404, 'not_found', 'Сделка не найдена');
+}
+
+function findRow(publicId: string): MockDeal {
+  return MOCK_DEAL_ROWS.find((row) => row.id === publicId) ?? notFound();
+}
+
+function details(row: MockDeal): DealDetails {
+  const seller = row.role === 'seller';
+  return {
+    public_id: row.id,
+    status: row.status,
+    version: row.version ?? 1,
+    role: row.role,
+    demo: row.demo ?? false,
+    template: row.template ?? 'beauty',
+    title: row.title,
+    description: row.description ?? null,
+    scheduled_at: mockIso(row),
+    total_rub: row.total,
+    prepayment_rub: row.prepay,
+    cancel_rule: row.cancel ?? 'free_24h',
+    client: row.client ? { name: row.client } : null,
+    can_edit: seller && EDITABLE.includes(row.status),
+    can_repeat: seller && TERMINAL.includes(row.status) && !row.demo,
+    same_client_available: seller && Boolean(row.client) && !row.demo,
+  };
+}
+
+function dealView(row: MockDeal): DealView {
+  const link = `https://max.ru/${BOT}?start=d_${row.id}`;
+  return {
+    public_id: row.id,
+    status: row.status,
+    status_text: row.status === 'awaiting_confirmation' ? 'Ждём подтверждения клиента' : SHORT[row.status].seller,
+    template: row.template ?? 'free',
+    demo: row.demo ?? false,
+    seller: { name: profile?.display_name ?? DEMO_PROFILE.display_name },
+    client: row.client ? { name: row.client } : null,
+    version: {
+      version: row.version ?? 1,
+      title: row.title,
+      description: row.description ?? null,
+      scheduled_at: mockIso(row),
+      total_kopecks: row.total * 100,
+      prepayment_kopecks: row.prepay * 100,
+      cancel_rule: row.cancel ?? 'free_24h',
+      photo_max_token: null,
+    },
+    remaining_kopecks: (row.total - row.prepay) * 100,
+    paid_kopecks: 0,
+    link,
+    timestamps: {
+      created_at: new Date().toISOString(),
+      confirmed_at: null,
+      done_at: null,
+      accepted_at: null,
+      paid_at: null,
+      closed_at: null,
+      cancelled_at: null,
+    },
+  };
+}
+
+/** VITE_MOCK_WRITE_FAIL=network|500 — отправка формы падает: видно тост и «Повторить». */
+const WRITE_FAIL = String(import.meta.env.VITE_MOCK_WRITE_FAIL ?? '');
+
+function maybeFailWrite(): void {
+  if (WRITE_FAIL === 'network') throw new ApiError(0, 'network', 'Нет связи. Проверьте интернет и повторите');
+  if (WRITE_FAIL === '500') throw new ApiError(500, 'internal', 'Внутренняя ошибка, попробуйте позже');
+}
+
+/** PUT /api/deals/:id — как T5 на сервере: только исполнитель, два статуса, без изменений — 409 no_changes. */
+function updateDeal(publicId: string, body: UpdateDealRequest): UpdateDealResponse {
+  const row = findRow(publicId);
+  if (row.role !== 'seller') throw new ApiError(403, 'forbidden', 'Менять условия может только исполнитель');
+  if (!EDITABLE.includes(row.status)) {
+    throw new ApiError(409, 'deal_not_editable', 'Клиент уже подтвердил условия');
+  }
+  maybeFailWrite();
+  const next = {
+    title: body.title,
+    description: body.description ?? null,
+    iso: body.scheduled_at ?? null,
+    total: body.total_rub,
+    prepay: body.prepayment_rub,
+    cancel: body.cancel_rule,
+  };
+  const same =
+    next.title === row.title &&
+    next.description === (row.description ?? null) &&
+    next.iso === mockIso(row) &&
+    next.total === row.total &&
+    next.prepay === row.prepay &&
+    next.cancel === (row.cancel ?? 'free_24h');
+  if (same) throw new ApiError(409, 'no_changes', 'Условия не изменились');
+  Object.assign(row, next, { template: body.template, status: 'awaiting_confirmation', version: (row.version ?? 1) + 1 });
+  return { deal: dealView(row), version: row.version ?? 2, client_notified: Boolean(row.client) };
 }
 
 const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
@@ -235,9 +351,13 @@ export async function mockRequest<T>(method: string, path: string, body?: unknow
   if (method === 'GET' && path === '/me') return me() as unknown as T;
   if (method === 'GET' && path === '/templates') return TEMPLATES as unknown as T;
   if (method === 'GET' && path.startsWith('/deals?')) return listDeals() as unknown as T;
+  const dealPath = /^\/deals\/([A-Za-z0-9]+)$/.exec(path);
+  if (dealPath && method === 'GET') return details(findRow(dealPath[1])) as unknown as T;
+  if (dealPath && method === 'PUT') return updateDeal(dealPath[1], body as UpdateDealRequest) as unknown as T;
   if (method === 'PUT' && path === '/me/profile') return { profile: saveProfile(body as SellerProfile) } as unknown as T;
   if (method === 'POST' && path === '/deals') {
     const request = body as CreateDealRequest;
+    maybeFailWrite();
     if (request.profile && !profile) saveProfile(request.profile);
     return createDeal(request) as unknown as T;
   }
