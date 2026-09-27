@@ -110,7 +110,7 @@ export interface DealView {
 export interface CreateDealRequest {
   template: TemplateKey;
   title: string;
-  description?: string;
+  description?: string | null;
   scheduled_at?: string | null;
   total_rub: number;
   prepayment_rub: number;
@@ -149,6 +149,43 @@ export interface CreateDealResponse {
   link: string;
   share_text: string;
   card_sent: boolean;
+}
+
+/**
+ * `GET /api/deals/:publicId` — данные для предзаполнения формы правки (T5) и повтора (ЗАДАЧА_04 E, F).
+ * 403 `forbidden` — не участник; 404 `not_found`.
+ */
+export interface DealDetails {
+  public_id: string;
+  status: DealStatus;
+  version: number;
+  role: 'seller' | 'client';
+  demo: boolean;
+  template: TemplateKey;
+  title: string;
+  description: string | null;
+  scheduled_at: string | null;
+  total_rub: number;
+  prepayment_rub: number;
+  cancel_rule: CancelRule;
+  client: { name: string } | null;
+  /** Исполнитель и статус `awaiting_confirmation` / `changes_requested`. */
+  can_edit: boolean;
+  /** Исполнитель, статус терминальный, не демо. */
+  can_repeat: boolean;
+  /** У прежней сделки был настоящий клиент — можно отправить новую ему напрямую. */
+  same_client_available: boolean;
+}
+
+/** `PUT /api/deals/:publicId` — тело как у создания, без профиля (T5). */
+export type UpdateDealRequest = Omit<CreateDealRequest, 'profile'>;
+
+/** 409 `deal_not_editable` — клиент уже подтвердил и т.п.; 409 `no_changes` — условия те же. */
+export interface UpdateDealResponse {
+  deal: DealView;
+  version: number;
+  /** Клиенту ушло уведомление с перечнем изменений. */
+  client_notified: boolean;
 }
 
 export interface ProfileResponse {

@@ -512,3 +512,30 @@
   font-weight: var(--font-weight-tag-strong);
   vertical-align: middle;
 }
+
+/* Экран-итог: значок успеха на токенах и кнопки на всю ширину колонки */
+.dg-notice-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background-color: var(--icon-positive);
+  color: var(--text-primary-inverse-static);
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.dg-actions_full {
+  align-self: stretch;
+}
+
+/* Заголовок экрана с подписью под ним («Изменить условия #id» + «Клиент получит новую версию…») */
+.dg-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-size-xs);
+  overflow-wrap: anywhere;
+}

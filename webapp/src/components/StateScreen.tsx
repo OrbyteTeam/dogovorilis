@@ -14,13 +14,20 @@ export function LoadingScreen({ text = 'Загружаем…' }: { text?: strin
   );
 }
 
+export interface ScreenAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface ErrorScreenProps {
   message: string;
   onRetry: () => void;
   retrying?: boolean;
+  /** Второй выход, чтобы ошибка не была тупиком (например, «Мои сделки»). */
+  secondary?: ScreenAction;
 }
 
-export function ErrorScreen({ message, onRetry, retrying = false }: ErrorScreenProps) {
+export function ErrorScreen({ message, onRetry, retrying = false, secondary }: ErrorScreenProps) {
   return (
     <Panel mode="secondary" centeredX centeredY className="dg-root">
       <div className="dg-screen dg-screen_centered">
@@ -33,6 +40,53 @@ export function ErrorScreen({ message, onRetry, retrying = false }: ErrorScreenP
         <Button variant="primary" size="large" stretched loading={retrying} onClick={onRetry}>
           Повторить
         </Button>
+        {secondary ? (
+          <Button variant="ghost" size="large" stretched onClick={secondary.onClick}>
+            {secondary.label}
+          </Button>
+        ) : null}
+      </div>
+    </Panel>
+  );
+}
+
+export interface NoticeScreenProps {
+  title: string;
+  text: string;
+  /** Первое действие — главное (primary), остальные — второстепенные. */
+  actions: ScreenAction[];
+  tone?: 'success' | 'neutral';
+}
+
+/** Экран-итог без формы: «Условия отправлены», «Править нельзя» — текст и выходы дальше, без тупиков. */
+export function NoticeScreen({ title, text, actions, tone = 'neutral' }: NoticeScreenProps) {
+  return (
+    <Panel mode="secondary" centeredX centeredY className="dg-root">
+      <div className="dg-screen dg-screen_centered">
+        {tone === 'success' ? (
+          <span className="dg-notice-icon" aria-hidden="true">
+            ✓
+          </span>
+        ) : null}
+        <Typography.Text variant="subheader" asChild>
+          <h1>{title}</h1>
+        </Typography.Text>
+        <Typography.Text variant="body" color="secondary">
+          {text}
+        </Typography.Text>
+        <div className="dg-actions dg-actions_full">
+          {actions.map((action, index) => (
+            <Button
+              key={action.label}
+              variant={index === 0 ? 'primary' : 'secondary'}
+              size="large"
+              stretched
+              onClick={action.onClick}
+            >
+              {action.label}
+            </Button>
+          ))}
+        </div>
       </div>
     </Panel>
   );

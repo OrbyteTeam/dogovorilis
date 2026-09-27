@@ -3,6 +3,7 @@ import { DEV_NO_BRIDGE, initData, insideMax } from './bridge';
 import type {
   CreateDealRequest,
   CreateDealResponse,
+  DealDetails,
   DealsFilter,
   DealsResponse,
   DealsRole,
@@ -10,6 +11,8 @@ import type {
   ProfileResponse,
   SellerProfile,
   TemplatesResponse,
+  UpdateDealRequest,
+  UpdateDealResponse,
 } from './types';
 
 const BASE = '/api';
@@ -121,7 +124,19 @@ export const api = {
   createDeal: (deal: CreateDealRequest) => post<CreateDealResponse>('/deals', deal),
   deals: (q: { role: DealsRole; filter: DealsFilter }) =>
     get<DealsResponse>(`/deals?role=${q.role}&filter=${q.filter}`),
+  deal: (publicId: string) => get<DealDetails>(`/deals/${encodeURIComponent(publicId)}`),
+  updateDeal: (publicId: string, body: UpdateDealRequest) =>
+    put<UpdateDealResponse>(`/deals/${encodeURIComponent(publicId)}`, body),
 };
+
+/**
+ * Сбой, который имеет смысл просто повторить: сеть, таймаут, 5xx, а также 404/405 от сервера, где метода ещё нет
+ * (мини-приложение выкатывается раньше сервера). Ошибки валидации сюда не входят — их исправляют в поле.
+ */
+export function isRetryable(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return true;
+  return error.status === 0 || error.status >= 500 || error.status === 404 || error.status === 405;
+}
 
 /** initData не принят сервером, хотя мини-приложение открыто внутри MAX (истёк или подпись не сошлась) — ЗАДАЧА_04 D1. */
 export const AUTH_FAILED_TEXT = 'Не удалось подтвердить вход через MAX. Закройте и откройте мини-приложение заново';
