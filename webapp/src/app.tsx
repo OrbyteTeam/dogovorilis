@@ -101,6 +101,19 @@ function resolveInitialRoute(): { route: Route; notice: string | null } {
   return { route: { name: 'new' }, notice: null };
 }
 
+/**
+ * Куда ведёт «назад». Корень — экран, с которого открыли мини-приложение (кнопкой в чате или по start_param):
+ * у него «назад» нет. Правка и повтор возвращают в «Мои сделки»; если открыли по ссылке правки или повтора,
+ * «Мои сделки» становятся корнем. Остальные экраны возвращают к стартовому.
+ */
+function parentOf(route: Route, entry: Route): Route | null {
+  if (routeToHash(route) === routeToHash(entry)) return null;
+  const isEditOrRepeat = (r: Route) => r.name === 'edit' || (r.name === 'new' && Boolean(r.from));
+  if (isEditOrRepeat(route)) return { name: 'deals' };
+  if (isEditOrRepeat(entry)) return route.name === 'deals' ? null : { name: 'deals' };
+  return entry;
+}
+
 function navigate(route: Route): void {
   const hash = routeToHash(route);
   if (window.location.hash === hash) return;
@@ -140,22 +153,24 @@ function Router() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  // BackButton — на всех экранах, кроме корневого #/new (SPEC §7.1). С правки и повтора — в «Мои сделки», откуда пришли.
-  const isRoot = route.name === 'new' && !route.from;
-  const backToDeals = route.name === 'edit' || (route.name === 'new' && Boolean(route.from));
+  // BackButton — на всех экранах, кроме того, с которого открыли мини-приложение (SPEC §7.1): с него «назад»
+  // закрывает приложение средствами MAX, а не уводит в «Новую сделку». С правки и повтора — в «Мои сделки».
+  const parent = parentOf(route, initial.route);
+  const parentHash = parent ? routeToHash(parent) : null;
   useEffect(() => {
-    if (isRoot) {
+    if (!parent) {
       backButton.hide();
       return;
     }
-    const onBack = () => navigate(backToDeals ? { name: 'deals' } : { name: 'new' });
+    const onBack = () => navigate(parent);
     backButton.onClick(onBack);
     backButton.show();
     return () => {
       backButton.offClick(onBack);
       backButton.hide();
     };
-  }, [isRoot, backToDeals]);
+    // parent пересоздаётся на каждый рендер, поэтому зависимость — его адрес
+  }, [parentHash]);
 
   const load = useCallback(async () => {
     setState({ status: 'loading' });
