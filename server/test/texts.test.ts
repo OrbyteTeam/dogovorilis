@@ -3,7 +3,7 @@
 // (DESIGN §6: ≤ 12 строк / ≤ 1200 символов) и подстановку сумм и дат в уведомления.
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { CancelRule, CardRole, DealStatus, ReminderKind } from '../src/types.js';
+import type { CancelRule, CardRole, DealStatus } from '../src/types.js';
 import { formatDateTime, formatDayMonth, formatDateTimeShort } from '../src/domain/time.js';
 import { formatMoney } from '../src/domain/money.js';
 import { receiptFileName } from '../src/domain/receipt/pdf.js';
@@ -34,7 +34,11 @@ import {
   S1,
   S2,
   type CardView,
+  type PlainReminderKind,
   cancelRuleText,
+  dailyDigest,
+  eventSoon,
+  recordsWord,
   card,
   demoNotifyPrefix,
   esc,
@@ -91,7 +95,7 @@ const ALL_REMINDERS = Object.keys({
   receipt_due: true,
   receipt_deadline: true,
   refund_due: true,
-} satisfies Record<ReminderKind, true>) as ReminderKind[];
+} satisfies Record<PlainReminderKind, true>) as PlainReminderKind[];
 
 const ALL_RULES = Object.keys({
   free_24h: true,
@@ -588,6 +592,64 @@ describe('напоминания (SPEC §10.2)', () => {
     expect(fast.startsWith(reminderText('receipt_due', base))).toBe(true);
     expect(fast).toContain('🧪 в демо — ускорено');
     for (const kind of ALL_REMINDERS) expect(reminderText(kind, base), kind).not.toContain('ускорено');
+  });
+});
+
+describe('«через 30 минут» и утренняя сводка (ЗАДАЧА_04 B)', () => {
+  const base = { title: 'Маникюр *люкс*', clientName: 'Саша [VIP]', sellerName: 'Анна_М', prepaymentKopecks: 60_000 };
+
+  it('исполнителю — кто и что с предоплатой; пользовательский текст экранирован', () => {
+    expect(eventSoon({ ...base, to: 'seller', prepayment: 'received' })).toBe(
+      '⏰ Через 30 минут: Саша \\[VIP\\] — Маникюр \\*люкс\\*. Предоплата: получена.',
+    );
+    expect(eventSoon({ ...base, to: 'seller', prepayment: 'awaiting' })).toContain(`Предоплата: ждём ${formatMoney(60_000)}.`);
+    expect(eventSoon({ ...base, to: 'seller', prepayment: 'none' })).toContain('Без предоплаты.');
+  });
+
+  it('клиенту — что и у кого', () => {
+    expect(eventSoon({ ...base, to: 'client', prepayment: 'received' })).toBe('⏰ Через 30 минут — Маникюр \\*люкс\\* у Анна\\_М.');
+  });
+
+  it('склонение «запись»', () => {
+    expect([1, 2, 4, 5, 11, 12, 14, 21, 22, 25, 101, 111].map(recordsWord)).toEqual([
+      '1 запись', '2 записи', '4 записи', '5 записей', '11 записей', '12 записей', '14 записей',
+      '21 запись', '22 записи', '25 записей', '101 запись', '111 записей',
+    ]);
+  });
+
+  it('сводка: заголовок с днём, строки по времени, статус словом, демо помечено', () => {
+    const day = new Date('2026-09-28T21:00:00Z'); // вт 29 сен 00:00 МСК
+    const text = dailyDigest({
+      day,
+      lines: [
+        { scheduledAt: new Date('2026-09-29T07:00:00Z'), title: 'Маникюр с покрытием', clientName: 'Саша', status: 'scheduled', prepaymentKopecks: 50_000, demo: false },
+        { scheduledAt: new Date('2026-09-29T11:00:00Z'), title: 'Педикюр', clientName: 'Оля', status: 'awaiting_prepayment', prepaymentKopecks: 30_000, demo: false },
+        { scheduledAt: new Date('2026-09-29T15:30:00Z'), title: 'Стрижка', clientName: null, status: 'scheduled', prepaymentKopecks: 0, demo: false },
+        { scheduledAt: new Date('2026-09-29T16:00:00Z'), title: 'Брови', clientName: 'Анна', status: 'awaiting_acceptance', prepaymentKopecks: 0, demo: true },
+      ],
+    });
+    expect(text.split('\n')).toEqual([
+      '📅 Сегодня, вт 29 сен — 4 записи (МСК):',
+      '10:00 — Саша · Маникюр с покрытием · предоплата получена',
+      '14:00 — Оля · Педикюр · ждём предоплату',
+      '18:30 — клиент не открыл ссылку · Стрижка · без предоплаты',
+      '19:00 — демо-клиент · Брови · ждём приёмку · демо',
+    ]);
+  });
+
+  it('сводка не выходит за лимит сообщения даже при сотне записей', () => {
+    const lines = Array.from({ length: 100 }, (_, i) => ({
+      scheduledAt: new Date(Date.UTC(2026, 8, 29, 5, i)),
+      title: 'Т'.repeat(80),
+      clientName: 'Имя'.repeat(20),
+      status: 'scheduled' as const,
+      prepaymentKopecks: 100,
+      demo: false,
+    }));
+    const text = dailyDigest({ day: new Date('2026-09-28T21:00:00Z'), lines });
+    expect(text.length).toBeLessThanOrEqual(4000);
+    expect(text).toContain('100 записей');
+    expect(text).toContain(`…и ещё 80 — в «${BTN.schedule}»`);
   });
 });
 

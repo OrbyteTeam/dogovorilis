@@ -2,18 +2,22 @@
 // Напоминания уходят нужной стороне с кнопкой «Открыть» (карточка сделки). confirmation_expired не отправляется,
 // а выполняет переход T8. Режим sendReminders=false оставлен для тестов и отладки: напоминание только логируется.
 // В режиме webhook здесь же живёт сторож подписки MAX (раз в 5 минут, transport/bot/webhook.ts).
+// Утренняя сводка (daily_digest) — напоминание без сделки: тик её планирует и отправляет своей веткой (SPEC §10.3).
+import { botUsername, cfg } from '../config.js';
 import { inTx } from '../db/pool.js';
 import * as inputsRepo from '../db/repos/inputs.js';
 import * as remindersRepo from '../db/repos/reminders.js';
+import * as usersRepo from '../db/repos/users.js';
 import type { MaxGateway } from '../integrations/max/gateway.js';
 import { log } from '../logger.js';
 import * as texts from '../texts.js';
-import { remaining, type Reminder } from '../types.js';
+import { remaining, type DealBundle, type Reminder } from '../types.js';
 import * as dealService from '../domain/deal/service.js';
+import * as digest from '../domain/reminder/digest.js';
 import { isDemoAccelerated, isSystemAction } from '../domain/reminder/plan.js';
-import { syncCards } from '../transport/bot/cards.js';
-import { openKeyboard } from '../transport/bot/keyboards.js';
-import { deliver, notifyForEvents } from '../transport/bot/notify.js';
+import { displayName, syncCards } from '../transport/bot/cards.js';
+import { digestKeyboard, openKeyboard } from '../transport/bot/keyboards.js';
+import { clientName, deliver, notifyForEvents } from '../transport/bot/notify.js';
 import type { SubscriptionKeeper } from '../transport/bot/webhook.js';
 import { pollLinkPayments } from './jobs/payments-poll.js';
 
@@ -56,6 +60,10 @@ export async function tick(opts: SchedulerOptions, now = new Date()): Promise<vo
   if (opts.subscription) {
     await opts.subscription.check(now).catch((e) => log.warn({ err: (e as Error).message }, 'планировщик: сторож подписки упал'));
   }
+  // Сводку планируем до отправки: у кого сегодня есть записи, а момент сводки ещё впереди (SPEC §10.3).
+  await digest
+    .planDigests(now, timezone())
+    .catch((e) => log.error({ err: (e as Error).message }, 'планировщик: планирование сводки упало'));
   await runDueReminders(opts, now);
   // Страховка на случай, когда вебхук провайдера не доходит (локальный запуск без HTTPS) — SPEC §10.3.
   await pollLinkPayments(opts.max, now).catch((e) => log.error({ err: (e as Error).message }, 'планировщик: опрос платежей упал'));
@@ -83,6 +91,11 @@ async function runDueReminders(opts: SchedulerOptions, now: Date): Promise<void>
 }
 
 async function handleReminder(reminder: Reminder, opts: SchedulerOptions, now: Date): Promise<void> {
+  // Сводка — напоминание не по сделке: проверки «статус сделки уже не тот» у неё нет, своя ветка.
+  if (reminder.dealId === null || reminder.kind === 'daily_digest') {
+    await handleDigest(reminder, opts, now);
+    return;
+  }
   const bundle = await dealService.getBundleById(reminder.dealId);
 
   // Статус сделки уже другой — напоминание потеряло смысл (SPEC §10.1).
@@ -103,14 +116,14 @@ async function handleReminder(reminder: Reminder, opts: SchedulerOptions, now: D
     return;
   }
 
-  const text = texts.reminderText(reminder.kind, {
-    id: bundle.deal.publicId,
-    title: bundle.version.title,
-    sumKopecks: reminder.kind === 'payment_due' || reminder.kind === 'payment_overdue' ? remaining(bundle.version) : bundle.version.prepaymentKopecks,
-    scheduledAt: bundle.version.scheduledAt,
-    deadline: bundle.deal.paidAt,
-    accelerated: bundle.deal.demo && isDemoAccelerated(reminder.kind),
-  });
+  // «Через 30 минут», когда срок уже наступил (сервер лежал), — поздно и бессмысленно (ЗАДАЧА_04 B1).
+  const at = bundle.version.scheduledAt;
+  if (reminder.kind === 'event_soon' && (!at || at.getTime() <= now.getTime())) {
+    await inTx((c) => remindersRepo.markCancelled(c, reminder.id, 'too_late'));
+    return;
+  }
+
+  const text = reminderMessage(reminder, bundle);
 
   if (!opts.sendReminders) {
     log.info(
@@ -133,6 +146,64 @@ async function handleReminder(reminder: Reminder, opts: SchedulerOptions, now: D
   if (sent) await inTx((c) => remindersRepo.markSent(c, reminder.id));
   else await inTx((c) => remindersRepo.markCancelled(c, reminder.id, 'no_chat'));
   log.info({ deal: bundle.deal.publicId, kind: reminder.kind, to: reminder.recipientRole, sent }, 'напоминание обработано');
+}
+
+/** Текст напоминания по сделке: у «через 30 минут» свои данные (имена сторон, предоплата), у остальных — общие. */
+function reminderMessage(reminder: Reminder, bundle: DealBundle): string {
+  const kind = reminder.kind;
+  const { deal, version } = bundle;
+  if (kind === 'event_soon') {
+    return texts.eventSoon({
+      to: reminder.recipientRole,
+      title: version.title,
+      clientName: clientName(bundle),
+      sellerName: bundle.sellerProfile?.displayName || displayName(bundle.seller.firstName, bundle.seller.lastName),
+      prepayment: version.prepaymentKopecks === 0 ? 'none' : deal.status === 'awaiting_prepayment' ? 'awaiting' : 'received',
+      prepaymentKopecks: version.prepaymentKopecks,
+    });
+  }
+  if (kind === 'daily_digest') throw new Error('сводка — не напоминание по сделке');
+  return texts.reminderText(kind, {
+    id: deal.publicId,
+    title: version.title,
+    sumKopecks: kind === 'payment_due' || kind === 'payment_overdue' ? remaining(version) : version.prepaymentKopecks,
+    scheduledAt: version.scheduledAt,
+    deadline: deal.paidAt,
+    accelerated: deal.demo && isDemoAccelerated(kind),
+  });
+}
+
+/**
+ * Утренняя сводка (ЗАДАЧА_04 B2). Состав считается заново: что отменили или перенесли после планирования,
+ * в сводку не попадёт; пустой день — не шлём (`empty`). Сводка за вчерашний день после простоя сервера
+ * смысла не имеет (`too_late`); выключенная в «Настройках» — гасится (`digest_off`).
+ */
+async function handleDigest(reminder: Reminder, opts: SchedulerOptions, now: Date): Promise<void> {
+  const cancel = (reason: string) => inTx((c) => remindersRepo.markCancelled(c, reminder.id, reason));
+  const userId = reminder.userId;
+  if (!userId) return cancel('no_user');
+  const tz = timezone();
+  const day = digest.dayOf(reminder.dueAt, tz);
+  if (digest.dayOf(now, tz).dateKey !== day.dateKey) return cancel('too_late');
+
+  const { user, profile } = await inTx(async (c) => ({ user: await usersRepo.byId(c, userId), profile: await usersRepo.getProfile(c, userId) }));
+  if (!profile || profile.digestTime === null) return cancel('digest_off');
+  const items = await digest.daySchedule(userId, day);
+  if (!items.length) return cancel('empty');
+  if (!opts.sendReminders) return cancel('sending_disabled');
+  if (!user?.dialogChatId) return cancel('no_chat');
+  if (!opts.max) throw new Error('нет шлюза MAX для отправки сводки');
+
+  // Ошибка отправки пробрасывается — повтор на следующем тике, как у остальных напоминаний.
+  const text = texts.dailyDigest({ day: day.start, lines: items, now });
+  await opts.max.send({ chatId: user.dialogChatId }, text, [digestKeyboard(botUsername())]);
+  await inTx((c) => remindersRepo.markSent(c, reminder.id));
+  log.info({ user: userId, items: items.length }, 'утренняя сводка отправлена');
+}
+
+/** Сутки сводки и её срок считаются в поясе приложения (МСК), как и все остальные напоминания (SPEC §10.2). */
+function timezone(): string {
+  return cfg().APP_TIMEZONE;
 }
 
 /** dedupe_key хранит статус-таймстамп, для которого напоминание создавалось (SPEC §10.1). */

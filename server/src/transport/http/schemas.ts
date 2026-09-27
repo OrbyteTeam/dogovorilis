@@ -1,5 +1,6 @@
 // zod-схемы тел запросов мини-приложения (SPEC §7.8). Лишние поля отбрасываются, ошибки → 400 validation.
 import { z } from 'zod';
+import { isValidDigestTime } from '../../domain/reminder/digest.js';
 
 export const cancelRuleSchema = z.enum(['free_24h', 'free_48h', 'nonrefundable', 'full_refund']);
 export const taxModeSchema = z.enum(['npd', 'ip_kkt', 'none']);
@@ -12,6 +13,12 @@ export const profileSchema = z.object({
   transfer_enabled: z.boolean().default(true),
   link_enabled: z.boolean().default(true),
   default_cancel_rule: cancelRuleSchema.default('free_24h'),
+  // Утренняя сводка: минуты от полуночи по МСК, 06:00–12:00 с шагом 30; null — выключена; нет поля — не менять (ЗАДАЧА_04 B2).
+  digest_time: z
+    .number()
+    .refine(isValidDigestTime, 'Время сводки — с 06:00 до 12:00, шаг 30 минут')
+    .nullable()
+    .optional(),
 });
 
 export const createDealSchema = z.object({
