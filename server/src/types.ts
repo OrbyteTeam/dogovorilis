@@ -85,6 +85,10 @@ export type DealEventType =
   | 'demo.opened'
   | 'refund.confirmed';
 
+/** Поля условий, которые исполнитель меняет новой версией (T5); по ним N4 перечисляет, что изменилось. */
+export type TermsField = 'title' | 'description' | 'scheduled_at' | 'total' | 'prepayment' | 'cancel_rule';
+export const TERMS_FIELDS: readonly TermsField[] = ['title', 'description', 'scheduled_at', 'total', 'prepayment', 'cancel_rule'];
+
 /** Действия над сделкой = триггеры переходов T2–T17 (SPEC §5.2). */
 export type DealAction =
   | 'join'

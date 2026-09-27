@@ -4,12 +4,15 @@
 // Транспорт (бот, HTTP) не знает про SQL, а домен не знает про SDK MAX: сервис возвращает список
 // добавленных событий, а какие уведомления N1–N15 из них следуют — решает transport/bot/notify.
 import {
+  DealNotEditableError,
   ForbiddenError,
   InvalidTransition,
+  NoChangesError,
   NotFoundError,
   NotYourDealError,
   TrialLimitError,
   ValidationError,
+  VersionMismatchError,
 } from '../../errors.js';
 import { inTx, type DbClient } from '../../db/pool.js';
 import * as cardsRepo from '../../db/repos/cards.js';
@@ -36,6 +39,7 @@ import {
   type Role,
   type TaxMode,
   type TemplateKey,
+  type TermsField,
 } from '../../types.js';
 import { assertAmounts } from '../money.js';
 import { addHours, addMinutes } from '../time.js';
@@ -148,6 +152,11 @@ type TransitionSpec = {
    * переход (ЗАДАЧА_03 F4). Деньги по отменённой сделке ловит rails.applyProviderStatus раньше.
    */
   idempotentIfMoved?: boolean;
+  /**
+   * Проверка под блокировкой строки, ДО машины состояний: бросает — перехода нет. Нужна «Подтверждаю»:
+   * версия на кнопке сверяется с текущей в той же транзакции, где исполнитель мог её поднять (T5).
+   */
+  guard?: (deal: Deal) => void;
   /** дополнительные изменения и события внутри той же транзакции */
   mutate?: (a: MutateArgs) => Promise<{ patch?: dealsRepo.DealPatch; events?: Array<{ type: DealEvent['type']; payload?: Record<string, unknown> }> }>;
 };
@@ -171,6 +180,7 @@ async function runTransition(spec: TransitionSpec, now = new Date()): Promise<Se
       : await dealsRepo.lockById(c, spec.dealId!);
     if (!deal) throw new NotFoundError(`сделка ${spec.publicId ?? spec.dealId}`);
     if (!spec.system) assertParticipant(deal, spec.actor);
+    spec.guard?.(deal);
 
     const version = await versionsRepo.byVersion(c, deal.id, deal.currentVersion);
     if (!version) throw new Error(`у сделки ${deal.publicId} нет версии ${deal.currentVersion}`);
@@ -434,12 +444,20 @@ export async function openAsClient(args: { publicId: string; sellerUserId: numbe
 
 // ─────────────────────── T3–T7, T10, T12, T13: кнопки сторон ───────────────────────
 
-export function confirm(publicId: string, actor: Actor, now = new Date()): Promise<ServiceResult> {
+/**
+ * T3 «Подтверждаю». `version` — номер версии с кнопки (`cf:<id>:<v>`): клиент подтверждает то, что видел.
+ * Исполнитель успел изменить условия (T5) — перехода нет, VersionMismatchError («Условия изменились»).
+ * Кнопка старого формата без версии (карточки до ЗАДАЧА_04) считается кнопкой версии 1.
+ */
+export function confirm(publicId: string, actor: Actor, now = new Date(), version = 1): Promise<ServiceResult> {
   return runTransition(
     {
       publicId,
       action: 'confirm',
       actor,
+      guard: (deal) => {
+        if (deal.currentVersion !== version) throw new VersionMismatchError(version, deal.currentVersion);
+      },
       mutate: async ({ c, deal, version, now: at, actor: a }) => {
         await versionsRepo.markConfirmed(c, deal.id, version.version, a.userId, at);
         return {
@@ -490,48 +508,89 @@ export type NewVersionInput = {
   totalKopecks: number;
   prepaymentKopecks: number;
   cancelRule: CancelRule;
-  photoMaxToken: string | null;
+  /** undefined — оставить макет текущей версии, null — убрать */
+  photoMaxToken?: string | null;
 };
 
-/** T5: новая версия условий. Старая версия не редактируется — только добавляется следующая (SPEC §8). */
-export function newVersion(publicId: string, actor: Actor, input: NewVersionInput, now = new Date()): Promise<ServiceResult> {
+/** Пустые «Уточнения» — это null: форма шлёт и null, и '', и пробелы (как при создании — с обрезкой). */
+function normalizeDescription(d: string | null | undefined): string | null {
+  const t = (d ?? '').trim();
+  return t ? t : null;
+}
+
+/** Какие поля условий новая версия меняет — по ним N4 перечисляет изменения клиенту (SPEC §6.5). */
+export function changedTerms(
+  current: Pick<DealVersion, 'title' | 'description' | 'scheduledAt' | 'totalKopecks' | 'prepaymentKopecks' | 'cancelRule'>,
+  next: Pick<NewVersionInput, 'title' | 'description' | 'scheduledAt' | 'totalKopecks' | 'prepaymentKopecks' | 'cancelRule'>,
+): TermsField[] {
+  const out: TermsField[] = [];
+  if (current.title.trim() !== next.title.trim()) out.push('title');
+  if (normalizeDescription(current.description) !== normalizeDescription(next.description)) out.push('description');
+  if ((current.scheduledAt?.getTime() ?? null) !== (next.scheduledAt?.getTime() ?? null)) out.push('scheduled_at');
+  if (current.totalKopecks !== next.totalKopecks) out.push('total');
+  if (current.prepaymentKopecks !== next.prepaymentKopecks) out.push('prepayment');
+  if (current.cancelRule !== next.cancelRule) out.push('cancel_rule');
+  return out;
+}
+
+/**
+ * T5: новая версия условий (SPEC §5.2). Старая версия не редактируется — добавляется следующая (§8).
+ * Разрешено из awaiting_confirmation и changes_requested, иначе DealNotEditableError; ничего не изменилось —
+ * NoChangesError (клиента зря не беспокоим). Всё сравнение — под блокировкой строки, с текущей версией.
+ * `status_changed_at` сдвигается и без смены статуса: напоминания (client_not_opened +24 ч от версии,
+ * confirmation_expired по новому expires_at) перепланируются от новой версии — их ключи строятся от этого времени.
+ */
+export async function newVersion(publicId: string, actor: Actor, input: NewVersionInput, now = new Date()): Promise<ServiceResult> {
   assertAmounts(input.totalKopecks, input.prepaymentKopecks);
   const title = input.title.trim();
   if (title.length < 2 || title.length > 80) throw new ValidationError('Название — от 2 до 80 символов', 'title');
-  if (input.scheduledAt && input.scheduledAt.getTime() < addMinutes(now, 30).getTime())
-    throw new ValidationError('Дата не раньше чем через 30 минут', 'scheduled_at');
+  const description = normalizeDescription(input.description);
+  if (description && description.length > 1000) throw new ValidationError('Уточнения — до 1000 символов', 'description');
 
-  return runTransition(
-    {
-      publicId,
-      action: 'new_version',
-      actor,
-      mutate: async ({ c, deal, now: at, actor: a }) => {
-        const nextVersion = (await versionsRepo.maxVersion(c, deal.id)) + 1;
-        const lastChangeRequest = (await eventsRepo.listByDeal(c, deal.id, 50))
-          .filter((e) => e.type === 'version.change_requested')
-          .at(-1);
-        await versionsRepo.create(c, {
-          dealId: deal.id,
-          version: nextVersion,
-          title,
-          description: input.description,
-          scheduledAt: input.scheduledAt,
-          totalKopecks: input.totalKopecks,
-          prepaymentKopecks: input.prepaymentKopecks,
-          cancelRule: input.cancelRule,
-          photoMaxToken: input.photoMaxToken,
-          changeRequestText: (lastChangeRequest?.payload?.text as string | undefined) ?? null,
-          createdByUserId: a.userId,
-        });
-        return {
-          patch: { currentVersion: nextVersion, expiresAt: addHours(at, CONFIRMATION_TTL_HOURS), confirmedAt: null },
-          events: [{ type: 'version.created', payload: { version: nextVersion } }],
-        };
+  try {
+    return await runTransition(
+      {
+        publicId,
+        action: 'new_version',
+        actor,
+        mutate: async ({ c, deal, version, now: at, actor: a }) => {
+          const next = { ...input, title, description };
+          const changed = changedTerms(version, next);
+          if (changed.length === 0) throw new NoChangesError();
+          // Прежнюю дату, даже если она уже близко, не проверяем: исполнитель мог менять только сумму.
+          if (changed.includes('scheduled_at') && next.scheduledAt && next.scheduledAt.getTime() < addMinutes(at, 30).getTime()) {
+            throw new ValidationError('Дата не раньше чем через 30 минут', 'scheduled_at');
+          }
+          const nextVersion = (await versionsRepo.maxVersion(c, deal.id)) + 1;
+          const lastChangeRequest = (await eventsRepo.listByDeal(c, deal.id, 50))
+            .filter((e) => e.type === 'version.change_requested')
+            .at(-1);
+          await versionsRepo.create(c, {
+            dealId: deal.id,
+            version: nextVersion,
+            title,
+            description,
+            scheduledAt: next.scheduledAt,
+            totalKopecks: next.totalKopecks,
+            prepaymentKopecks: next.prepaymentKopecks,
+            cancelRule: next.cancelRule,
+            photoMaxToken: input.photoMaxToken === undefined ? version.photoMaxToken : input.photoMaxToken,
+            changeRequestText: deal.status === 'changes_requested' ? ((lastChangeRequest?.payload?.text as string | undefined) ?? null) : null,
+            createdByUserId: a.userId,
+          });
+          return {
+            patch: { currentVersion: nextVersion, statusChangedAt: at, expiresAt: addHours(at, CONFIRMATION_TTL_HOURS), confirmedAt: null },
+            events: [{ type: 'version.created', payload: { version: nextVersion, changed } }],
+          };
+        },
       },
-    },
-    now,
-  );
+      now,
+    );
+  } catch (e) {
+    // Машина состояний отказала: условия уже подтверждены (или сделка завершена) — править нельзя.
+    if (e instanceof InvalidTransition) throw new DealNotEditableError(e.status);
+    throw e;
+  }
 }
 
 export function decline(publicId: string, actor: Actor, now = new Date()): Promise<ServiceResult> {

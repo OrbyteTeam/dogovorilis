@@ -182,6 +182,8 @@ export function buildCardView(bundle: DealBundle, role: CardRole): texts.CardVie
     refundLine: refund,
     claimLine: claim,
     clientLink: showLink ? dealLink(deal.publicId) : null,
+    version: version.version,
+    versionCreatedAt: version.createdAt,
   };
 }
 

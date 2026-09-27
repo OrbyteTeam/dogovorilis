@@ -1,8 +1,10 @@
 // Представления для мини-приложения (SPEC §7.8). Наружу — snake_case, внутрь домена — camelCase.
 import { dealLink } from '../../config.js';
 import * as texts from '../../texts.js';
-import { paidTotal, remaining, type DealBundle, type DealListItem, type SellerProfile, type User } from '../../types.js';
+import { isTerminal, paidTotal, remaining, type DealBundle, type DealListItem, type SellerProfile, type User } from '../../types.js';
 import { TEMPLATES } from '../../domain/templates.js';
+import { EDITABLE_STATUSES } from '../../domain/deal/state-machine.js';
+import { displayName } from '../bot/cards.js';
 
 export function userView(user: User) {
   return {
@@ -104,4 +106,40 @@ export function dealView(bundle: DealBundle) {
 /** Текст приглашения БЕЗ ссылки: мини-приложение передаёт её в `shareMaxContent` отдельно (ЗАДАЧА_04 A1). */
 export function shareText(bundle: DealBundle): string {
   return texts.shareInvite(bundle.version.title, bundle.version.scheduledAt);
+}
+
+/** У сделки есть клиент-человек: не демо (там клиент — сам исполнитель) и клиент уже открыл ссылку. */
+export function realClientOf(bundle: DealBundle) {
+  const { deal, client } = bundle;
+  if (deal.demo || !client || deal.clientUserId === deal.sellerUserId) return null;
+  return client;
+}
+
+/**
+ * GET /api/deals/:publicId (SPEC §7.8): предзаполнение формы правки условий (T5) и «Повторить» — поля текущей
+ * версии, суммы в целых рублях, и что смотрящему можно: править (исполнитель, до подтверждения) и повторить
+ * (исполнитель, сделка завершена, не демо; «тот же клиент» — если клиент был настоящий).
+ */
+export function dealEditView(bundle: DealBundle, role: 'seller' | 'client') {
+  const { deal, version } = bundle;
+  const client = realClientOf(bundle);
+  const canRepeat = role === 'seller' && isTerminal(deal.status) && !deal.demo;
+  return {
+    public_id: deal.publicId,
+    status: deal.status,
+    version: deal.currentVersion,
+    role,
+    demo: deal.demo,
+    template: deal.template,
+    title: version.title,
+    description: version.description,
+    scheduled_at: version.scheduledAt?.toISOString() ?? null,
+    total_rub: Math.round(version.totalKopecks / 100),
+    prepayment_rub: Math.round(version.prepaymentKopecks / 100),
+    cancel_rule: version.cancelRule,
+    client: client ? { name: displayName(client.firstName, client.lastName) } : null,
+    can_edit: role === 'seller' && EDITABLE_STATUSES.includes(deal.status),
+    can_repeat: canRepeat,
+    same_client_available: canRepeat && client !== null,
+  };
 }

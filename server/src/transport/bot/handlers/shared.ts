@@ -220,6 +220,11 @@ export function errorText(e: unknown): string {
         return e.message;
       case 'trial_limit':
         return texts.TOO_MANY_TRIALS;
+      case 'version_mismatch':
+        return texts.VERSION_CHANGED;
+      case 'deal_not_editable':
+      case 'no_changes':
+        return texts.E1;
       default:
         return texts.E10;
     }
