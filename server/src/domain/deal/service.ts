@@ -40,6 +40,7 @@ import {
   type TaxMode,
   type TemplateKey,
   type TermsField,
+  type User,
 } from '../../types.js';
 import { assertAmounts } from '../money.js';
 import { addHours, addMinutes } from '../time.js';
@@ -283,6 +284,13 @@ export type CreateDealInput = {
    * `demo` — «🧪 Попробовать на демо-сделке». Не больше TRIAL_LIMIT_PER_HOUR каждого вида в час.
    */
   trial?: 'example' | 'demo';
+  /**
+   * «Повторить» с тем же клиентом (ЗАДАЧА_04 F): клиент привязывается сразу, как при входе по ссылке (T2) —
+   * карточку ему отправит транспорт. Проверяет право на это resolveRepeat.
+   */
+  clientUserId?: number;
+  /** public_id сделки, которую повторяют — для журнала событий. */
+  repeatOf?: string;
 };
 
 export const TRIAL_LIMIT_PER_HOUR = 5;
@@ -321,15 +329,64 @@ export async function createDeal(input: CreateDealInput, now = new Date()): Prom
       type: 'deal.created',
       actorUserId: input.sellerUserId,
       actorRole: 'seller',
-      payload: { template: input.template, total: input.totalKopecks, prepayment: input.prepaymentKopecks, source: input.trial ?? 'app' },
+      payload: {
+        template: input.template,
+        total: input.totalKopecks,
+        prepayment: input.prepaymentKopecks,
+        source: input.trial ?? (input.repeatOf ? 'repeat' : 'app'),
+        ...(input.repeatOf ? { repeat_of: input.repeatOf } : {}),
+      },
     });
 
-    const withDemo = input.demo
-      ? await dealsRepo.update(c, deal.id, { demo: true, clientUserId: input.sellerUserId, clientJoinedAt: now })
-      : deal;
-    const bundle = await loadBundle(c, withDemo);
+    const events: DealEvent[] = [created];
+    let current = deal;
+    if (input.demo) {
+      current = await dealsRepo.update(c, deal.id, { demo: true, clientUserId: input.sellerUserId, clientJoinedAt: now });
+    } else if (input.clientUserId !== undefined) {
+      // Тот же T2, что при входе по ссылке, — в той же транзакции: сделки «без клиента» не бывает ни на миг,
+      // и напоминание client_not_opened не планируется вовсе.
+      if (input.clientUserId === input.sellerUserId) throw new ForbiddenError('self_is_seller');
+      // В журнале — кто привязал: исполнитель, повторив сделку, а не клиент по ссылке.
+      const bound = await bindClient(c, deal, input.clientUserId, now, {
+        actorUserId: input.sellerUserId,
+        actorRole: 'seller',
+        payload: { source: 'repeat', repeat_of: input.repeatOf ?? null },
+      });
+      current = bound.deal;
+      events.push(bound.event);
+    }
+    const bundle = await loadBundle(c, current);
     await replanReminders(c, bundle, now);
-    return { bundle, previousStatus: 'awaiting_confirmation', statusChanged: true, events: [created], alreadyDone: false };
+    return { bundle, previousStatus: 'awaiting_confirmation', statusChanged: true, events, alreadyDone: false };
+  });
+}
+
+export type RepeatPlan = {
+  /** настоящий клиент прежней сделки, если просили «тот же клиент» */
+  client: User | null;
+  /** кого привязать к новой сделке сразу — только если у клиента есть диалог с ботом (бот не пишет первым) */
+  attachClientId: number | null;
+  /** «тот же клиент» просили, но диалога с ботом у него нет — новая сделка будет обычной, со ссылкой */
+  clientNoDialog: boolean;
+};
+
+/**
+ * «🔁 Повторить» (ЗАДАЧА_04 F): повторять можно только свою сделку (иначе 403 — и для несуществующей, чтобы
+ * не подсказывать чужие id), демо — нельзя (в ней клиент — сам исполнитель). «Тот же клиент» — только если у
+ * прежней сделки был настоящий клиент: так исполнитель не отправит карточку постороннему.
+ */
+export async function resolveRepeat(sellerUserId: number, repeatOf: string, sameClient: boolean): Promise<RepeatPlan> {
+  return inTx(async (c) => {
+    const source = await dealsRepo.byPublicId(c, repeatOf);
+    if (!source || source.sellerUserId !== sellerUserId) throw new ForbiddenError('repeat_not_yours');
+    if (source.demo) throw new ValidationError('Демо-сделку повторить нельзя — создайте новую сделку', 'repeat_of');
+    if (!sameClient) return { client: null, attachClientId: null, clientNoDialog: false };
+    const clientId = source.clientUserId;
+    if (clientId === null || clientId === sellerUserId) throw new ForbiddenError('repeat_no_client');
+    const client = await usersRepo.byId(c, clientId);
+    if (!client) throw new ForbiddenError('repeat_no_client');
+    const hasDialog = client.dialogChatId !== null;
+    return { client, attachClientId: hasDialog ? clientId : null, clientNoDialog: !hasDialog };
   });
 }
 
@@ -396,18 +453,24 @@ export async function joinClient(args: { publicId: string; userId: number }, now
     );
     if (!verdict.ok) throw new InvalidTransition(deal.status, 'join', 'client', 'forbidden');
 
-    const updated = await dealsRepo.update(c, deal.id, { clientUserId: args.userId, clientJoinedAt: now });
-    const event = await eventsRepo.append(c, {
-      dealId: deal.id,
-      type: 'client.joined',
-      actorUserId: args.userId,
-      actorRole: 'client',
-      payload: {},
-    });
+    const { deal: updated, event } = await bindClient(c, deal, args.userId, now, { actorUserId: args.userId, actorRole: 'client', payload: {} });
     const bundle = await loadBundle(c, updated);
     await replanReminders(c, bundle, now);
     return { bundle, previousStatus: deal.status, statusChanged: false, events: [event], alreadyDone: false };
   });
+}
+
+/** Эффект T2 (SPEC §5.2): клиент привязан, время входа, событие client.joined. Вход по ссылке и «Повторить». */
+async function bindClient(
+  c: DbClient,
+  deal: Deal,
+  userId: number,
+  now: Date,
+  by: { actorUserId: number; actorRole: ActorRole; payload: Record<string, unknown> },
+): Promise<{ deal: Deal; event: DealEvent }> {
+  const updated = await dealsRepo.update(c, deal.id, { clientUserId: userId, clientJoinedAt: now });
+  const event = await eventsRepo.append(c, { dealId: deal.id, type: 'client.joined', ...by });
+  return { deal: updated, event };
 }
 
 /** Демо-режим «Открыть как клиент»: клиентом становится сам исполнитель (SPEC §12). */

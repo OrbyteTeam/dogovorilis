@@ -69,6 +69,21 @@ export function S2(sellerName: string): string {
   return `Исполнитель **${esc(sellerName)}** предлагает договорённость. Проверьте условия и подтвердите — или предложите изменения.`;
 }
 
+/** «🔁 Повторить» с тем же клиентом (ЗАДАЧА_04 F): карточка приходит клиенту сама, без ссылки — над ней это приветствие. */
+export function S2_REPEAT(sellerName: string): string {
+  return `Исполнитель **${esc(sellerName)}** предлагает новую договорённость — проверьте условия и подтвердите.`;
+}
+
+/** Исполнителю: карточка повторной сделки ушла клиенту в его чат с ботом. */
+export function REPEAT_CARD_SENT(clientName: string): string {
+  return `📨 Карточка отправлена клиенту (${esc(clientName)}) — ждём подтверждения.`;
+}
+
+/** Карточку повторной сделки клиенту доставить не удалось (MAX не ответил) — ссылка откроет её у него. */
+export function REPEAT_CARD_FAILED(clientName: string, link: string): string {
+  return `Не получилось отправить карточку клиенту (${esc(clientName)}). Перешлите ему ссылку — карточка откроется у него: ${link}`;
+}
+
 export const S3 = 'Я понимаю только кнопки и команды. Откройте /deals или /new.';
 
 /**
@@ -982,6 +997,7 @@ export const BTN = {
   cancelYes: 'Да, отменить',
   noReason: 'Без причины',
   receiptPdf: '📄 Квитанция PDF',
+  repeat: '🔁 Повторить',
   refundSent: '✅ Вернул(а)',
   refundReceived: '✅ Возврат получил(а)',
   open: 'Открыть',

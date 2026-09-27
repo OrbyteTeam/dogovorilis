@@ -512,7 +512,7 @@ describe.skipIf(!DB)('платежи: провайдер — источник и
 
       expect(await dealStatus(h, id)).toBe('closed');
       expect(receiptSentToBoth(mark)).toBe(true);
-      expect(labels(sellerCard)).toEqual([texts.BTN.receiptPdf]);
+      expect(labels(sellerCard)).toEqual([texts.BTN.receiptPdf, texts.BTN.repeat]); // «🔁 Повторить» — ЗАДАЧА_04 F
     }, TIMEOUT);
 
     it('«Принимаю» при нулевом остатке → closed, квитанция обеим', async () => {

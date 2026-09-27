@@ -229,7 +229,7 @@ describe.skipIf(!DB)('ответ на кнопку карточки — карт
 
     const mark = h.max.sent.length;
     await h.press(SELLER, SELLER_CHAT, `pdf:${id}`, sellerCard);
-    expect(labels(sellerCard)).toEqual([texts.BTN.receiptPdf]);
+    expect(labels(sellerCard)).toEqual([texts.BTN.receiptPdf, texts.BTN.repeat]); // «🔁 Повторить» — ЗАДАЧА_04 F
     const files = h.max.sent.slice(mark).filter((m) => m.attachmentTypes.includes('file'));
     // Только нажавшему и с честной подписью: у отменённой сделки не «закрыта» (найдено прогоном 23.09)
     expect(files.map((m) => m.chatId)).toEqual([SELLER_CHAT]);
