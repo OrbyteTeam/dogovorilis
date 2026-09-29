@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   acceptTimeLabel,
+  doneText,
   actionErrorOutcome,
   avatarGradient,
   buttonBehavior,
@@ -242,5 +243,13 @@ describe('вид', () => {
     expect(initials('Барбершоп «Усы»')).toBe('Б');
     expect(avatarGradient('Саша')).toBe(avatarGradient(' саша '));
     expect(['red', 'orange', 'green', 'blue', 'purple']).toContain(avatarGradient('Ольга'));
+  });
+});
+
+describe('тост после действия (прогон удобства ЗАДАЧА_08 F)', () => {
+  it('говорит, что произошло, а не просто «Готово»', () => {
+    expect(doneText('confirm')).toBe('Условия подтверждены. Исполнитель получил уведомление');
+    expect(doneText('accept')).toMatch(/^Работа принята/);
+    expect(doneText('receipt_pdf')).toBe('Готово');
   });
 });

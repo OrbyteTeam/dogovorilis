@@ -21,6 +21,7 @@ import {
   checkReceiptFile,
   CHANGE_SHEET,
   confirmSheet,
+  doneText,
   initials,
   layoutActions,
   proposalNote,
@@ -201,7 +202,7 @@ export function DealScreen({ publicId, me, onEdit, onRepeat, onDeals, onTime }: 
       setSheet(null);
       setText('');
       haptic('success');
-      showToast(response.notice ?? (response.result === 'already_done' ? 'Уже сделано, экран обновлён' : 'Готово'));
+      showToast(response.notice ?? (response.result === 'already_done' ? 'Уже сделано, экран обновлён' : doneText(code)));
     } catch (error) {
       handleActionError(error, hasField);
     } finally {

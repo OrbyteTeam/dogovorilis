@@ -1159,7 +1159,7 @@ export function reliabilityLine(r: { closed: number; noDisputePercent: number | 
 
 /** R1 — клиенту после закрытия: одна просьба оценить, оценку видит только исполнитель. */
 export function R1(a: { id: string; title: string }): string {
-  return `⭐ Оцените работу по #${a.id}: ${esc(a.title)}.\nОценку увидит только исполнитель.`;
+  return `⭐ Оцените работу по #${a.id}: ${esc(a.title)}.\nОт 1 до 5, где 5 — отлично. Оценку увидит только исполнитель.`;
 }
 
 export function RATING_THANKS(score: number): string {

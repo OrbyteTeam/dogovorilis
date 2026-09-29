@@ -58,6 +58,27 @@ const LABEL: Record<Exclude<ButtonKey, 'refund_confirmed'>, string> = {
 
 export const RECEIPT_PDF_LABEL = 'Квитанция PDF в чат';
 
+/**
+ * Что сказать после успешного действия, если сервер не прислал своего `notice`: не «Готово», а что именно
+ * произошло и что дальше — клиент не должен гадать (прогон удобства ЗАДАЧА_08 F).
+ */
+const DONE_TEXT: Partial<Record<PostActionCode, string>> = {
+  confirm: 'Условия подтверждены. Исполнитель получил уведомление',
+  decline: 'Вы отказались от сделки. Исполнитель получил уведомление',
+  request_changes: 'Предложение отправлено исполнителю',
+  remarks: 'Замечания отправлены исполнителю',
+  accept: 'Работа принята. Исполнитель получил уведомление',
+  cancel: 'Сделка отменена. Вторая сторона получила уведомление',
+  keep_as_is: 'Условия оставлены как есть. Клиент получил уведомление',
+  done: 'Отмечено: выполнено. Ждём приёмку клиента',
+  fixed: 'Клиенту отправлено: замечания исправлены',
+  close_without_receipt: 'Сделка закрыта без чека. Квитанция ушла обеим сторонам',
+};
+
+export function doneText(code: PostActionCode): string {
+  return DONE_TEXT[code] ?? 'Готово';
+}
+
 export function buttonLabel(key: ButtonKey, role: DealRole): string {
   if (key === 'refund_confirmed') return role === 'seller' ? 'Вернул(а)' : 'Возврат получил(а)';
   return LABEL[key];
