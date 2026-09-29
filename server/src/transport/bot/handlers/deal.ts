@@ -25,8 +25,17 @@ import {
   touchUser,
   type Deps,
 } from './shared.js';
-import { cancelReasonKeyboard, changeKindKeyboard, confirmKeyboard, editTermsButton, keyboard, otherTimeKeyboard } from '../keyboards.js';
-import { deliver } from '../notify.js';
+import {
+  cancelReasonKeyboard,
+  changeKindKeyboard,
+  confirmKeyboard,
+  editTermsButton,
+  keyboard,
+  noCommentKeyboard,
+  otherTimeKeyboard,
+} from '../keyboards.js';
+import { clientName, deliver } from '../notify.js';
+import { rateDeal } from '../../../domain/ratings.js';
 import { publishNewVersion } from '../outcome.js';
 import { syncCards } from '../cards.js';
 import { remindClientNow, remindNote } from '../remind.js';
@@ -35,7 +44,7 @@ import type { ParsedCallback } from '../callbacks.js';
 /** Какой роли принадлежит кнопка, если нажатое сообщение — не карточка (уведомление или напоминание). */
 const CODE_ROLE: Record<string, 'seller' | 'client'> = {
   cf: 'client', cr: 'client', dc: 'client', ac: 'client', rm: 'client', pl: 'client', pt: 'client',
-  dn: 'seller', fx: 'seller', rc: 'seller', nc: 'seller', ka: 'seller', rs: 'seller', tp: 'seller',
+  dn: 'seller', fx: 'seller', rc: 'seller', nc: 'seller', ka: 'seller', rs: 'seller', tp: 'seller', rt: 'client',
 };
 
 export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<ParsedCallback, { kind: 'deal' }>): Promise<void> {
@@ -72,6 +81,10 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
 
     case 'tp':
       await acceptTime(ctx, deps, parsed.publicId, actor, viewRole, Number(parsed.arg));
+      return;
+
+    case 'rt': // оценка клиента после закрытия (ЗАДАЧА_08 E): `rt:<id>:<n>`, «Без комментария» — `rt:n:<id>`
+      await rate(ctx, deps, bundle, viewRole, userId, parsed.sub === 'n' ? null : Number(parsed.arg));
       return;
 
     case 'dc':
@@ -235,6 +248,28 @@ async function acceptTime(ctx: Context, deps: Deps, publicId: string, actor: dea
     return;
   }
   await reply(ctx, deps, outcome.bundle, { role, note: texts.TIME_STALE });
+}
+
+/**
+ * Оценка 1–5 (SPEC §7.11): один раз на сделку; после неё — необязательный комментарий (ввод 30 минут) и R2
+ * исполнителю. `score = null` — «Без комментария»: снять ожидание и поблагодарить.
+ */
+async function rate(ctx: Context, deps: Deps, bundle: DealBundle, role: CardRole, userId: number, score: number | null): Promise<void> {
+  if (score === null) {
+    await inTx((c) => inputsRepo.clearIf(c, { userId, kind: 'rating_comment', dealId: bundle.deal.id }));
+    await reply(ctx, deps, bundle, { role, note: texts.RATING_DONE });
+    return;
+  }
+  const outcome = await rateDeal(bundle.deal.publicId, userId, score);
+  if (!outcome.created) {
+    await reply(ctx, deps, bundle, { role, note: texts.RATING_ALREADY });
+    return;
+  }
+  await inTx((c) =>
+    inputsRepo.set(c, { userId, kind: 'rating_comment', dealId: bundle.deal.id, expiresAt: addMinutes(new Date(), INPUT_TTL_MINUTES) }),
+  );
+  await reply(ctx, deps, bundle, { role, note: texts.RATING_THANKS(score), keyboard: noCommentKeyboard(bundle.deal.publicId) });
+  await deliver(deps.max, bundle, { to: 'seller', text: texts.R2({ client: clientName(bundle), id: bundle.deal.publicId, score }) });
 }
 
 /** Ручное напоминание клиенту: не чаще раза в 4 часа на сделку, счётчик общий с мини-приложением (SPEC §5.5). */

@@ -20,6 +20,8 @@ export const profileSchema = z.object({
     .refine(isValidDigestTime, 'Время сводки — с 06:00 до 12:00, шаг 30 минут')
     .nullable()
     .optional(),
+  // Строка надёжности в карточке клиента (ЗАДАЧА_08 E); нет поля — не менять.
+  show_reliability: z.boolean().optional(),
 });
 
 export const createDealSchema = z.object({

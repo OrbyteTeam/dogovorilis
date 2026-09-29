@@ -12,12 +12,13 @@ import {
   type DealEvent,
   type DealVersion,
   type Payment,
+  type Reliability,
 } from '../../types.js';
 import { receiptDeadline } from '../../domain/time.js';
 import { refundIfCancelled, taxModeOf } from '../../domain/deal/service.js';
 import type { AttachmentRequest } from '../../integrations/max/gateway.js';
 import { parseCallback } from '../bot/callbacks.js';
-import { displayName, railVisibility } from '../bot/cards.js';
+import { clientReliabilityLine, displayName, railVisibility } from '../bot/cards.js';
 import { cardKeyboard, pendingKind } from '../bot/keyboards.js';
 
 /** Коды действий экрана (SPEC §7.9). Первые — выполняет сервер (POST /actions), остальные — само мини-приложение. */
@@ -187,10 +188,14 @@ export type DealFullInput = {
   viewerId: number;
   versions: DealVersion[];
   events: DealEvent[];
+  /** Оценка клиента (ЗАДАЧА_08 E): исполнителю — всегда, клиенту — его собственная. */
+  rating?: { score: number; comment: string | null } | null;
+  /** Надёжность исполнителя для его же экрана (показывается ему всегда, клиентам — по переключателю). */
+  ownReliability?: Reliability | null;
 };
 
 /** DealFull (SPEC §7.9): всё, что нужно экрану сделки, одним ответом; тексты уже готовы к показу. */
-export function dealFullView({ bundle, role, viewerId, versions, events }: DealFullInput) {
+export function dealFullView({ bundle, role, viewerId, versions, events, rating = null, ownReliability = null }: DealFullInput) {
   const { deal, version } = bundle;
   const cardRole = cardRoleOf(bundle, role);
   const actions = cardActions(bundle, role);
@@ -249,6 +254,14 @@ export function dealFullView({ bundle, role, viewerId, versions, events }: DealF
     },
     actions,
     cancel_consequence: consequence,
+    // надёжность (ЗАДАЧА_08 E): исполнителю — его показатели строкой, клиенту — как в карточке (если включено)
+    reliability_line:
+      role === 'seller'
+        ? ownReliability && ownReliability.closed > 0
+          ? texts.reliabilityLine(ownReliability)
+          : null
+        : clientReliabilityLine(bundle),
+    rating: rating ? { score: rating.score, comment: rating.comment } : null,
     // ожидающее предложение времени: подпись кнопки «Принять …» и строка «клиент предлагает» (ЗАДАЧА_08 D)
     time_proposal: bundle.timeProposal ? { id: bundle.timeProposal.id, scheduled_at: bundle.timeProposal.scheduledAt.toISOString() } : null,
   };

@@ -36,7 +36,7 @@ export type PaymentRail = 'link' | 'transfer';
 export type PaymentProvider = 'yookassa' | 'tbank' | 'manual';
 export type PaymentStatus = 'pending' | 'claimed' | 'succeeded' | 'canceled' | 'expired';
 export type ReminderStatus = 'pending' | 'sent' | 'cancelled' | 'failed';
-export type InputKind = 'change_request' | 'remarks' | 'receipt' | 'cancel_reason' | 'payout_details' | 'display_name';
+export type InputKind = 'change_request' | 'remarks' | 'receipt' | 'cancel_reason' | 'payout_details' | 'display_name' | 'rating_comment';
 
 export type ReminderKind =
   | 'client_not_opened'
@@ -131,6 +131,22 @@ export type SellerProfile = {
   defaultCancelRule: CancelRule;
   /** Утренняя сводка: минуты от полуночи по МСК (360…720, шаг 30); null — выключена (ЗАДАЧА_04 B2). */
   digestTime: number | null;
+  /** Строка надёжности в карточке клиента (ЗАДАЧА_08 E, SPEC §7.11); по умолчанию выключена. */
+  showReliability: boolean;
+};
+
+/** Показатели надёжности исполнителя из фактов сделок (SPEC §7.11); доли — проценты, null — нет данных. */
+export type Reliability = {
+  /** сделок закрыто */
+  closed: number;
+  /** без спора среди дошедших до «Выполнено», % */
+  noDisputePercent: number | null;
+  /** чек до 9-го числа месяца после оплаты среди закрытых с нужным чеком, % */
+  chequeOnTimePercent: number | null;
+  /** отменено исполнителем среди подтверждённых клиентом, % */
+  sellerCancelPercent: number | null;
+  /** средняя оценка клиентов (до десятых) и число оценок */
+  rating: { average: number; count: number } | null;
 };
 
 /** Строка списка «Мои сделки» (SPEC §7.4): плоская, без версий, платежей и событий. */
@@ -322,6 +338,8 @@ export type DealBundle = {
   receipt: Receipt | null;
   /** Ожидающее предложение времени от клиента (ЗАДАЧА_08 D): кнопка «Принять» в карточке исполнителя. */
   timeProposal?: TimeProposal | null;
+  /** Надёжность исполнителя — только если он показывает её клиентам (ЗАДАЧА_08 E): строка в карточке клиента. */
+  sellerReliability?: Reliability | null;
 };
 
 export type TimeProposalStatus = 'pending' | 'accepted' | 'taken' | 'superseded';

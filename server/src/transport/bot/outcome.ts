@@ -10,7 +10,7 @@ import { log } from '../../logger.js';
 import * as texts from '../../texts.js';
 import type { DealBundle } from '../../types.js';
 import { displayName, sendCard, syncCards } from './cards.js';
-import { openKeyboard } from './keyboards.js';
+import { openKeyboard, ratingKeyboard } from './keyboards.js';
 import { deliver, notifyForEvents } from './notify.js';
 import { renderAndSendReceipt } from './receipt.js';
 
@@ -27,7 +27,27 @@ export async function publishOutcome(max: MaxGateway, result: ServiceResult, ski
   await syncCards(max, result.bundle, skipMid);
   if (result.alreadyDone) return;
   await notifyForEvents(max, result.bundle, result.events);
-  if (justClosed(result)) await renderAndSendReceipt(max, result.bundle);
+  if (justClosed(result)) {
+    await renderAndSendReceipt(max, result.bundle);
+    await askRating(max, result.bundle);
+  }
+}
+
+/**
+ * R1 (ЗАДАЧА_08 E, SPEC §7.11): после закрытия клиенту — одна просьба оценить, после квитанции. Сбой отправки
+ * сделку не трогает: оценка необязательна. У сделки без клиента оценивать некому.
+ */
+export async function askRating(max: MaxGateway, bundle: DealBundle): Promise<void> {
+  if (!bundle.deal.clientUserId) return;
+  try {
+    await deliver(max, bundle, {
+      to: 'client',
+      text: texts.R1({ id: bundle.deal.publicId, title: bundle.version.title }),
+      keyboard: ratingKeyboard(bundle.deal.publicId),
+    });
+  } catch (e) {
+    log.warn({ deal: bundle.deal.publicId, err: (e as Error).message }, 'просьба оценить не доставлена');
+  }
 }
 
 /**

@@ -21,6 +21,7 @@ import * as dealsRepo from '../../db/repos/deals.js';
 import * as eventsRepo from '../../db/repos/events.js';
 import * as paymentsRepo from '../../db/repos/payments.js';
 import * as proposalsRepo from '../../db/repos/proposals.js';
+import * as ratingsRepo from '../../db/repos/ratings.js';
 import * as receiptsRepo from '../../db/repos/receipts.js';
 import * as remindersRepo from '../../db/repos/reminders.js';
 import * as usersRepo from '../../db/repos/users.js';
@@ -46,8 +47,9 @@ import {
   type User,
 } from '../../types.js';
 import { checkSlot } from '../schedule/availability.js';
+import { computeReliability } from '../reliability.js';
 import { assertAmounts } from '../money.js';
-import { addHours, addMinutes } from '../time.js';
+import { addHours, addMinutes, DEFAULT_TZ } from '../time.js';
 import { newPublicId } from '../ids.js';
 import { planReminders } from '../reminder/plan.js';
 import { refundExpected } from './rules.js';
@@ -87,7 +89,11 @@ export async function loadBundle(c: DbClient, deal: Deal): Promise<DealBundle> {
   if (!seller) throw new Error(`у сделки ${deal.publicId} нет исполнителя ${deal.sellerUserId}`);
   const client = deal.clientUserId ? await usersRepo.byId(c, deal.clientUserId) : null;
   const timeProposal = await proposalsRepo.pendingForDeal(c, deal.id);
-  return { deal, version, payments, seller, sellerProfile, client, receipt, timeProposal };
+  // Надёжность считаем, только если исполнитель показывает её клиентам (ЗАДАЧА_08 E): иначе карточке она не нужна.
+  const sellerReliability = sellerProfile?.showReliability
+    ? computeReliability(await ratingsRepo.finishedFacts(c, deal.sellerUserId), DEFAULT_TZ)
+    : null;
+  return { deal, version, payments, seller, sellerProfile, client, receipt, timeProposal, sellerReliability };
 }
 
 /** Прочитать сделку по публичному id без блокировки — для рендера карточки и для API. */

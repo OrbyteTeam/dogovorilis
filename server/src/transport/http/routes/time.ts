@@ -5,8 +5,6 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { cfg } from '../../../config.js';
 import { inTx } from '../../../db/pool.js';
-import * as eventsRepo from '../../../db/repos/events.js';
-import * as versionsRepo from '../../../db/repos/versions.js';
 import { ForbiddenError, SlotBusyError } from '../../../errors.js';
 import type { MaxGateway } from '../../../integrations/max/gateway.js';
 import * as texts from '../../../texts.js';
@@ -22,7 +20,7 @@ import {
 } from '../../../domain/schedule/busy.js';
 import { publishOutcome } from '../../bot/outcome.js';
 import { checkedPublicId, fail, firstIssue, me, sendError } from '../common.js';
-import { dealFullView } from '../deal-full.js';
+import { fullOf } from './deal-screen.js';
 
 export type TimeDeps = { max: MaxGateway | null };
 
@@ -73,14 +71,9 @@ export function registerTimeApi(app: FastifyInstance, deps: TimeDeps): void {
         { tz: cfg().APP_TIMEZONE, text: texts.TIME_PROPOSAL_TEXT(new Date(parsed.data.scheduled_at)) },
       );
       if (deps.max) await publishOutcome(deps.max, result);
-      const bundle = result.bundle;
-      const { versions, events } = await inTx(async (c) => ({
-        versions: await versionsRepo.listByDeal(c, bundle.deal.id),
-        events: await eventsRepo.listByDeal(c, bundle.deal.id),
-      }));
       return {
         proposal: { id: proposal.id, scheduled_at: proposal.scheduledAt.toISOString(), status: proposal.status },
-        deal: dealFullView({ bundle, role: 'client', viewerId: user.maxUserId, versions, events }),
+        deal: await fullOf(result.bundle, 'client', user.maxUserId),
       };
     } catch (e) {
       if (e instanceof SlotBusyError) return fail(reply, 409, 'slot_busy', texts.API_SLOT_BUSY);

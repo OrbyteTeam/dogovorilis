@@ -23,6 +23,7 @@ import { syncCards } from '../../bot/cards.js';
 import { otherTimeKeyboard } from '../../bot/keyboards.js';
 import { deliver } from '../../bot/notify.js';
 import { publishNewVersion, publishOutcome } from '../../bot/outcome.js';
+import { ratingOf, sellerReliability } from '../../../domain/ratings.js';
 import { renderAndSendReceipt } from '../../bot/receipt.js';
 import { remindClientNow, remindNote } from '../../bot/remind.js';
 import { checkedPublicId, fail, firstIssue, me, sendError } from '../common.js';
@@ -75,12 +76,16 @@ function resolveRole(bundle: DealBundle, userId: number, wanted?: 'seller' | 'cl
   return roles.includes('seller') ? 'seller' : 'client';
 }
 
-async function fullOf(bundle: DealBundle, role: 'seller' | 'client', viewerId: number) {
+export async function fullOf(bundle: DealBundle, role: 'seller' | 'client', viewerId: number) {
   const { versions, events } = await inTx(async (c) => ({
     versions: await versionsRepo.listByDeal(c, bundle.deal.id),
     events: await eventsRepo.listByDeal(c, bundle.deal.id),
   }));
-  return dealFullView({ bundle, role, viewerId, versions, events });
+  // Оценку видит исполнитель и её автор; надёжность исполнителю — всегда своя (ЗАДАЧА_08 E, SPEC §7.11).
+  const rating = await ratingOf(bundle.deal.id);
+  const ownReliability = role === 'seller' ? await sellerReliability(bundle.deal.sellerUserId, cfg().APP_TIMEZONE) : null;
+  const visibleRating = rating && (role === 'seller' || rating.clientUserId === viewerId) ? rating : null;
+  return dealFullView({ bundle, role, viewerId, versions, events, rating: visibleRating, ownReliability });
 }
 
 function textOf(body: ActionBody, max: number, message: string): string {

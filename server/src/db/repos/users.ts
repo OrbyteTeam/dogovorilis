@@ -6,7 +6,7 @@ const USER_COLS =
   'max_user_id, first_name, last_name, username, dialog_chat_id, locale, phone, phone_verified_at';
 
 const PROFILE_COLS =
-  'user_id, display_name, tax_mode, payout_details, transfer_enabled, link_enabled, default_cancel_rule, digest_time';
+  'user_id, display_name, tax_mode, payout_details, transfer_enabled, link_enabled, default_cancel_rule, digest_time, show_reliability';
 
 /** Время сводки по умолчанию — 08:00 МСК (DEFAULT в 0005_digest_and_soon.sql). */
 export const DEFAULT_DIGEST_TIME = 480;
@@ -31,6 +31,7 @@ type ProfileRow = {
   link_enabled: boolean;
   default_cancel_rule: CancelRule;
   digest_time: number | null;
+  show_reliability: boolean;
 };
 
 function mapUser(r: UserRow): User {
@@ -56,6 +57,7 @@ function mapProfile(r: ProfileRow): SellerProfile {
     linkEnabled: r.link_enabled,
     defaultCancelRule: r.default_cancel_rule,
     digestTime: r.digest_time,
+    showReliability: r.show_reliability,
   };
 }
 
@@ -139,13 +141,16 @@ export async function upsertProfile(
     linkEnabled: boolean;
     defaultCancelRule: CancelRule;
     digestTime?: number | null;
+    /** Строка надёжности клиентам (ЗАДАЧА_08 E): undefined — не трогать (у нового профиля — выключено). */
+    showReliability?: boolean;
   },
 ): Promise<SellerProfile> {
   const setDigest = p.digestTime !== undefined;
+  const setReliability = p.showReliability !== undefined;
   const res = await q.query<ProfileRow>(
     `INSERT INTO seller_profiles
-       (user_id, display_name, tax_mode, payout_details, transfer_enabled, link_enabled, default_cancel_rule, digest_time)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $8::boolean THEN $9::smallint ELSE $10::smallint END)
+       (user_id, display_name, tax_mode, payout_details, transfer_enabled, link_enabled, default_cancel_rule, digest_time, show_reliability)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $8::boolean THEN $9::smallint ELSE $10::smallint END, COALESCE($12::boolean, false))
      ON CONFLICT (user_id) DO UPDATE SET
        display_name        = EXCLUDED.display_name,
        tax_mode            = EXCLUDED.tax_mode,
@@ -154,6 +159,7 @@ export async function upsertProfile(
        link_enabled        = EXCLUDED.link_enabled,
        default_cancel_rule = EXCLUDED.default_cancel_rule,
        digest_time         = CASE WHEN $8::boolean THEN EXCLUDED.digest_time ELSE seller_profiles.digest_time END,
+       show_reliability    = CASE WHEN $11::boolean THEN EXCLUDED.show_reliability ELSE seller_profiles.show_reliability END,
        updated_at          = now()
      RETURNING ${PROFILE_COLS}`,
     [
@@ -167,6 +173,8 @@ export async function upsertProfile(
       setDigest,
       setDigest ? p.digestTime : null,
       DEFAULT_DIGEST_TIME,
+      setReliability,
+      setReliability ? p.showReliability : null,
     ],
   );
   return mapProfile(res.rows[0]!);

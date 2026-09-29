@@ -304,6 +304,16 @@ export function otherTimeKeyboard(publicId: string): AttachmentRequest {
   return keyboard([[openApp(BTN.otherTime, botUsername(), `time_${publicId}`)], [callback(BTN.open, cb('op', publicId))]]);
 }
 
+/** R1: оценка 1–5 одним рядом — подписи короткие, пять кнопок в ряду MAX показывает целиком (≤ 7 в ряду). */
+export function ratingKeyboard(publicId: string): AttachmentRequest {
+  return keyboard([[1, 2, 3, 4, 5].map((n) => callback(String(n), cb('rt', publicId, undefined, n)))]);
+}
+
+/** После оценки: комментарий необязателен — «Без комментария» снимает ожидание ввода. */
+export function noCommentKeyboard(publicId: string): AttachmentRequest {
+  return keyboard([[callback(BTN.noComment, cb('rt', publicId, 'n'))]]);
+}
+
 /** Кнопки уведомлений N3 (предложены изменения: изменить условия, оставить как есть, отменить) и N11 (замечания). */
 export function n3Keyboard(publicId: string): AttachmentRequest {
   return keyboard([

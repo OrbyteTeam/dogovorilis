@@ -15,12 +15,13 @@ import { templateByKey } from '../../../domain/templates.js';
 import * as dealService from '../../../domain/deal/service.js';
 import { rescheduleDigest } from '../../../domain/reminder/digest.js';
 import { serviceForDeal } from '../../../domain/services.js';
+import { sellerReliability } from '../../../domain/ratings.js';
 import { displayName, sendCard } from '../../bot/cards.js';
 import { publishNewVersion, sendRepeatToClient } from '../../bot/outcome.js';
 import { verifyInitData } from '../auth.js';
 import { checkedPublicId, fail, firstIssue, me, sendError, viewerRole, type AuthedRequest } from '../common.js';
 import { createDealSchema, dealListQuerySchema, profileSchema, updateDealSchema, type CreateDealBody } from '../schemas.js';
-import { dealEditView, dealListItemView, dealView, profileView, shareText, templatesView, userView } from '../views.js';
+import { dealEditView, dealListItemView, dealView, profileView, reliabilityView, shareText, templatesView, userView } from '../views.js';
 
 /** Простой счётчик запросов на пользователя: 60/мин (SPEC §17). */
 const RATE_LIMIT = 60;
@@ -60,9 +61,12 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
     const user = me(req);
     const profile = await inTx((c) => usersRepo.getProfile(c, user.maxUserId));
     const c = cfg();
+    // Надёжность — исполнителю с профилем (ЗАДАЧА_08 E, SPEC §7.11): «Настройки» показывают её всегда, клиентам — по переключателю.
+    const reliability = profile ? reliabilityView(await sellerReliability(user.maxUserId, c.APP_TIMEZONE)) : null;
     return {
       user: userView(user),
       profile: profileView(profile),
+      reliability,
       config: { provider: c.PAYMENT_PROVIDER, demo: c.DEMO_MODE, bot_username: c.MAX_BOT_USERNAME || 'bot' },
     };
   });
@@ -119,6 +123,7 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
         linkEnabled: parsed.data.link_enabled,
         defaultCancelRule: parsed.data.default_cancel_rule,
         digestTime: parsed.data.digest_time,
+        showReliability: parsed.data.show_reliability,
       }),
     );
     // Сменили время сводки — сегодняшняя переносится или гасится (ЗАДАЧА_04 B2); нет поля — сводку не трогаем.

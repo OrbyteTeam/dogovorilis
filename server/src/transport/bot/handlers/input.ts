@@ -10,6 +10,8 @@ import * as texts from '../../../texts.js';
 import type { CardRole } from '../../../types.js';
 import * as dealService from '../../../domain/deal/service.js';
 import { publishOutcome } from '../outcome.js';
+import { clientName, deliver } from '../notify.js';
+import { commentRating, RATING_COMMENT_MAX } from '../../../domain/ratings.js';
 import { actingRole, actorOf, answerError, chatIdOf, menu, touchUser, type Deps } from './shared.js';
 
 const MAX_TEXT_LENGTH = 500;
@@ -72,7 +74,8 @@ async function handleMessage(ctx: Context, deps: Deps): Promise<void> {
     return;
   }
 
-  const { role, cardRole } = await actingRole(deal.id, userId, null, pending.kind === 'change_request' || pending.kind === 'remarks' ? 'client' : 'seller');
+  const clientKinds = ['change_request', 'remarks', 'rating_comment'];
+  const { role, cardRole } = await actingRole(deal.id, userId, null, clientKinds.includes(pending.kind) ? 'client' : 'seller');
   const actor = actorOf(userId, role);
   const viewRole: CardRole = cardRole ?? (role === 'client' && deal.demo ? 'client_demo' : role);
 
@@ -108,6 +111,27 @@ async function handleMessage(ctx: Context, deps: Deps): Promise<void> {
       const result = await dealService.cancel(deal.publicId, actor, text || null);
       await deps.max.send({ chatId }, `Сделка #${deal.publicId} отменена.`);
       await publishOutcome(deps.max, result);
+      return;
+    }
+
+    case 'rating_comment': {
+      // Комментарий к оценке (ЗАДАЧА_08 E, SPEC §7.11): один раз, до 500 символов, исполнителю — R3.
+      const text = (ctx.message?.body.text ?? '').trim();
+      if (!text) {
+        await deps.max.send({ chatId }, 'Нужен текст одним сообщением.');
+        return;
+      }
+      if (text.length > RATING_COMMENT_MAX) {
+        await deps.max.send({ chatId }, texts.RATING_COMMENT_TOO_LONG);
+        return;
+      }
+      await inTx((c) => inputsRepo.clear(c, userId));
+      const saved = await commentRating(deal.id, userId, text);
+      await deps.max.send({ chatId }, saved ? texts.RATING_COMMENT_SAVED : texts.RATING_ALREADY);
+      if (saved) {
+        const bundle = await dealService.getBundleById(deal.id);
+        await deliver(deps.max, bundle, { to: 'seller', text: texts.R3({ client: clientName(bundle), id: deal.publicId, comment: text }) });
+      }
       return;
     }
 

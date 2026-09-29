@@ -18,6 +18,7 @@ import {
 import { linkRailAvailable } from '../../domain/payment/rails.js';
 import { receiptDeadline } from '../../domain/time.js';
 import { taxModeOf } from '../../domain/deal/service.js';
+import { RELIABILITY_MIN_CLOSED } from '../../domain/reliability.js';
 import { cardKeyboard, pendingKind } from './keyboards.js';
 
 /**
@@ -184,7 +185,18 @@ export function buildCardView(bundle: DealBundle, role: CardRole): texts.CardVie
     clientLink: showLink ? dealLink(deal.publicId) : null,
     version: version.version,
     versionCreatedAt: version.createdAt,
+    reliabilityLine: role === 'seller' ? null : clientReliabilityLine(bundle),
   };
+}
+
+/**
+ * «120 сделок, 98 % без споров» — клиенту, только если исполнитель включил показ и закрытых сделок хотя бы
+ * RELIABILITY_MIN_CLOSED: «1 сделка, 100 %» ничего не говорит (ЗАДАЧА_08 E, SPEC §7.11).
+ */
+export function clientReliabilityLine(bundle: DealBundle): string | null {
+  const r = bundle.sellerReliability;
+  if (!bundle.sellerProfile?.showReliability || !r || r.closed < RELIABILITY_MIN_CLOSED) return null;
+  return texts.reliabilityLine(r);
 }
 
 export function displayName(firstName: string, lastName: string | null): string {

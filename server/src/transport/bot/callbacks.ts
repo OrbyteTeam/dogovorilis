@@ -29,6 +29,7 @@ export const DEAL_CODES = [
   'pdf', // квитанция
   'rf', // rf:s — исполнитель «Вернул(а)», rf:c — клиент «Возврат получил(а)» (SPEC §5.3)
   'tp', // tp:<id>:<proposal_id> — исполнитель принимает предложенное клиентом время (ЗАДАЧА_08 D, SPEC §7.10)
+  'rt', // rt:<id>:<1..5> — оценка клиента; rt:n:<id> — «Без комментария» (ЗАДАЧА_08 E, SPEC §7.11)
 ] as const;
 
 export type DealCode = (typeof DEAL_CODES)[number];

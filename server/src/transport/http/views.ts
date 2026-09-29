@@ -1,7 +1,7 @@
 // Представления для мини-приложения (SPEC §7.8). Наружу — snake_case, внутрь домена — camelCase.
 import { dealLink } from '../../config.js';
 import * as texts from '../../texts.js';
-import { isTerminal, paidTotal, remaining, type DealBundle, type DealListItem, type SellerProfile, type User } from '../../types.js';
+import { isTerminal, paidTotal, remaining, type DealBundle, type DealListItem, type Reliability, type SellerProfile, type User } from '../../types.js';
 import { TEMPLATES } from '../../domain/templates.js';
 import { EDITABLE_STATUSES } from '../../domain/deal/state-machine.js';
 import { displayName } from '../bot/cards.js';
@@ -26,6 +26,18 @@ export function profileView(p: SellerProfile | null) {
     link_enabled: p.linkEnabled,
     default_cancel_rule: p.defaultCancelRule,
     digest_time: p.digestTime,
+    show_reliability: p.showReliability,
+  };
+}
+
+/** Показатели надёжности (SPEC §7.11) наружу — snake_case; доли в процентах, null — «пока нет данных». */
+export function reliabilityView(r: Reliability) {
+  return {
+    closed: r.closed,
+    no_dispute_percent: r.noDisputePercent,
+    cheque_on_time_percent: r.chequeOnTimePercent,
+    seller_cancel_percent: r.sellerCancelPercent,
+    rating: r.rating,
   };
 }
 

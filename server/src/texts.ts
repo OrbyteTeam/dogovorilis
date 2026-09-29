@@ -330,6 +330,8 @@ export type CardView = {
   /** Номер текущей версии условий и когда она создана: при версии > 1 — строка «Версия N · условия изменены …» (T5). */
   version?: number;
   versionCreatedAt?: Date | null;
+  /** «120 сделок, 98 % без споров» — в карточке клиента, если исполнитель это включил (ЗАДАЧА_08 E). */
+  reliabilityLine?: string | null;
 };
 
 const CARD_MAX_LINES = 12;
@@ -375,6 +377,7 @@ export function card(v: CardView): string {
     const transfer = v.transferLines?.length ? v.transferLines : null;
     const base: (string | null)[] = [
       `👤 Исполнитель: ${esc(oneLine(v.sellerName))}`,
+      v.reliabilityLine ? `🛡 ${v.reliabilityLine}` : null,
       `👤 Клиент: ${v.clientName ? esc(oneLine(v.clientName)) : 'ещё не открыл ссылку'}`,
       ...(transfer ?? [v.paymentLine]),
     ];
@@ -392,6 +395,9 @@ export function card(v: CardView): string {
     // случай убираем необязательные в порядке возрастания важности: макет → ссылка → версия → строка чека.
     const countLines = () => head.filter(Boolean).length + terms.filter(Boolean).length + parties.filter(Boolean).length;
     const dropOrder: (() => void)[] = [
+      () => {
+        parties[1] = null; // 🛡 надёжность исполнителя — самое необязательное
+      },
       () => {
         terms[4] = null; // 🖼 макет приложён
       },
@@ -1134,6 +1140,46 @@ export function TIME_TAKEN_CLIENT(a: { id: string; at: Date }): string {
 }
 export const TIME_STALE = 'Это предложение уже неактуально: условия изменились или время прошло. Карточка обновлена.';
 
+// --- надёжность исполнителя и оценка клиента (ЗАДАЧА_08 E, SPEC §7.11) ---
+
+/** Склонение «сделка» по числу: 1 сделка, 3 сделки, 120 сделок. */
+export function dealsWord(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'сделка';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'сделки';
+  return 'сделок';
+}
+
+/** Строка надёжности: «120 сделок, 98 % без споров» (без спорных — только число сделок). */
+export function reliabilityLine(r: { closed: number; noDisputePercent: number | null }): string {
+  const base = `${r.closed} ${dealsWord(r.closed)}`;
+  return r.noDisputePercent === null ? base : `${base}, ${r.noDisputePercent} % без споров`;
+}
+
+/** R1 — клиенту после закрытия: одна просьба оценить, оценку видит только исполнитель. */
+export function R1(a: { id: string; title: string }): string {
+  return `⭐ Оцените работу по #${a.id}: ${esc(a.title)}.\nОценку увидит только исполнитель.`;
+}
+
+export function RATING_THANKS(score: number): string {
+  return `Спасибо! Ваша оценка: ${score} из 5. Можно добавить комментарий одним сообщением или нажать «Без комментария».`;
+}
+export const RATING_ALREADY = 'Оценка по этой сделке уже сохранена. Спасибо!';
+export const RATING_DONE = 'Спасибо, оценка сохранена.';
+export const RATING_COMMENT_SAVED = 'Комментарий передан исполнителю. Спасибо!';
+export const RATING_COMMENT_TOO_LONG = 'Слишком длинно, до 500 символов.';
+
+/** R2 — исполнителю: клиент оценил работу. */
+export function R2(a: { client: string; id: string; score: number }): string {
+  return `⭐ ${esc(a.client)} оценил(а) работу по #${a.id}: ${a.score} из 5.`;
+}
+
+/** R3 — исполнителю: комментарий клиента к оценке. */
+export function R3(a: { client: string; id: string; comment: string }): string {
+  return `💬 Комментарий ${esc(a.client)} к оценке по #${a.id}:\n${quote(esc(a.comment))}`;
+}
+
 // --- подписи кнопок. Ровно те, что в SPEC §5.5, §6.4, §6.5 и DESIGN §6 ---
 
 export const BTN = {
@@ -1186,4 +1232,5 @@ export const BTN = {
   otherTime: '🗓 Другое время',
   writeText: '✍️ Написать текстом',
   proposeOther: '✏️ Предложить другое',
+  noComment: 'Без комментария',
 };
