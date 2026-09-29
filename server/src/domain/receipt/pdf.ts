@@ -1,4 +1,6 @@
-// Квитанция PDF (SPEC §11, DESIGN_BRIEF §8): A4, поля 20 мм, шрифт DejaVu Sans (кириллица).
+// Квитанция PDF (SPEC §11, DESIGN_BRIEF §8): A4, поля 20 мм. Вид кассового чека (просьба Екатерины 29.09):
+// моноширинный DejaVu Sans Mono (кириллица, тот же пакет dejavu-fonts-ttf), чуть сжатый по ширине, как у кассового
+// принтера; заголовки разделов прописными; значения в колонку, суммы у правого края; все линии пунктиром.
 // Порядок блоков: шапка с логотипом, статус, стороны, условия с прошлыми версиями, платежи с подтверждениями
 // перевода, хронология, чек; подвал на каждой странице. Демо-сделка помечается водяным знаком «ДЕМО» (SPEC §12).
 // Пометки среды в строках платежей обязательны (SPEC §18): «тест» у ссылок. Все тексты по DESIGN_BRIEF §2:
@@ -71,8 +73,14 @@ const MM = 72 / 25.4;
 const MARGIN = 20 * MM;
 /** Место под подвал: он стоит на каждой странице ниже поля содержимого. */
 const FOOTER_SPACE = 44;
-const FONT = 'DejaVu';
-const FONT_BOLD = 'DejaVu-Bold';
+const FONT = 'DejaVuMono';
+const FONT_BOLD = 'DejaVuMono-Bold';
+/** Сжатие по ширине: узкие буквы кассового принтера; одно значение и в отрисовке, и в измерении высоты текста. */
+const SCALE = 90;
+/** Ширина колонки подписей «Правило отмены:» в знаках моноширинного шрифта: значения встают ровной колонкой. */
+const LABEL_CHARS = 17;
+/** Пунктир линий: штрих и промежуток в пунктах. */
+const DASH = { dash: 3, space: 2 };
 const INK = '#000000';
 const MUTED = '#555555';
 const HAIRLINE = '#cccccc';
@@ -164,7 +172,7 @@ export function receiptFileName(publicId: string): string {
 const requireFromHere = createRequire(import.meta.url);
 let fontFiles: { regular: string; bold: string } | null = null;
 
-/** Путь к ttf ищем через package.json пакета: устойчиво к вложенности node_modules. */
+/** Путь к ttf ищем через package.json пакета: устойчиво к вложенности node_modules. Моноширинная пара, вид чека. */
 function resolveFonts(): { regular: string; bold: string } {
   if (fontFiles) return fontFiles;
   let pkgDir: string;
@@ -175,7 +183,7 @@ function resolveFonts(): { regular: string; bold: string } {
       'Пакет dejavu-fonts-ttf не найден: без него в квитанции не будет кириллицы. Выполните npm ci в корне репозитория.',
     );
   }
-  fontFiles = { regular: findFontFile(pkgDir, 'DejaVuSans.ttf'), bold: findFontFile(pkgDir, 'DejaVuSans-Bold.ttf') };
+  fontFiles = { regular: findFontFile(pkgDir, 'DejaVuSansMono.ttf'), bold: findFontFile(pkgDir, 'DejaVuSansMono-Bold.ttf') };
   return fontFiles;
 }
 
@@ -222,29 +230,96 @@ function useFont(doc: Doc, bold: boolean, size: number): void {
   doc.font(bold ? FONT_BOLD : FONT).fontSize(size);
 }
 
+/** pdfkit поддерживает horizontalScaling (js/pdfkit.js, LineWrapper), а в @types/pdfkit 0.17.6 его нет. */
+type TextOptions = PDFKit.Mixins.TextOptions & { horizontalScaling?: number };
+
+/**
+ * Параметры текста с общим сжатием по ширине: одинаковые для doc.text и doc.heightOfString.
+ * pdfkit 0.20 сжимает и ширину слов, и ширину строки (LineWrapper: lineWidth = width × scale), поэтому без
+ * поправки строка ломалась бы на 10 % раньше края. Ширину отдаём делённой на коэффициент: итог ровно `width`.
+ */
+function textOptions(o: TextOptions = {}): TextOptions {
+  const width = o.width === undefined ? undefined : (o.width * 100) / SCALE;
+  return { horizontalScaling: SCALE, ...o, ...(width === undefined ? {} : { width }) };
+}
+
+/** Заголовок раздела прописными, как в чеке: «СТАТУС», «ПЛАТЕЖИ». */
 function heading(doc: Doc, text: string): void {
   ensureSpace(doc, 34);
   doc.moveDown(0.4);
   useFont(doc, true, 11);
-  doc.fillColor(INK).text(text, MARGIN, doc.y, { width: contentWidth(doc) });
-  doc.moveDown(0.25);
+  doc.fillColor(INK).text(text.toUpperCase(), MARGIN, doc.y, textOptions({ width: contentWidth(doc), characterSpacing: 0.6 }));
+  doc.moveDown(0.3);
 }
 
 function line(doc: Doc, text: string, opts: { size?: number; bold?: boolean; color?: string } = {}): void {
   const size = opts.size ?? 10;
   const bold = opts.bold === true;
+  const o = textOptions({ width: contentWidth(doc) });
   useFont(doc, bold, size);
-  ensureSpace(doc, doc.heightOfString(text, { width: contentWidth(doc) }));
+  ensureSpace(doc, doc.heightOfString(text, o));
   useFont(doc, bold, size);
-  doc.fillColor(opts.color ?? INK).text(text, MARGIN, doc.y, { width: contentWidth(doc) });
+  doc.fillColor(opts.color ?? INK).text(text, MARGIN, doc.y, o);
   doc.fillColor(INK);
 }
 
-function hairline(doc: Doc): void {
-  const y = doc.y + 4;
-  doc.save().strokeColor(HAIRLINE).lineWidth(0.5).moveTo(MARGIN, y).lineTo(doc.page.width - MARGIN, y).stroke().restore();
+/** Ширина колонки подписей в пунктах при данном кегле: моноширинный знак 0,6 кегля, со сжатием. */
+function labelWidth(size: number, chars = LABEL_CHARS): number {
+  return chars * size * 0.6 * (SCALE / 100);
+}
+
+/**
+ * Строка «подпись: значение» колонками, как «СУММА : 56,00» в чеке: подписи слева, значения ровно друг под другом;
+ * длинное значение переносится в своей колонке, а не под подпись.
+ */
+function field(doc: Doc, label: string, value: string, opts: { size?: number; bold?: boolean; color?: string; labelChars?: number } = {}): void {
+  const size = opts.size ?? 10;
+  const lw = labelWidth(size, opts.labelChars);
+  const vo = textOptions({ width: contentWidth(doc) - lw });
+  useFont(doc, opts.bold === true, size);
+  const height = doc.heightOfString(value, vo);
+  ensureSpace(doc, height);
+  useFont(doc, opts.bold === true, size);
+  const top = doc.y;
+  doc.fillColor(MUTED).text(label, MARGIN, top, textOptions({ width: lw, lineBreak: false }));
+  doc.fillColor(opts.color ?? INK).text(value, MARGIN + lw, top, vo);
+  doc.fillColor(INK);
   doc.x = MARGIN;
-  doc.y = y + 6;
+  doc.y = top + height;
+}
+
+/** Итоговая строка чека: подпись слева, сумма у правого края, жирным. */
+function totalLine(doc: Doc, label: string, value: string): void {
+  const o = textOptions({ width: contentWidth(doc) });
+  useFont(doc, true, 11);
+  ensureSpace(doc, doc.heightOfString(label, o));
+  useFont(doc, true, 11);
+  const top = doc.y;
+  doc.fillColor(INK).text(label, MARGIN, top, textOptions({ width: contentWidth(doc), lineBreak: false }));
+  doc.text(value, MARGIN, top, textOptions({ width: contentWidth(doc), align: 'right', lineBreak: false }));
+  doc.x = MARGIN;
+  doc.y = top + doc.currentLineHeight(true) + 2;
+}
+
+/** Пунктирная линия на всю ширину, как отрыв в кассовом чеке. */
+function dashedRule(doc: Doc, y: number, color = HAIRLINE, width = 0.8): void {
+  doc
+    .save()
+    .strokeColor(color)
+    .lineWidth(width)
+    .dash(DASH.dash, { space: DASH.space })
+    .moveTo(MARGIN, y)
+    .lineTo(doc.page.width - MARGIN, y)
+    .stroke()
+    .undash()
+    .restore();
+}
+
+function hairline(doc: Doc): void {
+  const y = doc.y + 5;
+  dashedRule(doc, y);
+  doc.x = MARGIN;
+  doc.y = y + 7;
 }
 
 type Column = { width: number; align?: 'left' | 'right' };
@@ -252,18 +327,18 @@ type Column = { width: number; align?: 'left' | 'right' };
 /** Строка таблицы платежей: высота по самой высокой ячейке, ячейки переносятся внутри колонки. */
 function tableRow(doc: Doc, cells: string[], columns: Column[], bold = false): void {
   const size = 8.5;
-  const pad = 6;
+  const pad = 10;
+  const cellOptions = (i: number): TextOptions => textOptions({ width: (columns[i]?.width ?? 60) - pad, align: columns[i]?.align ?? 'left' });
   useFont(doc, bold, size);
-  const heights = cells.map((cell, i) => doc.heightOfString(cell, { width: (columns[i]?.width ?? 60) - pad }));
+  const heights = cells.map((cell, i) => doc.heightOfString(cell, cellOptions(i)));
   const rowHeight = Math.max(...heights, size) + 4;
   ensureSpace(doc, rowHeight);
   useFont(doc, bold, size);
   const top = doc.y;
   let x = MARGIN;
   cells.forEach((cell, i) => {
-    const column = columns[i] ?? { width: 60 };
-    doc.text(cell, x, top, { width: column.width - pad, align: column.align ?? 'left' });
-    x += column.width;
+    doc.text(cell, x, top, cellOptions(i));
+    x += columns[i]?.width ?? 60;
   });
   doc.x = MARGIN;
   doc.y = top + rowHeight;
@@ -305,17 +380,21 @@ function drawHeader(doc: Doc, data: ReceiptData, tz: string): void {
   const textX = logo ? MARGIN + LOGO_SIZE + 10 : MARGIN;
   const textWidth = doc.page.width - MARGIN - textX;
   if (logo) doc.image(logo, MARGIN, top, { width: LOGO_SIZE, height: LOGO_SIZE });
-  useFont(doc, true, 16);
-  doc.fillColor(BRAND).text(`Квитанция о сделке #${data.publicId}`, textX, top, { width: textWidth });
+  useFont(doc, true, 15);
+  doc.fillColor(BRAND).text(`Квитанция о сделке #${data.publicId}`, textX, top, textOptions({ width: textWidth }));
   useFont(doc, false, 9);
   doc
     .fillColor(MUTED)
-    .text(`Сформировано ботом «Договорились» в MAX, ${formatDocDateTime(data.generatedAt, tz)} (${zoneLabel(tz)})`, textX, doc.y + 2, {
-      width: textWidth,
-    });
+    .text(
+      `Сформировано ботом «Договорились» в MAX, ${formatDocDateTime(data.generatedAt, tz)} (${zoneLabel(tz)})`,
+      textX,
+      doc.y + 2,
+      textOptions({ width: textWidth }),
+    );
   doc.fillColor(INK);
   const y = Math.max(doc.y, top + LOGO_SIZE) + 8;
-  doc.save().strokeColor(BRAND).lineWidth(1).moveTo(MARGIN, y).lineTo(doc.page.width - MARGIN, y).stroke().restore();
+  // Линия под шапкой синим логотипа, 1 pt (§8), пунктиром, как весь документ.
+  dashedRule(doc, y, BRAND, 1);
   doc.x = MARGIN;
   doc.y = y + 8;
   if (data.demo) {
@@ -349,8 +428,8 @@ function drawParties(doc: Doc, data: ReceiptData): void {
   heading(doc, 'Стороны');
   const phone = data.seller.phoneMasked ? `, телефон ${data.seller.phoneMasked}` : '';
   const tax = TAX_MODE_TEXT[data.receipt.taxMode];
-  line(doc, `Исполнитель: ${data.seller.name}, MAX id ${data.seller.maxUserId}${tax ? `, ${tax}` : ''}${phone}`);
-  line(doc, data.client === null ? 'Клиент: ещё не открыл ссылку' : `Клиент: ${data.client.name}, MAX id ${data.client.maxUserId}`);
+  field(doc, 'Исполнитель:', `${data.seller.name}, MAX id ${data.seller.maxUserId}${tax ? `, ${tax}` : ''}${phone}`);
+  field(doc, 'Клиент:', data.client === null ? 'ещё не открыл ссылку' : `${data.client.name}, MAX id ${data.client.maxUserId}`);
   hairline(doc);
 }
 
@@ -358,16 +437,16 @@ function drawParties(doc: Doc, data: ReceiptData): void {
 function drawTerms(doc: Doc, data: ReceiptData, tz: string): void {
   const v = data.version;
   heading(doc, 'Условия');
-  line(doc, `Что: ${v.title}`);
-  if (v.description?.trim()) line(doc, `Уточнения: ${trim(v.description)}`);
-  line(doc, `Когда: ${v.scheduledAt === null ? 'без даты' : `${formatDocWhen(v.scheduledAt, tz)} (${zoneLabel(tz)})`}`);
-  line(doc, `Сумма: ${formatMoney(v.totalKopecks)}`);
+  field(doc, 'Что:', v.title);
+  if (v.description?.trim()) field(doc, 'Уточнения:', trim(v.description));
+  field(doc, 'Когда:', v.scheduledAt === null ? 'без даты' : `${formatDocWhen(v.scheduledAt, tz)} (${zoneLabel(tz)})`);
+  field(doc, 'Сумма:', formatMoney(v.totalKopecks));
   const prepayment =
     v.prepaymentKopecks > 0
       ? `${formatMoney(v.prepaymentKopecks)} (${formatPercent(prepaymentPercent(v.totalKopecks, v.prepaymentKopecks))})`
       : 'без предоплаты';
-  line(doc, `Предоплата: ${prepayment}`);
-  line(doc, `Правило отмены: ${CANCEL_RULE_TEXT[v.cancelRule]}`);
+  field(doc, 'Предоплата:', prepayment);
+  field(doc, 'Правило отмены:', CANCEL_RULE_TEXT[v.cancelRule]);
   line(doc, `Версия ${v.version} от ${formatDocDateTime(v.createdAt, tz)}`, { size: 9, color: MUTED });
   const past = data.history?.pastVersions ?? [];
   if (past.length) {
@@ -393,10 +472,10 @@ function drawPayments(doc: Doc, data: ReceiptData, tz: string): void {
     const total = contentWidth(doc);
     const columns: Column[] = [
       { width: total * 0.14 },
-      { width: total * 0.13, align: 'right' },
-      { width: total * 0.24 },
-      { width: total * 0.29 },
-      { width: total * 0.2 },
+      { width: total * 0.12, align: 'right' },
+      { width: total * 0.23 },
+      { width: total * 0.28 },
+      { width: total * 0.23 },
     ];
     tableRow(doc, ['Этап', 'Сумма', 'Способ', 'Подтверждение', 'Дата'], columns, true);
     for (const p of data.payments) {
@@ -413,9 +492,13 @@ function drawPayments(doc: Doc, data: ReceiptData, tz: string): void {
       );
     }
   }
-  doc.moveDown(0.2);
-  line(doc, `Оплачено: ${formatMoney(data.paidKopecks)}`, { bold: true });
-  line(doc, `Остаток: ${formatMoney(data.remainingKopecks)}`, { bold: true });
+  // Итог как в чеке: отрыв пунктиром, подпись слева, сумма у правого края.
+  const rule = doc.y + 4;
+  dashedRule(doc, rule);
+  doc.y = rule + 6;
+  totalLine(doc, 'Оплачено:', formatMoney(data.paidKopecks));
+  // У отменённой, отклонённой и истёкшей сделки платить больше нечего: строка остатка ввела бы в заблуждение.
+  if (!['cancelled', 'declined', 'expired'].includes(data.status)) totalLine(doc, 'Остаток:', formatMoney(data.remainingKopecks));
 
   const c = data.closing;
   if (data.status === 'cancelled' && c.cancelRefundExpected !== null && data.version.prepaymentKopecks > 0) {
@@ -458,7 +541,7 @@ function drawTimeline(doc: Doc, data: ReceiptData, tz: string): void {
   const entries = data.history?.entries.length ? data.history.entries : fallbackTimeline(data);
   if (!entries.length) return;
   heading(doc, `Хронология, время ${zoneLabel(tz)}`);
-  for (const e of entries) line(doc, `${formatDocDateTime(e.at, tz)}: ${e.text}`, { size: 9.5 });
+  for (const e of entries) field(doc, `${formatDocDateTime(e.at, tz)}:`, e.text, { size: 9.5, labelChars: 21 });
   hairline(doc);
 }
 
@@ -484,10 +567,10 @@ function drawFooters(doc: Doc): void {
     // Подвал стоит ниже поля содержимого: без обнуления нижнего поля pdfkit перенёс бы его на новую страницу.
     doc.page.margins.bottom = 0;
     useFont(doc, false, 7.5);
-    const height = doc.heightOfString(FOOTER_TEXT, { width });
+    const height = doc.heightOfString(FOOTER_TEXT, textOptions({ width }));
     const y = doc.page.height - MARGIN - height;
-    doc.save().strokeColor(HAIRLINE).lineWidth(0.5).moveTo(MARGIN, y - 6).lineTo(doc.page.width - MARGIN, y - 6).stroke().restore();
-    doc.fillColor(MUTED).text(FOOTER_TEXT, MARGIN, y, { width, lineBreak: true });
+    dashedRule(doc, y - 6);
+    doc.fillColor(MUTED).text(FOOTER_TEXT, MARGIN, y, textOptions({ width }));
     doc.page.margins.bottom = savedBottom;
   }
   doc.fillColor(INK);
