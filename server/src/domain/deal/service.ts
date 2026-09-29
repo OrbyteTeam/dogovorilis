@@ -291,6 +291,8 @@ export type CreateDealInput = {
   clientUserId?: number;
   /** public_id сделки, которую повторяют — для журнала событий. */
   repeatOf?: string;
+  /** Услуга исполнителя, из которой собрана карточка, и её длительность на этот момент (ЗАДАЧА_08 C). */
+  service?: { id: number; durationMin: number } | null;
 };
 
 export const TRIAL_LIMIT_PER_HOUR = 5;
@@ -310,6 +312,8 @@ export async function createDeal(input: CreateDealInput, now = new Date()): Prom
       sellerUserId: input.sellerUserId,
       template: input.template,
       expiresAt: addHours(now, CONFIRMATION_TTL_HOURS),
+      serviceId: input.service?.id ?? null,
+      durationMin: input.service?.durationMin ?? null,
     });
     await versionsRepo.create(c, {
       dealId: deal.id,
@@ -403,7 +407,7 @@ async function assertTrialQuota(c: DbClient, sellerUserId: number, trial: 'examp
 /** public_id генерируется случайно; на коллизию (крайне маловероятную) просто пробуем ещё раз. */
 async function createWithUniquePublicId(
   c: DbClient,
-  args: { sellerUserId: number; template: TemplateKey; expiresAt: Date },
+  args: { sellerUserId: number; template: TemplateKey; expiresAt: Date; serviceId: number | null; durationMin: number | null },
 ): Promise<Deal> {
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
@@ -573,6 +577,11 @@ export type NewVersionInput = {
   cancelRule: CancelRule;
   /** undefined — оставить макет текущей версии, null — убрать */
   photoMaxToken?: string | null;
+  /**
+   * Услуга (ЗАДАЧА_08 C): undefined — не менять, null — отвязать, объект — сменить (и длительность вместе с ней).
+   * В «что изменилось» не входит: клиент услугу не видит, для него это те же условия.
+   */
+  service?: { id: number; durationMin: number } | null;
 };
 
 /** Пустые «Уточнения» — это null: форма шлёт и null, и '', и пробелы (как при создании — с обрезкой). */
@@ -641,8 +650,10 @@ export async function newVersion(publicId: string, actor: Actor, input: NewVersi
             changeRequestText: deal.status === 'changes_requested' ? ((lastChangeRequest?.payload?.text as string | undefined) ?? null) : null,
             createdByUserId: a.userId,
           });
+          const servicePatch =
+            input.service === undefined ? {} : { serviceId: input.service?.id ?? null, durationMin: input.service?.durationMin ?? null };
           return {
-            patch: { currentVersion: nextVersion, statusChangedAt: at, expiresAt: addHours(at, CONFIRMATION_TTL_HOURS), confirmedAt: null },
+            patch: { currentVersion: nextVersion, statusChangedAt: at, expiresAt: addHours(at, CONFIRMATION_TTL_HOURS), confirmedAt: null, ...servicePatch },
             events: [{ type: 'version.created', payload: { version: nextVersion, changed } }],
           };
         },

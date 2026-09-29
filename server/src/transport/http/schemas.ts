@@ -35,6 +35,8 @@ export const createDealSchema = z.object({
   // «🔁 Повторить» (ЗАДАЧА_04 F): какую сделку повторяем и отправить ли карточку сразу её клиенту.
   repeat_of: z.string().regex(PUBLIC_ID_RE, 'Неверная ссылка на сделку').optional(),
   same_client: z.boolean().optional(),
+  // «Мои услуги» (ЗАДАЧА_08 C): из какой услуги собрана карточка. В PUT: null — отвязать, нет поля — не менять.
+  service_id: z.number().int().positive().nullable().optional(),
 });
 
 /**

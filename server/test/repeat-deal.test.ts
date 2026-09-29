@@ -26,7 +26,7 @@ describe('кнопка «🔁 Повторить» (SPEC §5.5)', () => {
         id: 1, publicId: ID, sellerUserId: 1, clientUserId: 2, demo: over.demo ?? false, template: 'beauty', currentVersion: 1, status,
         statusChangedAt: at, clientJoinedAt: at, confirmedAt: null, doneAt: null, acceptedAt: null, paidAt: null, closedAt: null,
         cancelledAt: null, cancelledByRole: null, cancelReason: null, cancelRefundExpected: over.refund ? true : null,
-        refundSentAt: null, refundReceivedAt: null, expiresAt: null, createdAt: at, updatedAt: at,
+        refundSentAt: null, refundReceivedAt: null, expiresAt: null, createdAt: at, updatedAt: at, serviceId: null, durationMin: null,
       },
       version: {
         id: 1, dealId: 1, version: 1, title: 'Маникюр', description: null, scheduledAt: null, totalKopecks: 250_000, prepaymentKopecks: 50_000,

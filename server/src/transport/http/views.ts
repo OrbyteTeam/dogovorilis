@@ -141,5 +141,8 @@ export function dealEditView(bundle: DealBundle, role: 'seller' | 'client') {
     can_edit: role === 'seller' && EDITABLE_STATUSES.includes(deal.status),
     can_repeat: canRepeat,
     same_client_available: canRepeat && client !== null,
+    // услуга и длительность — только исполнителю: клиенту о «Моих услугах» знать незачем (не витрина)
+    service_id: role === 'seller' ? deal.serviceId : null,
+    duration_min: role === 'seller' ? deal.durationMin : null,
   };
 }

@@ -6,7 +6,7 @@ import { TERMINAL_STATUSES } from '../../types.js';
 const COLS = `id, public_id, seller_user_id, client_user_id, demo, template, current_version, status,
   status_changed_at, client_joined_at, confirmed_at, done_at, accepted_at, paid_at, closed_at,
   cancelled_at, cancelled_by_role, cancel_reason, cancel_refund_expected, refund_sent_at, refund_received_at,
-  expires_at, created_at, updated_at`;
+  expires_at, created_at, updated_at, service_id, duration_min`;
 
 type DealRow = {
   id: number;
@@ -33,6 +33,8 @@ type DealRow = {
   expires_at: Date | null;
   created_at: Date;
   updated_at: Date;
+  service_id: string | number | null;
+  duration_min: number | null;
 };
 
 type DealListItemRow = {
@@ -76,18 +78,20 @@ function mapDeal(r: DealRow): Deal {
     expiresAt: r.expires_at,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    serviceId: r.service_id === null ? null : Number(r.service_id),
+    durationMin: r.duration_min,
   };
 }
 
 export async function create(
   q: Queryable,
-  a: { publicId: string; sellerUserId: number; template: TemplateKey; expiresAt: Date },
+  a: { publicId: string; sellerUserId: number; template: TemplateKey; expiresAt: Date; serviceId?: number | null; durationMin?: number | null },
 ): Promise<Deal> {
   const res = await q.query<DealRow>(
-    `INSERT INTO deals (public_id, seller_user_id, template, expires_at)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO deals (public_id, seller_user_id, template, expires_at, service_id, duration_min)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING ${COLS}`,
-    [a.publicId, a.sellerUserId, a.template, a.expiresAt],
+    [a.publicId, a.sellerUserId, a.template, a.expiresAt, a.serviceId ?? null, a.durationMin ?? null],
   );
   return mapDeal(res.rows[0]!);
 }
@@ -135,6 +139,8 @@ export type DealPatch = Partial<
     | 'refundSentAt'
     | 'refundReceivedAt'
     | 'expiresAt'
+    | 'serviceId'
+    | 'durationMin'
   >
 >;
 
@@ -158,6 +164,8 @@ const PATCH_COLUMNS: { readonly [K in keyof Required<DealPatch>]: string } = {
   refundSentAt: 'refund_sent_at',
   refundReceivedAt: 'refund_received_at',
   expiresAt: 'expires_at',
+  serviceId: 'service_id',
+  durationMin: 'duration_min',
 };
 
 export async function update(q: Queryable, id: number, patch: DealPatch): Promise<Deal> {

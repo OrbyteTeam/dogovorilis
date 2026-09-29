@@ -26,6 +26,7 @@ export type AppErrorCode =
   | 'deal_not_editable'    // T5 не из awaiting_confirmation / changes_requested → 409 в API
   | 'no_changes'           // новая версия совпадает с текущей → 409 в API
   | 'version_mismatch'     // «Подтверждаю» старой версии после T5 → «Условия изменились»
+  | 'services_limit'       // больше 50 услуг у исполнителя (ЗАДАЧА_08 C) → 409 в API
   | 'internal';            // E10
 
 export class AppError extends Error {

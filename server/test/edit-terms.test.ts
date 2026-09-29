@@ -28,7 +28,7 @@ describe('кнопки правки условий (SPEC §5.5, §6.4)', () => {
         id: 1, publicId: ID, sellerUserId: 1, clientUserId: over.client ? 2 : null, demo: over.demo ?? false, template: 'beauty',
         currentVersion: over.version ?? 1, status, statusChangedAt: at, clientJoinedAt: null, confirmedAt: null, doneAt: null,
         acceptedAt: null, paidAt: null, closedAt: null, cancelledAt: null, cancelledByRole: null, cancelReason: null,
-        cancelRefundExpected: null, refundSentAt: null, refundReceivedAt: null, expiresAt: null, createdAt: at, updatedAt: at,
+        cancelRefundExpected: null, refundSentAt: null, refundReceivedAt: null, expiresAt: null, createdAt: at, updatedAt: at, serviceId: null, durationMin: null,
       },
       version: {
         id: 1, dealId: 1, version: over.version ?? 1, title: 'Маникюр', description: null, scheduledAt: null, totalKopecks: 250_000,
@@ -153,6 +153,8 @@ describe.skipIf(!DB)('правка условий: API и сквозной сц�
         can_edit: true,
         can_repeat: false,
         same_client_available: false,
+        service_id: null,
+        duration_min: null,
       });
       const client = await h.api('GET', `/api/deals/${id}`, CLIENT);
       expect(client.json).toMatchObject({ role: 'client', can_edit: false, can_repeat: false, same_client_available: false });

@@ -12,6 +12,7 @@ import type { MaxGateway } from '../../integrations/max/gateway.js';
 import { log } from '../../logger.js';
 import { registerApi } from './routes/api.js';
 import { registerDealScreenApi } from './routes/deal-screen.js';
+import { registerServicesApi } from './routes/services.js';
 import { registerWebhooks } from './routes/webhooks.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -108,6 +109,7 @@ export async function createHttpServer(deps: HttpDeps): Promise<FastifyInstance>
   registerApi(app, { max: deps.max });
   // Экран сделки (ЗАДАЧА_08 B) — после registerApi: хук авторизации /api уже висит на корне и покрывает эти маршруты.
   registerDealScreenApi(app, { max: deps.max });
+  registerServicesApi(app);
   registerWebhooks(app, { max: deps.max });
 
   // Страница возврата с оплаты (SPEC §9.2). Провайдеры подключаются в ЗАДАЧА_02, страница нужна уже сейчас:

@@ -14,6 +14,7 @@ import { rublesToKopecks } from '../../../domain/money.js';
 import { templateByKey } from '../../../domain/templates.js';
 import * as dealService from '../../../domain/deal/service.js';
 import { rescheduleDigest } from '../../../domain/reminder/digest.js';
+import { serviceForDeal } from '../../../domain/services.js';
 import { displayName, sendCard } from '../../bot/cards.js';
 import { publishNewVersion, sendRepeatToClient } from '../../bot/outcome.js';
 import { verifyInitData } from '../auth.js';
@@ -95,7 +96,8 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
     if (!parsed.success) return fail(reply, 400, 'validation', firstIssue(parsed.error.issues));
     try {
       const actor = { userId: user.maxUserId, role: 'seller' as const };
-      const result = await dealService.newVersion(checkedPublicId(req.params.publicId), actor, termsOf(parsed.data));
+      const service = await serviceOf(user.maxUserId, parsed.data.service_id);
+      const result = await dealService.newVersion(checkedPublicId(req.params.publicId), actor, { ...termsOf(parsed.data), service });
       const { clientNotified } = deps.max ? await publishNewVersion(deps.max, result) : { clientNotified: false };
       return { deal: dealView(result.bundle), version: result.bundle.deal.currentVersion, client_notified: clientNotified };
     } catch (e) {
@@ -154,6 +156,7 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
     try {
       // «🔁 Повторить» (ЗАДАЧА_04 F): своя сделка, не демо; «тот же клиент» — сразу с ним, если у него есть диалог.
       const repeat = body.repeat_of ? await dealService.resolveRepeat(user.maxUserId, body.repeat_of, body.same_client === true) : null;
+      const service = await serviceOf(user.maxUserId, body.service_id);
       const result = await dealService.createDeal({
         sellerUserId: user.maxUserId,
         template: body.template,
@@ -166,6 +169,7 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
         photoMaxToken: body.photo_max_token ?? null,
         clientUserId: repeat?.attachClientId ?? undefined,
         repeatOf: body.repeat_of,
+        service: service ?? null,
       });
 
       // Карточку отправляем в чат исполнителя; если он ещё не нажимал «Начать», диалога нет — сообщаем это экрану «Готово».
@@ -218,6 +222,16 @@ async function authenticate(req: FastifyRequest): Promise<User> {
       locale: payload.user.languageCode,
     }),
   );
+}
+
+/**
+ * Услуга из формы (ЗАДАЧА_08 C): только своя (в т. ч. скрытая — «Повторить»), чужая — 404 через NotFoundError.
+ * undefined — поля в запросе нет (при правке: не менять), null — без услуги.
+ */
+async function serviceOf(sellerUserId: number, id: number | null | undefined): Promise<{ id: number; durationMin: number } | null | undefined> {
+  if (id === undefined || id === null) return id;
+  const s = await serviceForDeal(sellerUserId, id);
+  return { id: s.id, durationMin: s.durationMin };
 }
 
 /** Тело формы → условия новой версии (рубли → копейки); пустые «Уточнения» — null. */

@@ -186,6 +186,32 @@ export type Deal = {
   expiresAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  /** Услуга исполнителя, из которой собрана карточка (ЗАДАЧА_08 C); null — без услуги. */
+  serviceId: number | null;
+  /** Длительность визита в минутах на момент создания; null — 60 (занятость, ЗАДАЧА_08 D). */
+  durationMin: number | null;
+};
+
+/** Предоплата услуги: нет / процент от цены / фиксированная сумма (ЗАДАЧА_08 C). */
+export type PrepaymentKind = 'none' | 'percent' | 'amount';
+
+/** Услуга исполнителя — сохранённые условия для формы сделки (SPEC §7.6a). Клиенту не показывается. */
+export type SellerService = {
+  id: number;
+  sellerUserId: number;
+  title: string;
+  description: string | null;
+  priceKopecks: number;
+  durationMin: number;
+  prepaymentKind: PrepaymentKind;
+  /** процент (1–100) или сумма в копейках — по prepaymentKind */
+  prepaymentValue: number;
+  cancelRule: CancelRule;
+  template: TemplateKey;
+  sortOrder: number;
+  active: boolean;
+  createdAt: Date;
+  updatedAt: Date;
 };
 
 export type DealVersion = {

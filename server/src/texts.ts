@@ -968,6 +968,8 @@ export const API_CHEQUE_ACCEPTED = 'Чек приложен, квитанция 
 export const API_TEXT_LENGTH = 'Текст от 1 до 500 символов';
 export const API_REASON_LENGTH = 'Причина до 300 символов';
 export const API_ACTION_DONE = 'Готово';
+export const API_SERVICES_LIMIT = 'Услуг уже 50. Скройте ненужные или измените существующую';
+export const API_SERVICE_NOT_FOUND = 'Услуга не найдена';
 export const API_ALREADY_DONE = 'Это уже сделано';
 
 const TERMS_FIELD_LABEL: Record<TermsField, string> = {
