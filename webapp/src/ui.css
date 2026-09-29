@@ -200,7 +200,8 @@
   padding: 0 var(--spacing-size2xl);
   border: none;
   border-radius: var(--size-border-radius-semantic-border-radius-promo);
-  background-color: var(--background-secondary);
+  /* Третичный фон, а не secondary: чипы стоят на острове, а в тёмной теме secondary равен фону острова. */
+  background-color: var(--background-tertiary);
   color: var(--text-primary);
   font-family: var(--family-base);
   font-size: var(--font-size-action-small);
@@ -210,7 +211,7 @@
 }
 
 .dg-chip:hover:not(.dg-chip_active) {
-  background-color: var(--background-tertiary);
+  background-color: var(--background-secondary);
 }
 
 .dg-chip_active {
@@ -372,7 +373,9 @@
   max-width: 100%;
   padding: 0 var(--spacing-size-m);
   border-radius: var(--size-border-radius-button-xsmall);
-  background-color: var(--background-secondary);
+  /* Не --background-secondary из брифа: в тёмной теме он равен фону острова (#25262d) и плашка теряет подложку.
+     Третичный фон полупрозрачный и виден на острове в обеих темах. */
+  background-color: var(--background-tertiary);
   font-size: var(--font-size-label);
   line-height: var(--line-height-label);
   font-weight: var(--font-weight-label-strong);
