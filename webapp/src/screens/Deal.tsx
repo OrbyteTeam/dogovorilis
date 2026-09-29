@@ -8,6 +8,7 @@ import { Avatar, Button, CellSimple, Panel, Spinner, Textarea, Typography } from
 
 import { api, ApiError, errorText } from '../api';
 import { copyToClipboard, haptic, openBot, shareDeal } from '../bridge';
+import { AppHeader } from '../components/AppHeader';
 import { Field } from '../components/Field';
 import { Segmented } from '../components/Segmented';
 import { Sheet } from '../components/Sheet';
@@ -262,7 +263,7 @@ export function DealScreen({ publicId, me, onEdit, onRepeat, onDeals, onTime }: 
   async function copyLink(deal: DealFull) {
     const ok = await copyToClipboard(deal.link);
     haptic(ok ? 'success' : 'error');
-    showToast(ok ? 'Ссылка скопирована' : 'Не удалось скопировать. Ссылка — в блоке «Стороны»', ok ? 'info' : 'error');
+    showToast(ok ? 'Ссылка скопирована' : 'Не удалось скопировать. Ссылка есть в блоке «Стороны»', ok ? 'info' : 'error');
   }
 
   function pickFile() {
@@ -460,16 +461,8 @@ export function DealScreen({ publicId, me, onEdit, onRepeat, onDeals, onTime }: 
     <Panel mode="secondary" className="dg-root">
       <div className="dg-screen dg-screen_deal">
         {/* 1. Заголовок, #id, бейдж «демо», статус для роли */}
-        <header className="dg-head">
-          <Typography.Text variant="subheader" asChild>
-            <h1>{deal.terms.title}</h1>
-          </Typography.Text>
-          <div className="dg-deal-id">
-            <Typography.Text variant="description" color="tertiary">{`#${deal.public_id}`}</Typography.Text>
-            {deal.demo ? <span className="dg-tag">демо</span> : null}
-            {refreshing ? <Spinner size={16} appearance="themed" aria-label="Обновляем" /> : null}
-          </div>
-        </header>
+        <AppHeader title={deal.terms.title} subtitle={deal.demo ? `#${deal.public_id}, демо` : `#${deal.public_id}`} />
+        {refreshing ? <Spinner size={16} appearance="themed" aria-label="Обновляем" /> : null}
 
         <p className={`dg-status dg-status_${tone}`}>
           <span aria-hidden="true">{statusEmoji(deal.status)}</span>
@@ -492,9 +485,9 @@ export function DealScreen({ publicId, me, onEdit, onRepeat, onDeals, onTime }: 
           <Section id="deal-actions" title="Действия">
             {deal.time_proposal ? <p className="dg-warning dg-warning_info">{proposalNote(deal.role, deal.time_proposal)}</p> : null}
             {layout.payInChat ? (
-              <ChatHint text="Оплата — в чате с ботом" sub="Ссылка на оплату и реквизиты — на карточке сделки" onOpenChat={openChat} />
+              <ChatHint text="Оплата в чате с ботом" sub="Ссылка на оплату и реквизиты на карточке сделки" onOpenChat={openChat} />
             ) : null}
-            {layout.transferClaimed ? <ChatHint text="Клиент сообщил о переводе — подтвердите в чате" onOpenChat={openChat} /> : null}
+            {layout.transferClaimed ? <ChatHint text="Клиент сообщил о переводе, подтвердите его в чате" onOpenChat={openChat} /> : null}
             <div className="dg-actions">
               {layout.buttons.map((button) => (
                 <Button
@@ -539,7 +532,7 @@ export function DealScreen({ publicId, me, onEdit, onRepeat, onDeals, onTime }: 
 
         <footer className="dg-card dg-card_flat dg-card_row">
           <Typography.Text variant="description" color="secondary">
-            Карточка сделки — в чате с ботом
+            Карточка сделки в чате с ботом
           </Typography.Text>
           <Button type="button" variant="secondary" size="small" onClick={openChat}>
             Открыть чат
@@ -678,7 +671,7 @@ function ChatHint({ text, sub, onOpenChat }: { text: string; sub?: string; onOpe
 function MoneySection({ deal }: { deal: DealFull }) {
   const { money } = deal;
   return (
-    <Section id="deal-money" title="Деньги" note={money.payments.some((p) => p.at) ? 'время — МСК' : undefined}>
+    <Section id="deal-money" title="Деньги" note={money.payments.some((p) => p.at) ? 'Время МСК' : undefined}>
       <div className="dg-island">
         <CellSimple
           height="compact"
@@ -712,11 +705,11 @@ function MoneySection({ deal }: { deal: DealFull }) {
 function TimelineSection({ deal }: { deal: DealFull }) {
   if (deal.timeline.length === 0) return null;
   return (
-    <Section id="deal-timeline" title="Хронология" note="время — МСК">
+    <Section id="deal-timeline" title="Хронология" note="Время МСК">
       <ol className="dg-timeline">
         {deal.timeline.map((item, index) => (
           <li key={`${item.at}-${index}`} className="dg-timeline__item">
-            <span className="dg-timeline__meta">{`${shortDateTime(item.at)} · ${ACTOR_LABEL[item.actor]}`}</span>
+            <span className="dg-timeline__meta">{`${shortDateTime(item.at)}, ${ACTOR_LABEL[item.actor]}`}</span>
             <span className="dg-timeline__text">{item.text}</span>
           </li>
         ))}
@@ -729,7 +722,7 @@ function TimelineSection({ deal }: { deal: DealFull }) {
 function VersionsSection({ deal }: { deal: DealFull }) {
   if (deal.versions.length <= 1) return null;
   return (
-    <Section id="deal-versions" title="История версий" note="время — МСК">
+    <Section id="deal-versions" title="История версий" note="Время МСК">
       <div className="dg-island">
         {deal.versions.map((v) => {
           const when = v.scheduled_at ? shortDateTime(v.scheduled_at) : 'без даты';
@@ -745,7 +738,7 @@ function VersionsSection({ deal }: { deal: DealFull }) {
                 <p className="dg-version__request">{`Клиент просил: «${v.change_request_text}»`}</p>
               ) : null}
               {v.title !== deal.terms.title ? <p className="dg-version__line">{v.title}</p> : null}
-              <p className="dg-version__line dg-num">{`${when} · ${formatKopecks(v.total_kopecks)} · ${prepay}`}</p>
+              <p className="dg-version__line dg-num">{`${when}, ${formatKopecks(v.total_kopecks)}, ${prepay}`}</p>
               <p className="dg-version__line">
                 {v.confirmed_at ? `Клиент подтвердил ${shortDateTime(v.confirmed_at)}` : 'Клиент не подтверждал'}
               </p>

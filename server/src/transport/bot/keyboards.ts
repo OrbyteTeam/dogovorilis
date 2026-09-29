@@ -4,9 +4,9 @@
 import { Keyboard } from '@maxhub/max-bot-api';
 import type { Button } from '@maxhub/max-bot-api/types';
 import { botUsername } from '../../config.js';
-import { acceptTimeLabel, BTN, shareInvite } from '../../texts.js';
+import { acceptTimeLabel, BTN, payButtonLabel, shareInvite } from '../../texts.js';
 import type { AttachmentRequest } from '../../integrations/max/gateway.js';
-import type { CardRole, DealBundle, Payment, PaymentKind, TimeProposal } from '../../types.js';
+import type { CardRole, DealBundle, Payment, PaymentKind, ReminderKind, TimeProposal } from '../../types.js';
 import { livePayment, remaining } from '../../types.js';
 import { cb } from './callbacks.js';
 
@@ -190,7 +190,7 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
       // Живая ссылка вытесняет выбор рейла: пока она действует, клиенту нужны «Перейти» и «Проверить».
       const live = liveFor(bundle, status === 'awaiting_prepayment' ? 'prepayment' : 'final');
       if (live?.rail === 'link' && live.status === 'pending' && live.confirmationUrl) {
-        rows.push([link(BTN.goToPayment, live.confirmationUrl)]);
+        rows.push([link(payButtonLabel(live.amountKopecks), live.confirmationUrl)]);
         rows.push([callback(BTN.checkPayment, cb('pc', id, undefined, live.id))]);
       } else if (live?.rail === 'transfer' && live.status === 'pending') {
         // Реквизиты уже в тексте карточки (§6.4) — здесь только «перевёл» и отказ от этого способа.
@@ -227,7 +227,7 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
 export function linkPaymentKeyboard(publicId: string, payment: Payment): AttachmentRequest {
   if (payment.status === 'pending' && payment.confirmationUrl) {
     return keyboard([
-      [link(BTN.goToPayment, payment.confirmationUrl)],
+      [link(payButtonLabel(payment.amountKopecks), payment.confirmationUrl)],
       [callback(BTN.checkPayment, cb('pc', publicId, undefined, payment.id))],
     ]);
   }
@@ -343,9 +343,24 @@ export function digestKeyboard(botUsername: string): AttachmentRequest {
   return keyboard([[openApp(BTN.schedule, botUsername, 'deals')]]);
 }
 
-/** Одна кнопка «Открыть» — для коротких уведомлений и напоминаний. */
+/** Одна кнопка «Открыть сделку»: для уведомлений и напоминаний, где действие живёт в карточке (DESIGN_BRIEF §4). */
 export function openKeyboard(publicId: string): AttachmentRequest {
   return keyboard([[Keyboard.button.callback(BTN.open, cb('op', publicId))]]);
+}
+
+/** «Новая сделка» под N6 и N7: сделка закрыта, следующий шаг исполнителя это новая (DESIGN_BRIEF §4). */
+export function newDealKeyboard(): AttachmentRequest {
+  return keyboard([[openApp(BTN.newDeal, botUsername(), 'new')]]);
+}
+
+/**
+ * Кнопка напоминания по его виду (DESIGN_BRIEF §4): о чеке сразу «Приложить чек» (тот же код `rc`, что в N13),
+ * «через 30 минут» без кнопки, остальные открывают сделку свежей карточкой с нужными кнопками.
+ */
+export function reminderKeyboard(kind: ReminderKind, publicId: string): AttachmentRequest | undefined {
+  if (kind === 'event_soon') return undefined;
+  if (kind === 'receipt_due' || kind === 'receipt_deadline') return keyboard([[Keyboard.button.callback(BTN.attachReceipt, cb('rc', publicId))]]);
+  return openKeyboard(publicId);
 }
 
 /** Какой платёж ждёт оплаты — нужно и карточке, и клавиатуре. */

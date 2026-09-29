@@ -1,11 +1,12 @@
-// Строка сделки в расписании и списке «Моих сделок»: CellSimple из MAX UI + ряд действий под ним (ЗАДАЧА_04 C4–C5).
-// Строка открывает экран сделки `#/deals/:id` (SPEC §7.4, §7.9, ЗАДАЧА_08 B): она — настоящая кнопка (`as="button"`,
-// доступна с клавиатуры), а кнопки действий стоят рядом с ней, а не внутри, — их нажатия строка не перехватывает.
+// Строка сделки в расписании и списке (DESIGN_BRIEF §5.3): CellSimple из MAX UI, справа сумма и плашка статуса,
+// под строкой действия. Строка открывает экран сделки `#/deals/:id` (SPEC §7.4, §7.9, ЗАДАЧА_08 B): она настоящая
+// кнопка (`as="button"`, доступна с клавиатуры), а кнопки действий стоят рядом с ней и её нажатия не перехватывают.
 import type { ReactNode } from 'react';
-import { Button, CellSimple, Typography } from '@maxhub/max-ui';
+import { Button, CellSimple } from '@maxhub/max-ui';
 
-import { formatKopecks } from '../format';
 import type { DealListItem } from '../types';
+import { AmountText } from './AmountText';
+import { StatusBadge, Tag } from './StatusBadge';
 
 export interface DealRowAction {
   label: string;
@@ -14,26 +15,23 @@ export interface DealRowAction {
 
 export interface DealRowProps {
   item: DealListItem;
-  /** Время слева (в расписании день уже выбран — показываем только «14:00»). */
-  lead?: string;
-  /** Подпись под названием: «Пн 28 сен, 14:00 · ждём предоплату». */
-  meta: string;
+  /** Над названием: время в расписании («14:00»). */
+  overline?: string;
+  /** Под названием: имя клиента в расписании или «12 окт, 14:00» в списке. */
+  subtitle?: ReactNode;
   actions: DealRowAction[];
   /** Открыть экран сделки; не передан — строка не нажимается. */
   onOpen?: () => void;
 }
 
-export function DealRow({ item, lead, meta, actions, onOpen }: DealRowProps) {
-  // Исполнителю после названия — имя клиента: «Маникюр с покрытием · Саша». Клиенту имя клиента не нужно — это он сам.
-  const clientName = item.role === 'seller' ? item.client_name?.trim() : null;
+export function DealRow({ item, overline, subtitle, actions, onOpen }: DealRowProps) {
   const title: ReactNode = (
     <>
       {item.title}
-      {clientName ? <span className="dg-deal__client">{` · ${clientName}`}</span> : null}
       {item.demo ? (
         <>
           {' '}
-          <span className="dg-tag">демо</span>
+          <Tag>демо</Tag>
         </>
       ) : null}
     </>
@@ -45,13 +43,14 @@ export function DealRow({ item, lead, meta, actions, onOpen }: DealRowProps) {
         className={onOpen ? 'dg-deal__open' : undefined}
         onClick={onOpen}
         showChevron={Boolean(onOpen)}
-        before={lead ? <span className="dg-deal__time">{lead}</span> : undefined}
+        overline={overline}
         title={title}
-        subtitle={meta}
+        subtitle={subtitle}
         after={
-          <Typography.Text variant="body-strong" color="secondary" className="dg-deal__sum">
-            {formatKopecks(item.total_kopecks)}
-          </Typography.Text>
+          <span className="dg-deal__after">
+            <AmountText kopecks={item.total_kopecks} />
+            <StatusBadge status={item.status} role={item.role} text={item.status_short} />
+          </span>
         }
       />
       {actions.length > 0 ? (

@@ -164,7 +164,7 @@ async function onTransferStep(
       const linkAvailable = rails.linkRailAvailable(bundle.sellerProfile, sum);
       await deliver(deps.max, bundle, {
         to: 'client',
-        text: disputed ? texts.P3_DISPUTE({ sumKopecks: sum, linkAvailable }) : texts.P3({ sumKopecks: sum }),
+        text: disputed ? texts.P3_DISPUTE({ id: publicId, sumKopecks: sum, linkAvailable }) : texts.P3({ id: publicId, sumKopecks: sum }),
         keyboard: disputed ? transferDisputeKeyboard(publicId, pay.payment.id, linkAvailable) : transferKeyboard(publicId, pay.payment.id),
       });
       return;

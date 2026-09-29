@@ -179,12 +179,10 @@ describe.skipIf(!DB)('event_soon и утренняя сводка: планир�
       const toClient = h.max.inChat(CLIENT_CHAT);
       expect(toSeller).toHaveLength(1);
       expect(toClient).toHaveLength(1);
-      expect(toSeller[0].text).toBe(`⏰ Через 30 минут: Пользователь${CLIENT} — Маникюр с покрытием. Предоплата: ждём ${formatMoney(50_000)}.`);
-      expect(toClient[0].text).toBe('⏰ Через 30 минут — Маникюр с покрытием у Анна Мастер.');
-      for (const m of [toSeller[0], toClient[0]]) {
-        expect(m.buttons.map((b) => b.text)).toEqual([texts.BTN.open]);
-        expect(m.buttons[0].payload).toBe(`op:${id}`);
-      }
+      expect(toSeller[0].text).toBe(`⏰ Через 30 минут: Пользователь${CLIENT}, Маникюр с покрытием.\nПредоплата ${formatMoney(50_000)} ещё не внесена.`);
+      expect(toClient[0].text).toBe('⏰ Через 30 минут: Маникюр с покрытием, исполнитель Анна Мастер.');
+      // «Через 30 минут» без кнопки: действие уже не в чате, а на месте (DESIGN_BRIEF §4).
+      for (const m of [toSeller[0], toClient[0]]) expect(m.buttons).toEqual([]);
       expect((await reminders('event_soon', id)).every((r) => r.status === 'sent')).toBe(true);
 
       h.max.reset();
@@ -198,7 +196,7 @@ describe.skipIf(!DB)('event_soon и утренняя сводка: планир�
       await makeDue(id, 'event_soon');
       h.max.reset();
       await tick({ max: h.gateway, sendReminders: true });
-      expect(h.max.inChat(SELLER_CHAT)[0].text).toContain('Маникюр с покрытием. Без предоплаты.');
+      expect(h.max.inChat(SELLER_CHAT)[0].text).toContain('Маникюр с покрытием.\nБез предоплаты.');
     });
 
     it('срок уже наступил (сервер лежал) — гасится too_late и не отправляется', async () => {
@@ -296,11 +294,11 @@ describe.skipIf(!DB)('event_soon и утренняя сводка: планир�
       expect(sent).toHaveLength(1);
       expect(sent[0].chatId).toBe(SELLER_CHAT);
       const lines = sent[0].text.split('\n');
-      expect(lines[0]).toMatch(/^📅 Сегодня, [а-я]{2} \d{1,2} [а-я]{3} — 3 записи \(МСК\):$/);
+      expect(lines[0]).toMatch(/^📅 Сегодня, [а-я]{2} \d{1,2} [а-я]{3}: 3 сделки \(МСК\)$/);
       expect(lines.slice(1)).toEqual([
-        `10:00 — Пользователь${CLIENT} · Маникюр с покрытием · предоплата получена`,
-        `14:00 — Пользователь${CLIENT} · Брови · ждём приёмку`,
-        `18:30 — Пользователь${CLIENT} · Педикюр · ждём предоплату`,
+        `10:00, Пользователь${CLIENT}, Маникюр с покрытием, предоплата получена`,
+        `14:00, Пользователь${CLIENT}, Брови, ждём приёмку`,
+        `18:30, Пользователь${CLIENT}, Педикюр, ждём предоплату`,
       ]);
       expect(sent[0].buttons).toEqual([expect.objectContaining({ type: 'open_app', text: texts.BTN.schedule, payload: 'deals' })]);
       expect((await digestRows())[0].status).toBe('sent');
@@ -349,8 +347,8 @@ describe.skipIf(!DB)('event_soon и утренняя сводка: планир�
       await tick({ max: h.gateway, sendReminders: true }, at(7));
       await tick({ max: h.gateway, sendReminders: true }, at(8, 1));
       const lines = digests()[0].text.split('\n');
-      expect(lines).toContain('11:00 — демо-клиент · Демо-маникюр · предоплата получена · демо');
-      expect(lines).toContain('16:00 — клиент не открыл ссылку · Без клиента · без предоплаты');
+      expect(lines).toContain('11:00, демо-клиент, Демо-маникюр, предоплата получена, демо');
+      expect(lines).toContain('16:00, клиент не открыл ссылку, Без клиента, без предоплаты');
     });
 
     it('смена времени переносит сегодняшнюю сводку; прошедшее время и выключение — гасят; снова включили — оживает', async () => {

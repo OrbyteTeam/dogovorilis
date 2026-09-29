@@ -170,7 +170,7 @@ describe.skipIf(!DB)('«Другое время»: занятость, пред�
       expect(cur).toEqual({ scheduled_at: msk(4, 18), version: 2 });
       expect((await proposals(id))[0]).toMatchObject({ status: 'accepted', accepted_version: 2 });
       expect(h.max.texts().some((t) => t.includes(texts.TIME_ACCEPTED_ACK))).toBe(true);
-      expect(h.max.inChat(CLIENT_CHAT).some((m) => m.text.includes('изменил условия') && m.text.includes('срок'))).toBe(true);
+      expect(h.max.inChat(CLIENT_CHAT).some((m) => m.text.includes('изменил условия') && m.text.includes('когда:'))).toBe(true);
       // повторное нажатие — предложение уже неактуально, вторая версия не появляется
       await h.press(SELLER, SELLER_CHAT, `tp:${id}:${p.id}`, null);
       expect((await currentTime(id)).version).toBe(2);

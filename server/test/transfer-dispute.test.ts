@@ -57,14 +57,14 @@ describe.skipIf(!DB)('спор по переводу', () => {
     await h.press(CLIENT, CLIENT_CHAT, `tr:c:${id}:${pid}`, clientCard);
     await h.press(SELLER, SELLER_CHAT, `tr:n:${id}:${pid}`, sellerCard);
     const first = h.max.inChat(CLIENT_CHAT).filter((m) => m.kind === 'send').at(-1)!;
-    expect(first.text).toBe(texts.P3({ sumKopecks: 50_000 }));
+    expect(first.text).toBe(texts.P3({ id, sumKopecks: 50_000 }));
 
     await skipClaimCooldown(pid);
     await h.press(CLIENT, CLIENT_CHAT, `tr:c:${id}:${pid}`, clientCard);
     await h.press(SELLER, SELLER_CHAT, `tr:n:${id}:${pid}`, sellerCard);
     const second = h.max.inChat(CLIENT_CHAT).filter((m) => m.kind === 'send').at(-1)!;
     // Провайдер в стенде не подключён — ссылку не предлагаем, но про спор говорим честно
-    expect(second.text).toBe(texts.P3_DISPUTE({ sumKopecks: 50_000, linkAvailable: false }));
+    expect(second.text).toBe(texts.P3_DISPUTE({ id, sumKopecks: 50_000, linkAvailable: false }));
     expect(second.buttons.map((b) => b.text)).toEqual([texts.BTN.transferDone]);
   }, TIMEOUT);
 

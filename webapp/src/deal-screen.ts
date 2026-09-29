@@ -63,13 +63,13 @@ export const RECEIPT_PDF_LABEL = 'Квитанция PDF в чат';
  * произошло и что дальше — клиент не должен гадать (прогон удобства ЗАДАЧА_08 F).
  */
 const DONE_TEXT: Partial<Record<PostActionCode, string>> = {
-  confirm: 'Условия подтверждены. Исполнитель получил уведомление',
-  decline: 'Вы отказались от сделки. Исполнитель получил уведомление',
+  confirm: 'Условия подтверждены. Исполнитель получил сообщение',
+  decline: 'Вы отказались от сделки. Исполнитель получил сообщение',
   request_changes: 'Предложение отправлено исполнителю',
   remarks: 'Замечания отправлены исполнителю',
-  accept: 'Работа принята. Исполнитель получил уведомление',
-  cancel: 'Сделка отменена. Вторая сторона получила уведомление',
-  keep_as_is: 'Условия оставлены как есть. Клиент получил уведомление',
+  accept: 'Работа принята. Исполнитель получил сообщение',
+  cancel: 'Сделка отменена. Вторая сторона получила сообщение',
+  keep_as_is: 'Условия оставлены как есть. Клиент получил сообщение',
   done: 'Отмечено: выполнено. Ждём приёмку клиента',
   fixed: 'Клиенту отправлено: замечания исправлены',
   close_without_receipt: 'Сделка закрыта без чека. Квитанция ушла обеим сторонам',
@@ -84,7 +84,7 @@ export function buttonLabel(key: ButtonKey, role: DealRole): string {
   return LABEL[key];
 }
 
-/** «Принять Чт 1 окт, 19:00» — как кнопка «✅ Принять …» карточки в чате (server texts.ts acceptTimeLabel), без эмодзи. */
+/** «Принять чт 1 окт, 19:00» — как кнопка «✅ Принять …» карточки в чате (server texts.ts acceptTimeLabel), без эмодзи. */
 export function acceptTimeLabel(iso: string): string {
   const when = shortDateTime(iso);
   return when ? `Принять ${when}` : LABEL.accept_time;
@@ -201,7 +201,7 @@ export function confirmSheet(code: ConfirmCode, role: DealRole): ConfirmSheetTex
     case 'decline':
       return {
         title: 'Отказаться от сделки?',
-        text: 'Исполнитель получит уведомление, вернуться к этой карточке будет нельзя.',
+        text: 'Исполнитель получит сообщение, вернуться к этой карточке будет нельзя',
         confirmLabel: 'Да, отказаться',
         dismissLabel: 'Не отказываться',
         destructive: true,
@@ -210,7 +210,7 @@ export function confirmSheet(code: ConfirmCode, role: DealRole): ConfirmSheetTex
     case 'cancel':
       return {
         title: 'Отменить сделку?',
-        text: 'Действие необратимо, вторая сторона получит уведомление.',
+        text: 'Действие необратимо, вторая сторона получит сообщение',
         confirmLabel: 'Да, отменить',
         dismissLabel: 'Не отменять',
         destructive: true,

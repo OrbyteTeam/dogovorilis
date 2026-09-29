@@ -152,7 +152,7 @@ describe.skipIf(!DB)('платежи: провайдер — источник и
       expect(yk.created).toHaveLength(1);
       const rows = await payments(id);
       expect(rows.map((r) => r.status)).toEqual(['canceled', 'pending']);
-      expect(labels(clientCard)).toContain(texts.BTN.goToPayment);
+      expect(labels(clientCard)).toContain(texts.payButtonLabel(50_000)); // «Оплатить 500 ₽», DESIGN_BRIEF §2.8
     }, TIMEOUT);
   });
 
@@ -179,7 +179,7 @@ describe.skipIf(!DB)('платежи: провайдер — источник и
       const mark = h.max.sent.length;
       await h.press(CLIENT, CLIENT_CHAT, `tr:c:${id}:${pid}`, clientCard);
       expect(h.max.byMid(clientCard)!.text.startsWith(texts.E1)).toBe(true);
-      expect(h.max.sent.slice(mark).some((m) => m.kind === 'send' && m.text.includes('сообщает о переводе'))).toBe(false);
+      expect(h.max.sent.slice(mark).some((m) => m.kind === 'send' && m.text.includes('сообщил(а) о переводе'))).toBe(false);
     }, TIMEOUT);
 
     it('кнопки перевода с id ссылочного платежа → E1, ссылка жива', async () => {
@@ -208,15 +208,18 @@ describe.skipIf(!DB)('платежи: провайдер — источник и
       const rows = await payments(id);
       expect(rows[0]).toMatchObject({ status: 'canceled', cancellation_reason: 'deal_cancelled_after_claim' });
 
-      const claim = `Клиент сообщал о переводе ${formatMoney(50_000)}`;
+      const claim = `сообщал(и) о переводе ${formatMoney(50_000)}`.replace('(и)', '');
+      const clientClaim = `Вы сообщали о переводе ${formatMoney(50_000)}`;
       const sent = h.max.sent.slice(mark).filter((m) => m.kind === 'send');
-      // N15 клиенту — с предупреждением; отменившему исполнителю — отдельным сообщением
-      expect(sent.some((m) => m.chatId === CLIENT_CHAT && m.text.startsWith('🚫') && m.text.includes(claim))).toBe(true);
-      expect(sent.some((m) => m.chatId === SELLER_CHAT && m.text.includes(claim))).toBe(true);
+      // N15 клиенту с предупреждением; отменившему исполнителю отдельным сообщением. Текст по роли получателя:
+      // возвращает исполнитель, клиенту остаётся ждать.
+      expect(sent.some((m) => m.chatId === CLIENT_CHAT && m.text.startsWith('🚫') && m.text.includes(clientClaim))).toBe(true);
+      expect(sent.some((m) => m.chatId === SELLER_CHAT && m.text.includes(`клиент ${claim}`))).toBe(true);
       // строка возврата в карточках обеих сторон
-      expect(h.max.byMid(sellerCard)!.text).toContain(claim);
-      expect(h.max.byMid(clientCard)!.text).toContain(claim);
-      expect(h.max.byMid(clientCard)!.text).toContain('проверьте поступление и верните при необходимости');
+      expect(h.max.byMid(sellerCard)!.text).toContain(`Клиент ${claim}`);
+      expect(h.max.byMid(sellerCard)!.text).toContain('Проверьте поступление и верните при необходимости');
+      expect(h.max.byMid(clientCard)!.text).toContain(clientClaim);
+      expect(h.max.byMid(clientCard)!.text).toContain('Исполнитель сверит поступление');
       // «Предоплата …: ожидается возврат» не пишем — получение предоплаты никто не подтверждал
       expect(h.max.byMid(clientCard)!.text).not.toContain('ожидается возврат');
     }, TIMEOUT);
@@ -228,10 +231,9 @@ describe.skipIf(!DB)('платежи: провайдер — источник и
       await h.press(CLIENT, CLIENT_CHAT, `cn:y:${id}`, clientCard);
 
       expect(await dealStatus(h, id)).toBe('cancelled');
-      const claim = `Клиент сообщал о переводе ${formatMoney(50_000)}`;
       const sent = h.max.sent.slice(mark).filter((m) => m.kind === 'send');
-      expect(sent.some((m) => m.chatId === SELLER_CHAT && m.text.startsWith('🚫') && m.text.includes(claim))).toBe(true);
-      expect(sent.some((m) => m.chatId === CLIENT_CHAT && m.text.includes(claim))).toBe(true);
+      expect(sent.some((m) => m.chatId === SELLER_CHAT && m.text.startsWith('🚫') && m.text.includes(`Клиент сообщал о переводе ${formatMoney(50_000)}`))).toBe(true);
+      expect(sent.some((m) => m.chatId === CLIENT_CHAT && m.text.includes(`вы сообщали о переводе ${formatMoney(50_000)}`))).toBe(true);
     }, TIMEOUT);
   });
 
@@ -331,16 +333,18 @@ describe.skipIf(!DB)('платежи: провайдер — источник и
       expect((await payments(id))[0]).toMatchObject({ id: paymentId, status: 'succeeded' });
       expect((await events(id, 'payment.succeeded_late'))[0].payload).toMatchObject({ refund_required: true, reason: 'deal_cancelled' });
 
-      const refund = texts.LATE_PAYMENT_REFUND({ id, sumKopecks: 50_000, dealCancelled: true });
-      expect(refund).toContain('по отменённой сделке');
-      await waitFor('«верните» обеим', () => [SELLER_CHAT, CLIENT_CHAT].every((c) => sentTo(c, mark).some((m) => m.text === refund)));
+      const refund = (to: 'seller' | 'client') => texts.LATE_PAYMENT_REFUND({ id, sumKopecks: 50_000, dealCancelled: true, to });
+      expect(refund('seller')).toContain('по отменённой сделке');
+      await waitFor('«верните» обеим', () =>
+        ([[SELLER_CHAT, 'seller'], [CLIENT_CHAT, 'client']] as const).every(([c, to]) => sentTo(c, mark).some((m) => m.text === refund(to))),
+      );
       expect(h.max.byMid(sellerCard)!.text).toContain('ожидается возврат');
 
       // Повторное применение (опрос, «Проверить оплату») второго «верните деньги» не шлёт.
       const again = h.max.sent.length;
       await rails.refreshFromProvider(paymentId);
       expect(await events(id, 'payment.succeeded_late')).toHaveLength(1);
-      expect(h.max.sent.slice(again).some((m) => m.text === refund)).toBe(false);
+      expect(h.max.sent.slice(again).some((m) => m.text === refund('seller') || m.text === refund('client'))).toBe(false);
     }, TIMEOUT);
 
     it('этап уже оплачен переводом, а старая ссылка тоже оплачена → двойная оплата: сделка стоит, «верните» обеим', async () => {
@@ -361,9 +365,11 @@ describe.skipIf(!DB)('платежи: провайдер — источник и
       // «Один живой платёж на (сделку, вид)»: второй succeeded того же вида невозможен — факт в provider_status и событии.
       expect((await payments(id)).find((p) => p.id === link.paymentId)).toMatchObject({ status: 'canceled', provider_status: 'succeeded' });
       expect((await events(id, 'payment.succeeded_late'))[0].payload).toMatchObject({ refund_required: true, reason: 'already_paid' });
-      const refund = texts.LATE_PAYMENT_REFUND({ id, sumKopecks: 50_000, dealCancelled: false });
-      expect(refund).toContain('по уже оплаченному этапу');
-      await waitFor('«верните» обеим', () => [SELLER_CHAT, CLIENT_CHAT].every((c) => sentTo(c, mark).some((m) => m.text === refund)));
+      const refund = (to: 'seller' | 'client') => texts.LATE_PAYMENT_REFUND({ id, sumKopecks: 50_000, dealCancelled: false, to });
+      expect(refund('seller')).toContain('по уже оплаченному этапу');
+      await waitFor('«верните» обеим', () =>
+        ([[SELLER_CHAT, 'seller'], [CLIENT_CHAT, 'client']] as const).every(([c, to]) => sentTo(c, mark).some((m) => m.text === refund(to))),
+      );
     }, TIMEOUT);
   });
 

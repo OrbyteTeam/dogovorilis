@@ -20,7 +20,7 @@ const prepaymentSchema = z.object({
 export const serviceSchema = z.object({
   title: z.string().trim().min(2, 'Название от 2 до 80 символов').max(80, 'Название от 2 до 80 символов'),
   description: z.string().max(1000, 'Уточнения до 1000 символов').nullish(),
-  price_rub: z.number().int('Цена целым числом рублей').min(1, 'Цена от 1 до 1 000 000 ₽').max(1_000_000, 'Цена от 1 до 1 000 000 ₽'),
+  price_rub: z.number().int('Сумма целым числом рублей').min(1, 'Сумма от 1 до 1 000 000 ₽').max(1_000_000, 'Сумма от 1 до 1 000 000 ₽'),
   duration_min: z.number().int().default(services.DEFAULT_DURATION_MIN),
   prepayment: prepaymentSchema.default({ kind: 'none', value: 0 }),
   cancel_rule: cancelRuleSchema,

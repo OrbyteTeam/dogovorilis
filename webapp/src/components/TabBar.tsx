@@ -1,57 +1,91 @@
-// Нижняя панель разделов «Новая · Сделки · Настройки» — ЗАДАЧА_08 A, docs/SPEC.md §7.1.
-// Таб-бара в MAX UI 0.5.0 нет (ToolButton помечен deprecated), поэтому панель своя — только на переменных
-// MAX UI (docs/DESIGN.md §1, §4): тёмная тема и платформа подхватываются сами. Вкладки — настоящие кнопки.
-import type { ReactNode } from 'react';
+// Нижняя панель «Новая / Сделки / Настройки» (DESIGN_BRIEF §5.1). В MAX UI такого компонента нет, панель своя на
+// токенах: высота 56 px плюс safe area, активный пункт акцентом, тап-зона всей ячейки. На «Сделках» счётчик
+// сделок, где нужен ход пользователя. Пока в поле ввода открыта экранная клавиатура, панель прячется.
+import { useEffect, useState, type ReactNode } from 'react';
+import { Counter, Typography } from '@maxhub/max-ui';
 
-import { TABS, type Tab } from '../nav';
+import { counterLabel } from '../format';
+import { IconGear, IconList, IconPlusCircle } from './Icons';
 
-const ICONS: Record<Tab, ReactNode> = {
-  new: (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <rect x="3.5" y="3.5" width="17" height="17" rx="5" stroke="currentColor" strokeWidth="1.7" />
-      <path d="M12 8v8M8 12h8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-    </svg>
-  ),
-  deals: (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <rect x="3.5" y="4.5" width="17" height="16" rx="4" stroke="currentColor" strokeWidth="1.7" />
-      <path d="M3.5 9.5h17M8 3v3M16 3v3M8 14h3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-    </svg>
-  ),
-  settings: (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M5 7h9M18 7h1M5 17h1M10 17h9" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-      <circle cx="16" cy="7" r="2.3" stroke="currentColor" strokeWidth="1.7" />
-      <circle cx="8" cy="17" r="2.3" stroke="currentColor" strokeWidth="1.7" />
-    </svg>
-  ),
-};
+export type Tab = 'new' | 'deals' | 'settings';
 
-export interface TabBarProps {
-  active: Tab;
-  onSelect: (tab: Tab) => void;
+const TABS: { value: Tab; label: string; icon: ReactNode }[] = [
+  { value: 'new', label: 'Новая', icon: <IconPlusCircle /> },
+  { value: 'deals', label: 'Сделки', icon: <IconList /> },
+  { value: 'settings', label: 'Настройки', icon: <IconGear /> },
+];
+
+const EDITABLE = 'input:not([type="checkbox"]):not([type="radio"]), textarea, select, [contenteditable="true"]';
+
+/** Клавиатура открыта: фокус в поле ввода на сенсорном устройстве (на компьютере панель не мешает и не прячется). */
+function useKeyboardOpen(): boolean {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    let coarse = false;
+    try {
+      coarse = window.matchMedia('(pointer: coarse)').matches;
+    } catch {
+      coarse = false;
+    }
+    if (!coarse) return;
+    const update = () => {
+      const active = document.activeElement;
+      setOpen(active instanceof HTMLElement && active.matches(EDITABLE));
+    };
+    // focusout приходит раньше, чем фокус встанет на следующий элемент: проверяем после него.
+    const later = () => window.setTimeout(update, 0);
+    document.addEventListener('focusin', update);
+    document.addEventListener('focusout', later);
+    return () => {
+      document.removeEventListener('focusin', update);
+      document.removeEventListener('focusout', later);
+    };
+  }, []);
+  return open;
 }
 
-export function TabBar({ active, onSelect }: TabBarProps) {
+export interface TabBarProps {
+  active: Tab | null;
+  onSelect: (tab: Tab) => void;
+  /** Сделки, где ход за пользователем; 0 — счётчика нет. */
+  dealsCounter: number;
+}
+
+export function TabBar({ active, onSelect, dealsCounter }: TabBarProps) {
+  const keyboardOpen = useKeyboardOpen();
+  if (keyboardOpen) return null;
   return (
     <nav className="dg-tabbar" aria-label="Разделы">
-      <div className="dg-tabbar__inner">
-        {TABS.map(({ tab, label }) => {
-          const isActive = tab === active;
-          return (
-            <button
-              key={tab}
-              type="button"
-              className={isActive ? 'dg-tab dg-tab_active' : 'dg-tab'}
-              aria-current={isActive ? 'page' : undefined}
-              onClick={() => onSelect(tab)}
-            >
-              <span className="dg-tab__icon">{ICONS[tab]}</span>
-              <span className="dg-tab__label">{label}</span>
-            </button>
-          );
-        })}
-      </div>
+      {TABS.map((tab) => {
+        const isActive = tab.value === active;
+        const counter = tab.value === 'deals' && dealsCounter > 0 ? dealsCounter : 0;
+        return (
+          <button
+            key={tab.value}
+            type="button"
+            className={isActive ? 'dg-tab dg-tab_active' : 'dg-tab'}
+            aria-current={isActive ? 'page' : undefined}
+            aria-label={counter ? `${tab.label}, нужно ваше действие: ${counterLabel(counter)}` : tab.label}
+            onClick={() => onSelect(tab.value)}
+          >
+            <span className="dg-tab__icon">
+              {tab.icon}
+              {counter ? (
+                <span className="dg-tab__counter" aria-hidden="true">
+                  {counter >= 100 ? (
+                    <span className="dg-counter-overflow">99+</span>
+                  ) : (
+                    <Counter value={counter} variant="attention" rounded />
+                  )}
+                </span>
+              ) : null}
+            </span>
+            <Typography.Label variant="small-strong" className="dg-tab__label">
+              {tab.label}
+            </Typography.Label>
+          </button>
+        );
+      })}
     </nav>
   );
 }

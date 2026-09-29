@@ -103,8 +103,8 @@ describe.skipIf(!DB)('истечение срока подтверждения �
     await tick({ max: h.gateway, sendReminders: true }, new Date(after.expires_at!.getTime() + MINUTE));
 
     expect(await dealStatus(h, id)).toBe('expired');
-    expect(h.max.inChat(SELLER_CHAT).map((m) => m.text)).toContain(texts.N7({ id }));
-    expect(h.max.inChat(CLIENT_CHAT).map((m) => m.text)).toContain(texts.N7({ id }));
+    expect(h.max.inChat(SELLER_CHAT).map((m) => m.text)).toContain(texts.N7({ id, to: 'seller' }));
+    expect(h.max.inChat(CLIENT_CHAT).map((m) => m.text)).toContain(texts.N7({ id, to: 'client' }));
     expect(await expiredEvents(id)).toBe(1);
     expect((await deal(id)).expires_at).toBeNull(); // вышли из ожидания подтверждения — срок обнулён
 

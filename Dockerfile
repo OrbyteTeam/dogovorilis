@@ -24,6 +24,8 @@ COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/server/package.json ./server/package.json
 COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/server/migrations ./server/migrations
+# Логотип для шапки квитанции PDF (DESIGN_BRIEF §7, §8); без него квитанция собирается, но без логотипа.
+COPY --from=build /app/server/assets ./server/assets
 COPY --from=build /app/webapp/dist ./webapp/dist
 COPY --from=build /app/certs ./certs
 EXPOSE 8080

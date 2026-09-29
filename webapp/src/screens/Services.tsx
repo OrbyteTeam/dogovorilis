@@ -7,6 +7,7 @@ import { Button, CellSimple, IconButton, Panel, Typography } from '@maxhub/max-u
 
 import { api, errorText } from '../api';
 import { haptic } from '../bridge';
+import { AppHeader } from '../components/AppHeader';
 import { ErrorScreen, LoadingScreen } from '../components/StateScreen';
 import { TemplateChips } from '../components/TemplateChips';
 import { useToast } from '../components/Toast';
@@ -109,14 +110,7 @@ export function ServicesScreen({ templates, onOpen, onNew, onSettings }: Service
   return (
     <Panel mode="secondary" className="dg-root">
       <div className="dg-screen dg-screen_plain">
-        <header className="dg-head">
-          <Typography.Headline variant="large-strong" asChild>
-            <h1>Мои услуги</h1>
-          </Typography.Headline>
-          <Typography.Text variant="body" color="secondary">
-            Готовые условия для новой сделки. Клиент этот список не видит
-          </Typography.Text>
-        </header>
+        <AppHeader title="Мои услуги" subtitle="Готовые условия для новой сделки. Клиент этот список не видит" />
 
         {state.items.length === 0 ? (
           <section className="dg-card" aria-label="Услуг пока нет">

@@ -369,7 +369,7 @@ describe.skipIf(!DB)('экран сделки: API', () => {
       const ok = await h.apiUpload(`/api/deals/${id}/receipt`, SELLER, pdfBytes, 'application/pdf', 'Чек НПД.pdf');
       expect(ok.status, JSON.stringify(ok.json)).toBe(200);
       expect(ok.json.deal).toMatchObject({ status: 'closed', actions: ['receipt_pdf', 'repeat'] });
-      expect(ok.json.deal.documents.cheque_text).toMatch(/^Файл чека приложен/);
+      expect(ok.json.deal.documents.cheque_text).toMatch(/^Чек приложен/);
       // файл чека и квитанция PDF загружены в MAX; клиенту — чек и квитанция, исполнителю — квитанция
       expect(h.max.uploads - uploadsBefore).toBeGreaterThanOrEqual(2);
       const toClient = h.max.inChat(CLIENT_CHAT);

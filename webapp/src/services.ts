@@ -231,12 +231,12 @@ export function validateServiceForm(v: ServiceFormValues): Partial<Record<Servic
   if (v.description.trim().length > DESCRIPTION_MAX) errors.description = `Уточнения до ${DESCRIPTION_MAX} символов`;
   const raw = toInt(v.priceRaw);
   const price = raw !== null && raw >= PRICE_MIN && raw <= PRICE_MAX ? raw : null;
-  if (price === null) errors.price = 'Цена от 1 до 1 000 000 ₽';
+  if (price === null) errors.price = 'Сумма от 1 до 1 000 000 ₽';
   if (!SERVICE_DURATIONS.includes(v.duration)) errors.duration = 'Выберите длительность';
   const prepay = formPrepayment(v);
   if (prepay === null) errors.prepayment = 'Укажите сумму предоплаты числом';
   else if (prepay.prepayment.kind === 'amount' && (prepay.prepayment.value < 1 || (price !== null && prepay.prepayment.value > price))) {
-    errors.prepayment = price !== null ? `Предоплата от 1 ₽ до ${formatRub(price)}` : 'Предоплата от 1 ₽ до цены услуги';
+    errors.prepayment = price !== null ? `Предоплата от 1 ₽ до ${formatRub(price)}` : 'Предоплата от 1 ₽ до суммы услуги';
   }
   return errors;
 }
@@ -262,7 +262,7 @@ export function serviceErrorField(message: string): ServiceField | null {
   const text = message.trim().toLowerCase();
   if (text.startsWith('название')) return 'title';
   if (text.startsWith('уточнения')) return 'description';
-  if (text.startsWith('цена')) return 'price';
+  if (text.startsWith('сумма')) return 'price';
   if (text.startsWith('длительность')) return 'duration';
   if (text.startsWith('предоплата')) return 'prepayment';
   return null;

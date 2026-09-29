@@ -156,7 +156,7 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
       );
     }
 
-    if (!templateByKey(body.template)) return fail(reply, 400, 'validation', 'Неизвестный шаблон');
+    if (!templateByKey(body.template)) return fail(reply, 400, 'validation', 'Неизвестный пример условий');
 
     try {
       // «🔁 Повторить» (ЗАДАЧА_04 F): своя сделка, не демо; «тот же клиент» — сразу с ним, если у него есть диалог.

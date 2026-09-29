@@ -192,8 +192,8 @@ describe('форма услуги', () => {
     expect(validateServiceForm(ok)).toEqual({});
     expect(validateServiceForm({ ...ok, title: 'М' }).title).toBe('Название от 2 до 80 символов');
     expect(validateServiceForm({ ...ok, description: 'а'.repeat(1001) }).description).toBe('Уточнения до 1000 символов');
-    expect(validateServiceForm({ ...ok, priceRaw: '' }).price).toBe('Цена от 1 до 1 000 000 ₽');
-    expect(validateServiceForm({ ...ok, priceRaw: '1000001' }).price).toBe('Цена от 1 до 1 000 000 ₽');
+    expect(validateServiceForm({ ...ok, priceRaw: '' }).price).toBe('Сумма от 1 до 1 000 000 ₽');
+    expect(validateServiceForm({ ...ok, priceRaw: '1000001' }).price).toBe('Сумма от 1 до 1 000 000 ₽');
     expect(validateServiceForm({ ...ok, duration: 50 }).duration).toBe('Выберите длительность');
     const custom = { ...ok, prepayMode: 'custom' as const, autoPercent: null };
     expect(validateServiceForm({ ...custom, prepayCustomRaw: '' }).prepayment).toBe('Укажите сумму предоплаты числом');
@@ -204,7 +204,7 @@ describe('форма услуги', () => {
 
   it('текст 400 сервера попадает к своему полю', () => {
     expect(serviceErrorField('Название от 2 до 80 символов')).toBe('title');
-    expect(serviceErrorField('Цена целым числом рублей')).toBe('price');
+    expect(serviceErrorField('Сумма целым числом рублей')).toBe('price');
     expect(serviceErrorField('Длительность от 15 минут до 12 часов, шаг 15 минут')).toBe('duration');
     expect(serviceErrorField('Предоплата: процент от 1 до 100 или сумма не больше цены')).toBe('prepayment');
     expect(serviceErrorField('Уточнения до 1000 символов')).toBe('description');

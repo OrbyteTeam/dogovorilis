@@ -9,21 +9,22 @@ import type { MaxGateway } from '../../integrations/max/gateway.js';
 import { log } from '../../logger.js';
 import * as texts from '../../texts.js';
 import { paidTotal, remaining, type DealBundle } from '../../types.js';
+import { loadReceiptHistory, type ReceiptHistory } from '../../domain/receipt/history.js';
 import { renderReceiptPdf, receiptFileName, type ReceiptData } from '../../domain/receipt/pdf.js';
 import { taxModeOf } from '../../domain/deal/service.js';
 import { transferHistory, type TransferStep } from '../../domain/payment/service.js';
 import { displayName } from './cards.js';
 
-/** Телефон в квитанции — маской (SPEC §9.5): «+7 ••• ••• 12-34». */
+/** Телефон в квитанции маской (SPEC §9.5): «+7 *** *** 12-34». Звёздочки, а не «•»: DESIGN_BRIEF §2.1. */
 export function maskPhone(phone: string | null): string | null {
   if (!phone) return null;
   const digits = phone.replace(/\D/g, '');
   if (digits.length < 4) return null;
   const tail = digits.slice(-4);
-  return `+${digits[0]} ••• ••• ${tail.slice(0, 2)}-${tail.slice(2)}`;
+  return `+${digits[0]} *** *** ${tail.slice(0, 2)}-${tail.slice(2)}`;
 }
 
-export function buildReceiptData(bundle: DealBundle, now = new Date(), transferLog: TransferStep[] = []): ReceiptData {
+export function buildReceiptData(bundle: DealBundle, now = new Date(), transferLog: TransferStep[] = [], history?: ReceiptHistory): ReceiptData {
   const { deal, version, seller, client } = bundle;
   return {
     publicId: deal.publicId,
@@ -62,6 +63,7 @@ export function buildReceiptData(bundle: DealBundle, now = new Date(), transferL
     remainingKopecks: Math.max(0, remaining(version) - paidTotal(bundle.payments.filter((p) => p.kind === 'final'))),
     receipt: { attachedAt: bundle.receipt?.createdAt ?? null, taxMode: taxModeOf(bundle) },
     transferLog,
+    history,
     closing: {
       closedAt: deal.closedAt,
       cancelledAt: deal.cancelledAt,
@@ -95,7 +97,8 @@ export async function renderAndSendReceipt(
   const outDir = await mkdtemp(path.join(tmpdir(), 'dogovorilis-receipt-'));
   const outPath = path.join(outDir, fileName);
   try {
-    await renderReceiptPdf(buildReceiptData(bundle, new Date(), await transferHistory(bundle.deal.id)), outPath);
+    const [transferLog, history] = await Promise.all([transferHistory(bundle.deal.id), loadReceiptHistory(bundle.deal.id, cfg().APP_TIMEZONE)]);
+    await renderReceiptPdf(buildReceiptData(bundle, new Date(), transferLog, history), outPath);
     const attachment = await max.uploadFile(outPath);
     // Повторная квитанция по кнопке уходит только нажавшему и подписана по статусу: раньше она шла обеим
     // сторонам с N14 «Сделка закрыта» — в том числе у отменённой сделки (найдено прогоном, 23.09).

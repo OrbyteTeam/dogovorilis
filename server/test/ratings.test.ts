@@ -160,7 +160,7 @@ describe.skipIf(!DB)('оценка клиента и надёжность исп
     const on = await h.api('PUT', '/api/me/profile', SELLER, { ...profile, show_reliability: true });
     expect(on.json.profile.show_reliability).toBe(true);
     await h.press(CLIENT, CLIENT_CHAT, `op:${id}`, clientCard);
-    expect(h.max.byMid(clientCard)!.text).toContain('🛡 3 сделки, 100 % без споров');
+    expect(h.max.byMid(clientCard)!.text).toContain('Надёжность: 3 сделки, 100 % без споров');
     expect((await h.api('GET', `/api/deals/${id}/full`, CLIENT)).json.reliability_line).toBe('3 сделки, 100 % без споров');
     // исполнителю — своя строка на экране сделки, а в его карточке строки нет
     expect((await h.api('GET', `/api/deals/${id}/full`, SELLER)).json.reliability_line).toBe('3 сделки, 100 % без споров');

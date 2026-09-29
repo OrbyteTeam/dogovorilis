@@ -1,5 +1,5 @@
-// Расписание «Моих сделок»: дни по Москве, лента сегодня −7 … +21, группировка записей — ЗАДАЧА_04 C, docs/SPEC.md §7.4.
-// Все календарные вычисления — по МСК через Intl (`Europe/Moscow`), а не по поясу устройства: так же считает бот.
+// Расписание экрана «Сделки»: дни по Москве, лента сегодня минус 7 дней и плюс 21 день, группировка сделок по дням
+// (ЗАДАЧА_04 C, SPEC §7.4, DESIGN_BRIEF §5.3). Календарь по МСК через Intl (`Europe/Moscow`), как считает бот.
 import type { DealListItem, DealStatus } from './types';
 
 const TZ = 'Europe/Moscow';
@@ -18,7 +18,7 @@ const KEY_FORMAT = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numer
 const TIME_FORMAT = new Intl.DateTimeFormat('ru-RU', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 
 const WEEKDAY_SHORT = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
-const WEEKDAY_TITLE = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const MONTH_SHORT = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 const WEEKDAY_LONG = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
 const MONTH_GENITIVE = [
   'января',
@@ -34,7 +34,6 @@ const MONTH_GENITIVE = [
   'ноября',
   'декабря',
 ];
-const MONTH_SHORT = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 
 /** Календарный день по Москве: «2026-09-28». */
 export function dayKey(date: Date): string {
@@ -104,34 +103,33 @@ export function dayTitle(key: string, todayKey: string): string {
   return base.charAt(0).toUpperCase() + base.slice(1);
 }
 
-/** Подпись для доступности: «пн, 28 сентября, 2 записи». */
+/** Подпись для доступности: «понедельник, 28 сентября, 2 сделки». */
 export function dayAriaLabel(key: string, count: number): string {
   const date = keyToUtcNoon(key);
   const base = `${WEEKDAY_LONG[date.getUTCDay()]}, ${date.getUTCDate()} ${MONTH_GENITIVE[date.getUTCMonth()]}`;
-  return count > 0 ? `${base}, ${pluralRecords(count)}` : base;
+  return count > 0 ? `${base}, ${dealsWord(count)}` : base;
 }
 
-/** Короткий день: «чт, 1 окт» — подпись кнопки «Предложить чт, 1 окт, 19:00» (ЗАДАЧА_08 D). */
+/** Короткий день: «чт 1 окт», подпись кнопки «Предложить чт 1 окт, 19:00» (ЗАДАЧА_08 D). */
 export function dayShort(key: string): string {
   const date = keyToUtcNoon(key);
-  return `${WEEKDAY_SHORT[date.getUTCDay()]}, ${date.getUTCDate()} ${MONTH_SHORT[date.getUTCMonth()]}`;
+  return `${WEEKDAY_SHORT[date.getUTCDay()]} ${date.getUTCDate()} ${MONTH_SHORT[date.getUTCMonth()]}`;
 }
 
-/** Дата и время строки списка: «Пн 28 сен, 14:00». */
+/** Дата и время по МСК без пояса: «пн 28 сен, 14:00» (DESIGN_BRIEF §2.4: день недели строчными, без точки). */
 export function shortDateTime(iso: string): string {
   const key = dayKeyOf(iso);
   if (!key) return '';
-  const date = keyToUtcNoon(key);
-  const weekday = WEEKDAY_TITLE[(date.getUTCDay() + 6) % 7];
-  return `${weekday} ${date.getUTCDate()} ${MONTH_SHORT[date.getUTCMonth()]}, ${timeOf(iso)}`;
+  return `${dayShort(key)}, ${timeOf(iso)}`;
 }
 
-export function pluralRecords(n: number): string {
+/** «1 сделка», «3 сделки», «5 сделок» (словарь DESIGN_BRIEF §2.7: «сделка», не «запись»). */
+export function dealsWord(n: number): string {
   const mod10 = n % 10;
   const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return `${n} запись`;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} записи`;
-  return `${n} записей`;
+  if (mod10 === 1 && mod100 !== 11) return `${n} сделка`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} сделки`;
+  return `${n} сделок`;
 }
 
 export function isTerminal(status: DealStatus): boolean {

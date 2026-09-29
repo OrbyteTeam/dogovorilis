@@ -93,7 +93,7 @@ export function dealsListMessage(items: DealListItem[], now = new Date()): { tex
 async function cmdSettings(ctx: Context, deps: Deps): Promise<void> {
   const chatId = chatIdOf(ctx);
   if (!chatId) return;
-  await deps.max.send({ chatId }, 'Настройки профиля — в мини-приложении.', [openAppRow(texts.BTN.settings, 'settings')]);
+  await deps.max.send({ chatId }, texts.SETTINGS_IN_APP, [openAppRow(texts.BTN.settings, 'settings')]);
 }
 
 async function cmdHelp(ctx: Context, deps: Deps): Promise<void> {

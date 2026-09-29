@@ -1,15 +1,21 @@
-// Квитанция PDF (SPEC §11): A4, поля 20 мм, шрифт DejaVu Sans — кириллица.
-// В ЗАДАЧА_01 шаблон минимальный: заголовок, стороны, условия, подтверждения, платежи, чек, статус, подвал.
-// Полный шаблон (история условий, QR) — ЗАДАЧА_03. Демо-сделка помечается водяным знаком «ДЕМО» (SPEC §12).
-// Пометки среды в строках платежей обязательны (SPEC §18): «тест» для ссылок, «модель» для перевода.
+// Квитанция PDF (SPEC §11, DESIGN_BRIEF §8): A4, поля 20 мм. Вид кассового чека (просьба Екатерины 29.09):
+// моноширинный DejaVu Sans Mono (кириллица, тот же пакет dejavu-fonts-ttf), чуть сжатый по ширине, как у кассового
+// принтера; заголовки разделов прописными; значения в колонку, суммы у правого края; все линии пунктиром.
+// Порядок блоков: шапка с логотипом, статус, стороны, условия с прошлыми версиями, платежи с подтверждениями
+// перевода, хронология, чек; подвал на каждой странице. Демо-сделка помечается водяным знаком «ДЕМО» (SPEC §12).
+// Пометки среды в строках платежей обязательны (SPEC §18): «тест» у ссылок. Все тексты по DESIGN_BRIEF §2:
+// без тире, суммы «1 500 ₽», даты «15 окт 2026, 19:02». Тексты дублируются здесь намеренно: texts.ts
+// принадлежит транспорту, а квитанция это домен.
 import { createWriteStream, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { finished } from 'node:stream/promises';
 import PDFDocument from 'pdfkit';
-import { formatMoney, prepaymentPercent } from '../money.js';
-import { DEFAULT_TZ, formatDateShort, formatDateTime, formatFull } from '../time.js';
+import { formatMoney, formatPercent, prepaymentPercent } from '../money.js';
+import { DEFAULT_TZ, formatDocDateTime, formatDocWhen, zoneLabel } from '../time.js';
 import type { CancelRule, DealStatus, PaymentKind, PaymentProvider, PaymentRail, TaxMode } from '../../types.js';
+import type { ReceiptHistory } from './history.js';
 
 export type ReceiptPaymentRow = {
   kind: PaymentKind;
@@ -45,6 +51,8 @@ export type ReceiptData = {
   receipt: { attachedAt: Date | null; taxMode: TaxMode };
   /** Отметки сторон по рейлу «перевод»: кто и когда сообщил, не увидел, подтвердил (аудит 22.09 §4.3). */
   transferLog?: Array<{ at: Date; step: 'claimed' | 'not_received' | 'received'; kind: PaymentKind; amountKopecks: number }>;
+  /** Хронология событий и прошлые версии (domain/receipt/history.ts); нет — хронология собирается из отметок сделки. */
+  history?: ReceiptHistory;
   closing: {
     closedAt: Date | null;
     cancelledAt: Date | null;
@@ -63,44 +71,61 @@ export type ReceiptData = {
 
 const MM = 72 / 25.4;
 const MARGIN = 20 * MM;
-const FONT = 'DejaVu';
-const FONT_BOLD = 'DejaVu-Bold';
+/** Место под подвал: он стоит на каждой странице ниже поля содержимого. */
+const FOOTER_SPACE = 44;
+const FONT = 'DejaVuMono';
+const FONT_BOLD = 'DejaVuMono-Bold';
+/** Сжатие по ширине: узкие буквы кассового принтера; одно значение и в отрисовке, и в измерении высоты текста. */
+const SCALE = 90;
+/** Ширина колонки подписей «Правило отмены:» в знаках моноширинного шрифта: значения встают ровной колонкой. */
+const LABEL_CHARS = 17;
+/** Пунктир линий: штрих и промежуток в пунктах. */
+const DASH = { dash: 3, space: 2 };
 const INK = '#000000';
 const MUTED = '#555555';
 const HAIRLINE = '#cccccc';
-/** Длинное описание не должно ломать вёрстку — режем (SPEC §7.2 разрешает до 2000 символов). */
+/** Синий логотипа: только логотип, заголовок и линия под шапкой квитанции (DESIGN_BRIEF §6, §8). */
+const BRAND = '#0152AA';
+const LOGO_SIZE = 28;
+/** Длинные уточнения не должны ломать вёрстку, режем по границе слова (SPEC §7.2 разрешает до 1000 символов). */
 const DESCRIPTION_LIMIT = 600;
 
 // ——— тексты ———
 
-/** Тексты правил отмены — дословно SPEC §6.4. Дублируются здесь намеренно: texts.ts принадлежит транспорту. */
+/** Правило отмены после подписи «Правило отмены:» (как в карточке, SPEC §6.4). */
 const CANCEL_RULE_TEXT: Record<CancelRule, string> = {
-  free_24h: 'Отмена без потери предоплаты за 24 ч и более до срока',
-  free_48h: 'Отмена без потери предоплаты за 48 ч и более до срока',
-  nonrefundable: 'Предоплата не возвращается при отмене клиентом',
-  full_refund: 'Предоплата возвращается при любой отмене',
+  free_24h: 'отмена без потери предоплаты за 24 ч и более до срока',
+  free_48h: 'отмена без потери предоплаты за 48 ч и более до срока',
+  nonrefundable: 'предоплата не возвращается при отмене клиентом',
+  full_refund: 'предоплата возвращается при любой отмене',
 };
 
-/** Статус словами — для сделок, которые ещё не закрыты и не отменены (SPEC §11 п. 7). */
+/** Статус словами для сделок, которые ещё не закрыты и не отменены (SPEC §11 п. 7). */
 const STATUS_TEXT: Record<DealStatus, string> = {
-  awaiting_confirmation: 'ждёт подтверждения условий клиентом',
+  awaiting_confirmation: 'ждём подтверждения клиента',
   changes_requested: 'клиент предложил изменения',
   declined: 'клиент отказался от сделки',
   expired: 'срок подтверждения истёк',
-  awaiting_prepayment: 'ждёт предоплату',
-  scheduled: 'условия подтверждены, работа запланирована',
-  awaiting_acceptance: 'ждёт приёмки клиентом',
+  awaiting_prepayment: 'ждём предоплату',
+  scheduled: 'всё согласовано, ждём выполнения',
+  awaiting_acceptance: 'ждём приёмку клиентом',
   remarks: 'клиент оставил замечания',
-  awaiting_payment: 'ждёт оплату остатка',
-  paid: 'оплачена, ждёт чек от исполнителя',
-  closed: 'закрыта',
-  cancelled: 'отменена',
+  awaiting_payment: 'ждём остаток',
+  paid: 'оплачено, ждём чек',
+  closed: 'сделка закрыта',
+  cancelled: 'сделка отменена',
 };
 
 const CANCELLED_BY_TEXT: Record<'seller' | 'client' | 'system', string> = {
   seller: 'исполнителем',
   client: 'клиентом',
-  system: 'системой',
+  system: 'автоматически',
+};
+
+const TAX_MODE_TEXT: Record<TaxMode, string | null> = {
+  npd: 'самозанятый',
+  ip_kkt: 'ИП',
+  none: null,
 };
 
 const PAYMENT_KIND_TEXT: Record<PaymentKind, string> = {
@@ -109,19 +134,28 @@ const PAYMENT_KIND_TEXT: Record<PaymentKind, string> = {
 };
 
 const FOOTER_TEXT =
-  'Документ фиксирует договорённость и подтверждения сторон в MAX; не является кассовым чеком или чеком НПД. ' +
-  'Тестовые платежи: реальные деньги не движутся.';
+  'Не фискальный документ. Квитанция фиксирует договорённость и подтверждения сторон в MAX; не является кассовым ' +
+  'чеком или чеком НПД. Содержимое приложенного чека не проверялось. Тестовые платежи: реальные деньги не движутся. ' +
+  'Деньги идут напрямую исполнителю, продукт их не касается.';
 
-/** Рейл с обязательной пометкой среды (SPEC §11 п. 5, §18). */
+/** Способ оплаты с обязательной пометкой среды (SPEC §11 п. 5, §18). */
 function railText(rail: PaymentRail, provider: PaymentProvider): string {
-  if (rail === 'transfer') return 'перевод по реквизитам, подтверждён сторонами (модель)';
-  if (provider === 'yookassa') return 'ссылка ЮKassa (тестовый магазин)';
-  if (provider === 'tbank') return 'СБП Т-Банк (DEMO-терминал)';
-  return 'оплата по ссылке (тестовая среда)';
+  if (rail === 'transfer') return 'перевод по реквизитам';
+  if (provider === 'yookassa') return 'ссылка ЮKassa, тест';
+  if (provider === 'tbank') return 'СБП Т-Банк, тест';
+  return 'ссылка на оплату, тест';
+}
+
+/** Кто подтвердил платёж: у ссылки провайдер с номером платежа, у перевода отметки сторон. */
+function confirmationText(p: ReceiptPaymentRow): string {
+  if (!p.succeeded) return 'не подтверждён';
+  if (p.rail === 'transfer') return 'отметки сторон в MAX';
+  const provider = p.provider === 'yookassa' ? 'ЮKassa' : p.provider === 'tbank' ? 'Т-Банк' : 'провайдер';
+  return p.providerPaymentId ? `${provider}, платёж ${p.providerPaymentId}` : provider;
 }
 
 /**
- * Имя файла квитанции — именно оно показывается получателю в MAX (CONTRACTS §1.8: клиент берёт
+ * Имя файла квитанции: именно оно показывается получателю в MAX (CONTRACTS §1.8: клиент берёт
  * базовое имя из пути загружаемого файла).
  *
  * **Только ASCII.** SDK 0.3.1 подставляет имя в заголовок `Content-Disposition` без кодирования
@@ -133,12 +167,12 @@ export function receiptFileName(publicId: string): string {
   return `Kvitanciya-${publicId}.pdf`;
 }
 
-// ——— шрифты ———
+// ——— файлы: шрифты и логотип ———
 
 const requireFromHere = createRequire(import.meta.url);
 let fontFiles: { regular: string; bold: string } | null = null;
 
-/** Путь к ttf ищем через package.json пакета — устойчиво к вложенности node_modules. */
+/** Путь к ttf ищем через package.json пакета: устойчиво к вложенности node_modules. Моноширинная пара, вид чека. */
 function resolveFonts(): { regular: string; bold: string } {
   if (fontFiles) return fontFiles;
   let pkgDir: string;
@@ -149,7 +183,7 @@ function resolveFonts(): { regular: string; bold: string } {
       'Пакет dejavu-fonts-ttf не найден: без него в квитанции не будет кириллицы. Выполните npm ci в корне репозитория.',
     );
   }
-  fontFiles = { regular: findFontFile(pkgDir, 'DejaVuSans.ttf'), bold: findFontFile(pkgDir, 'DejaVuSans-Bold.ttf') };
+  fontFiles = { regular: findFontFile(pkgDir, 'DejaVuSansMono.ttf'), bold: findFontFile(pkgDir, 'DejaVuSansMono-Bold.ttf') };
   return fontFiles;
 }
 
@@ -162,6 +196,15 @@ function findFontFile(pkgDir: string, file: string): string {
   return found;
 }
 
+/**
+ * Логотип для шапки: server/assets/logo.png. Путь одинаковый из src (tsx) и из dist (сборка): оба на три уровня
+ * ниже server/. Файла нет (старый образ, урезанная сборка) — квитанция собирается без логотипа, а не падает.
+ */
+export function logoPath(): string | null {
+  const file = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../assets/logo.png');
+  return existsSync(file) ? file : null;
+}
+
 // ——— примитивы вёрстки ———
 
 type Doc = PDFKit.PDFDocument;
@@ -171,7 +214,7 @@ function contentWidth(doc: Doc): number {
 }
 
 function bottomY(doc: Doc): number {
-  return doc.page.height - MARGIN;
+  return doc.page.height - doc.page.margins.bottom;
 }
 
 /**
@@ -187,53 +230,121 @@ function useFont(doc: Doc, bold: boolean, size: number): void {
   doc.font(bold ? FONT_BOLD : FONT).fontSize(size);
 }
 
+/** pdfkit поддерживает horizontalScaling (js/pdfkit.js, LineWrapper), а в @types/pdfkit 0.17.6 его нет. */
+type TextOptions = PDFKit.Mixins.TextOptions & { horizontalScaling?: number };
+
+/**
+ * Параметры текста с общим сжатием по ширине: одинаковые для doc.text и doc.heightOfString.
+ * pdfkit 0.20 сжимает и ширину слов, и ширину строки (LineWrapper: lineWidth = width × scale), поэтому без
+ * поправки строка ломалась бы на 10 % раньше края. Ширину отдаём делённой на коэффициент: итог ровно `width`.
+ */
+function textOptions(o: TextOptions = {}): TextOptions {
+  const width = o.width === undefined ? undefined : (o.width * 100) / SCALE;
+  return { horizontalScaling: SCALE, ...o, ...(width === undefined ? {} : { width }) };
+}
+
+/** Заголовок раздела прописными, как в чеке: «СТАТУС», «ПЛАТЕЖИ». */
 function heading(doc: Doc, text: string): void {
-  ensureSpace(doc, 30);
+  ensureSpace(doc, 34);
+  doc.moveDown(0.4);
   useFont(doc, true, 11);
-  doc.fillColor(INK).text(text, MARGIN, doc.y, { width: contentWidth(doc) });
+  doc.fillColor(INK).text(text.toUpperCase(), MARGIN, doc.y, textOptions({ width: contentWidth(doc), characterSpacing: 0.6 }));
   doc.moveDown(0.3);
 }
 
 function line(doc: Doc, text: string, opts: { size?: number; bold?: boolean; color?: string } = {}): void {
   const size = opts.size ?? 10;
   const bold = opts.bold === true;
+  const o = textOptions({ width: contentWidth(doc) });
   useFont(doc, bold, size);
-  ensureSpace(doc, doc.heightOfString(text, { width: contentWidth(doc) }));
+  ensureSpace(doc, doc.heightOfString(text, o));
   useFont(doc, bold, size);
-  doc.fillColor(opts.color ?? INK).text(text, MARGIN, doc.y, { width: contentWidth(doc) });
+  doc.fillColor(opts.color ?? INK).text(text, MARGIN, doc.y, o);
   doc.fillColor(INK);
 }
 
-function hairline(doc: Doc): void {
-  const y = doc.y + 4;
-  doc.save().strokeColor(HAIRLINE).lineWidth(0.5).moveTo(MARGIN, y).lineTo(doc.page.width - MARGIN, y).stroke().restore();
+/** Ширина колонки подписей в пунктах при данном кегле: моноширинный знак 0,6 кегля, со сжатием. */
+function labelWidth(size: number, chars = LABEL_CHARS): number {
+  return chars * size * 0.6 * (SCALE / 100);
+}
+
+/**
+ * Строка «подпись: значение» колонками, как «СУММА : 56,00» в чеке: подписи слева, значения ровно друг под другом;
+ * длинное значение переносится в своей колонке, а не под подпись.
+ */
+function field(doc: Doc, label: string, value: string, opts: { size?: number; bold?: boolean; color?: string; labelChars?: number } = {}): void {
+  const size = opts.size ?? 10;
+  const lw = labelWidth(size, opts.labelChars);
+  const vo = textOptions({ width: contentWidth(doc) - lw });
+  useFont(doc, opts.bold === true, size);
+  const height = doc.heightOfString(value, vo);
+  ensureSpace(doc, height);
+  useFont(doc, opts.bold === true, size);
+  const top = doc.y;
+  doc.fillColor(MUTED).text(label, MARGIN, top, textOptions({ width: lw, lineBreak: false }));
+  doc.fillColor(opts.color ?? INK).text(value, MARGIN + lw, top, vo);
+  doc.fillColor(INK);
   doc.x = MARGIN;
-  doc.y = y + 8;
+  doc.y = top + height;
+}
+
+/** Итоговая строка чека: подпись слева, сумма у правого края, жирным. */
+function totalLine(doc: Doc, label: string, value: string): void {
+  const o = textOptions({ width: contentWidth(doc) });
+  useFont(doc, true, 11);
+  ensureSpace(doc, doc.heightOfString(label, o));
+  useFont(doc, true, 11);
+  const top = doc.y;
+  doc.fillColor(INK).text(label, MARGIN, top, textOptions({ width: contentWidth(doc), lineBreak: false }));
+  doc.text(value, MARGIN, top, textOptions({ width: contentWidth(doc), align: 'right', lineBreak: false }));
+  doc.x = MARGIN;
+  doc.y = top + doc.currentLineHeight(true) + 2;
+}
+
+/** Пунктирная линия на всю ширину, как отрыв в кассовом чеке. */
+function dashedRule(doc: Doc, y: number, color = HAIRLINE, width = 0.8): void {
+  doc
+    .save()
+    .strokeColor(color)
+    .lineWidth(width)
+    .dash(DASH.dash, { space: DASH.space })
+    .moveTo(MARGIN, y)
+    .lineTo(doc.page.width - MARGIN, y)
+    .stroke()
+    .undash()
+    .restore();
+}
+
+function hairline(doc: Doc): void {
+  const y = doc.y + 5;
+  dashedRule(doc, y);
+  doc.x = MARGIN;
+  doc.y = y + 7;
 }
 
 type Column = { width: number; align?: 'left' | 'right' };
 
-/** Строка таблицы платежей: высота — по самой высокой ячейке, ячейки переносятся внутри колонки. */
+/** Строка таблицы платежей: высота по самой высокой ячейке, ячейки переносятся внутри колонки. */
 function tableRow(doc: Doc, cells: string[], columns: Column[], bold = false): void {
   const size = 8.5;
-  const pad = 6;
+  const pad = 10;
+  const cellOptions = (i: number): TextOptions => textOptions({ width: (columns[i]?.width ?? 60) - pad, align: columns[i]?.align ?? 'left' });
   useFont(doc, bold, size);
-  const heights = cells.map((cell, i) => doc.heightOfString(cell, { width: (columns[i]?.width ?? 60) - pad }));
+  const heights = cells.map((cell, i) => doc.heightOfString(cell, cellOptions(i)));
   const rowHeight = Math.max(...heights, size) + 4;
   ensureSpace(doc, rowHeight);
   useFont(doc, bold, size);
   const top = doc.y;
   let x = MARGIN;
   cells.forEach((cell, i) => {
-    const column = columns[i] ?? { width: 60 };
-    doc.text(cell, x, top, { width: column.width - pad, align: column.align ?? 'left' });
-    x += column.width;
+    doc.text(cell, x, top, cellOptions(i));
+    x += columns[i]?.width ?? 60;
   });
   doc.x = MARGIN;
   doc.y = top + rowHeight;
 }
 
-/** Диагональный водяной знак «ДЕМО», серый ~15 % (SPEC §11 п. 1, §12). */
+/** Диагональный водяной знак «ДЕМО», серый около 15 % (SPEC §11 п. 1, §12). Логотип в знак не идёт (§7). */
 function drawWatermark(doc: Doc): void {
   const { width, height } = doc.page;
   const savedX = doc.x;
@@ -243,57 +354,12 @@ function drawWatermark(doc: Doc): void {
   doc.fillColor('#000000').fillOpacity(0.15).font(FONT_BOLD).fontSize(110).text('ДЕМО', 0, height / 2 - 70, {
     width,
     align: 'center',
+    lineBreak: false,
   });
   doc.restore();
   doc.fillOpacity(1).fillColor(INK);
   doc.x = savedX;
   doc.y = savedY;
-}
-
-// ——— разделы квитанции ———
-
-function drawHeader(doc: Doc, data: ReceiptData, tz: string): void {
-  doc.font(FONT_BOLD).fontSize(16).fillColor(INK).text(`Квитанция о сделке №${data.publicId}`, MARGIN, doc.y, {
-    width: contentWidth(doc),
-  });
-  doc.moveDown(0.3);
-  line(doc, `Сформировано ботом «Договорились» в MAX · ${formatFull(data.generatedAt, tz)}`, { size: 9, color: MUTED });
-  if (data.demo) {
-    line(doc, 'Демонстрационная сделка: обе стороны — один пользователь', { size: 9, color: MUTED });
-  }
-  hairline(doc);
-}
-
-function drawParties(doc: Doc, data: ReceiptData): void {
-  heading(doc, 'Стороны');
-  const phone = data.seller.phoneMasked;
-  const sellerTail = phone !== null && phone !== '' ? `, телефон ${phone}` : '';
-  line(doc, `Исполнитель: ${data.seller.name}, MAX id ${data.seller.maxUserId}${sellerTail}`);
-  line(
-    doc,
-    data.client === null
-      ? 'Клиент: ещё не присоединился'
-      : `Клиент: ${data.client.name}, MAX id ${data.client.maxUserId}`,
-  );
-  hairline(doc);
-}
-
-function drawTerms(doc: Doc, data: ReceiptData, tz: string): void {
-  const v = data.version;
-  heading(doc, 'Условия');
-  line(doc, `Название: ${v.title}`);
-  const description = v.description === null || v.description.trim() === '' ? '—' : trim(v.description);
-  line(doc, `Описание: ${description}`);
-  line(doc, `Дата и время: ${v.scheduledAt === null ? 'без даты' : formatDateTime(v.scheduledAt, tz, data.generatedAt)}`);
-  line(doc, `Сумма: ${formatMoney(v.totalKopecks)}`);
-  const prepayment =
-    v.prepaymentKopecks > 0
-      ? `${formatMoney(v.prepaymentKopecks)} (${prepaymentPercent(v.totalKopecks, v.prepaymentKopecks)} %)`
-      : 'без предоплаты';
-  line(doc, `Предоплата: ${prepayment}`);
-  line(doc, `Правило отмены: ${CANCEL_RULE_TEXT[v.cancelRule]}`);
-  line(doc, `Версия ${v.version} от ${formatFull(v.createdAt, tz)}`, { size: 9, color: MUTED });
-  hairline(doc);
 }
 
 /** Описание обрезаем по границе слова, чтобы не разрывать текст посередине. */
@@ -305,18 +371,99 @@ function trim(text: string): string {
   return `${(space > DESCRIPTION_LIMIT - 60 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
 
-function drawConfirmations(doc: Doc, data: ReceiptData, tz: string): void {
-  const c = data.confirmations;
-  const rows: string[] = [];
-  if (c.confirmedAt !== null) rows.push(`Условия подтверждены клиентом ${formatFull(c.confirmedAt, tz)}`);
-  if (c.doneAt !== null) rows.push(`Работа отмечена выполненной ${formatFull(c.doneAt, tz)}`);
-  if (c.acceptedAt !== null) rows.push(`Принята клиентом ${formatFull(c.acceptedAt, tz)}`);
-  if (rows.length === 0) return;
-  heading(doc, 'Подтверждения');
-  for (const row of rows) line(doc, row);
+// ——— разделы квитанции (DESIGN_BRIEF §8) ———
+
+/** 1. Шапка: логотип 28 pt, заголовок, строка о формировании, линия синим логотипа. */
+function drawHeader(doc: Doc, data: ReceiptData, tz: string): void {
+  const logo = logoPath();
+  const top = doc.y;
+  const textX = logo ? MARGIN + LOGO_SIZE + 10 : MARGIN;
+  const textWidth = doc.page.width - MARGIN - textX;
+  if (logo) doc.image(logo, MARGIN, top, { width: LOGO_SIZE, height: LOGO_SIZE });
+  useFont(doc, true, 15);
+  doc.fillColor(BRAND).text(`Квитанция о сделке #${data.publicId}`, textX, top, textOptions({ width: textWidth }));
+  useFont(doc, false, 9);
+  doc
+    .fillColor(MUTED)
+    .text(
+      `Сформировано ботом «Договорились» в MAX, ${formatDocDateTime(data.generatedAt, tz)} (${zoneLabel(tz)})`,
+      textX,
+      doc.y + 2,
+      textOptions({ width: textWidth }),
+    );
+  doc.fillColor(INK);
+  const y = Math.max(doc.y, top + LOGO_SIZE) + 8;
+  // Линия под шапкой синим логотипа, 1 pt (§8), пунктиром, как весь документ.
+  dashedRule(doc, y, BRAND, 1);
+  doc.x = MARGIN;
+  doc.y = y + 8;
+  if (data.demo) {
+    line(doc, 'Демонстрационная сделка: обе стороны один пользователь', { size: 9, color: MUTED });
+    doc.moveDown(0.2);
+  }
+}
+
+/** 2. Статус одной строкой словом и датой. */
+export function statusLine(data: ReceiptData, tz: string): string {
+  const c = data.closing;
+  if (data.status === 'closed' && c.closedAt) return `Сделка закрыта ${formatDocDateTime(c.closedAt, tz)}`;
+  if (data.status === 'cancelled' && c.cancelledAt) {
+    const by = c.cancelledByRole ? ` ${CANCELLED_BY_TEXT[c.cancelledByRole]}` : '';
+    const reason = c.cancelReason?.trim() ? `: ${c.cancelReason.trim()}` : ', без причины';
+    return `Отменена${by} ${formatDocDateTime(c.cancelledAt, tz)}${reason}`;
+  }
+  if (data.status === 'expired') return 'Срок подтверждения истёк';
+  if (data.status === 'declined') return 'Клиент отказался от сделки';
+  return `Текущий статус: ${STATUS_TEXT[data.status]}`;
+}
+
+function drawStatus(doc: Doc, data: ReceiptData, tz: string): void {
+  heading(doc, 'Статус');
+  line(doc, statusLine(data, tz));
   hairline(doc);
 }
 
+/** 3. Стороны: имя, MAX id, статус исполнителя. */
+function drawParties(doc: Doc, data: ReceiptData): void {
+  heading(doc, 'Стороны');
+  const phone = data.seller.phoneMasked ? `, телефон ${data.seller.phoneMasked}` : '';
+  const tax = TAX_MODE_TEXT[data.receipt.taxMode];
+  field(doc, 'Исполнитель:', `${data.seller.name}, MAX id ${data.seller.maxUserId}${tax ? `, ${tax}` : ''}${phone}`);
+  field(doc, 'Клиент:', data.client === null ? 'ещё не открыл ссылку' : `${data.client.name}, MAX id ${data.client.maxUserId}`);
+  hairline(doc);
+}
+
+/** 4. Условия текущей версии, строка версии серым, прошлые версии списком. */
+function drawTerms(doc: Doc, data: ReceiptData, tz: string): void {
+  const v = data.version;
+  heading(doc, 'Условия');
+  field(doc, 'Что:', v.title);
+  if (v.description?.trim()) field(doc, 'Уточнения:', trim(v.description));
+  field(doc, 'Когда:', v.scheduledAt === null ? 'без даты' : `${formatDocWhen(v.scheduledAt, tz)} (${zoneLabel(tz)})`);
+  field(doc, 'Сумма:', formatMoney(v.totalKopecks));
+  const prepayment =
+    v.prepaymentKopecks > 0
+      ? `${formatMoney(v.prepaymentKopecks)} (${formatPercent(prepaymentPercent(v.totalKopecks, v.prepaymentKopecks))})`
+      : 'без предоплаты';
+  field(doc, 'Предоплата:', prepayment);
+  field(doc, 'Правило отмены:', CANCEL_RULE_TEXT[v.cancelRule]);
+  line(doc, `Версия ${v.version} от ${formatDocDateTime(v.createdAt, tz)}`, { size: 9, color: MUTED });
+  const past = data.history?.pastVersions ?? [];
+  if (past.length) {
+    doc.moveDown(0.3);
+    line(doc, 'Прошлые версии', { size: 9, bold: true });
+    for (const p of past) line(doc, `Версия ${p.version}, ${formatDocDateTime(p.createdAt, tz)}: ${p.changes}`, { size: 9, color: MUTED });
+  }
+  hairline(doc);
+}
+
+const TRANSFER_STEP_TEXT: Record<'claimed' | 'not_received' | 'received', string> = {
+  claimed: 'Клиент сообщил о переводе',
+  not_received: 'Исполнитель не видит перевода',
+  received: 'Исполнитель подтвердил получение',
+};
+
+/** 5. Платежи: таблица, итог, возврат; для переводов подтверждения сторон. */
 function drawPayments(doc: Doc, data: ReceiptData, tz: string): void {
   heading(doc, 'Платежи');
   if (data.payments.length === 0) {
@@ -324,115 +471,114 @@ function drawPayments(doc: Doc, data: ReceiptData, tz: string): void {
   } else {
     const total = contentWidth(doc);
     const columns: Column[] = [
-      { width: total * 0.15 },
-      { width: total * 0.15, align: 'right' },
-      { width: total * 0.35 },
-      { width: total * 0.22 },
-      { width: total * 0.13 },
+      { width: total * 0.14 },
+      { width: total * 0.12, align: 'right' },
+      { width: total * 0.23 },
+      { width: total * 0.28 },
+      { width: total * 0.23 },
     ];
-    tableRow(doc, ['Вид', 'Сумма', 'Рейл', 'id провайдера', 'Дата'], columns, true);
+    tableRow(doc, ['Этап', 'Сумма', 'Способ', 'Подтверждение', 'Дата'], columns, true);
     for (const p of data.payments) {
-      // Для неоплаченного платежа в колонке даты — состояние, чтобы в тексте не появилось пустот.
-      const when = p.succeeded ? (p.at === null ? '—' : formatDateShort(p.at, tz)) : 'не оплачен';
       tableRow(
         doc,
         [
           PAYMENT_KIND_TEXT[p.kind],
           formatMoney(p.amountKopecks),
           railText(p.rail, p.provider),
-          p.providerPaymentId ?? '—',
-          when,
+          confirmationText(p),
+          p.succeeded && p.at ? formatDocDateTime(p.at, tz) : 'не оплачен',
         ],
         columns,
       );
     }
   }
-  doc.moveDown(0.2);
-  line(doc, `Итого оплачено: ${formatMoney(data.paidKopecks)}`, { bold: true });
-  line(doc, `Остаток: ${formatMoney(data.remainingKopecks)}`, { bold: true });
-  hairline(doc);
-}
+  // Итог как в чеке: отрыв пунктиром, подпись слева, сумма у правого края.
+  const rule = doc.y + 4;
+  dashedRule(doc, rule);
+  doc.y = rule + 6;
+  totalLine(doc, 'Оплачено:', formatMoney(data.paidKopecks));
+  // У отменённой, отклонённой и истёкшей сделки платить больше нечего: строка остатка ввела бы в заблуждение.
+  if (!['cancelled', 'declined', 'expired'].includes(data.status)) totalLine(doc, 'Остаток:', formatMoney(data.remainingKopecks));
 
-const TRANSFER_STEP_TEXT: Record<'claimed' | 'not_received' | 'received', string> = {
-  claimed: 'клиент сообщил о переводе',
-  not_received: 'исполнитель не видит перевода',
-  received: 'исполнитель подтвердил получение',
-};
-
-/** Хронология «перевёл / не вижу / получил» — продукт не арбитр, он сохраняет отметки сторон с временем. */
-function drawTransferLog(doc: Doc, data: ReceiptData, tz: string): void {
-  const log = data.transferLog ?? [];
-  if (log.length === 0) return;
-  heading(doc, 'Подтверждения перевода');
-  for (const s of log) {
-    const what = `${PAYMENT_KIND_TEXT[s.kind].toLowerCase()} ${formatMoney(s.amountKopecks)}`;
-    line(doc, `${formatFull(s.at, tz)} — ${TRANSFER_STEP_TEXT[s.step]}: ${what}`);
+  const c = data.closing;
+  if (data.status === 'cancelled' && c.cancelRefundExpected !== null && data.version.prepaymentKopecks > 0) {
+    const sum = formatMoney(data.version.prepaymentKopecks);
+    let refund = c.cancelRefundExpected ? `Предоплата ${sum}: ожидается возврат` : `Предоплата ${sum} не возвращается по правилу отмены`;
+    if (c.refundReceivedAt) refund = `Возврат ${sum} получен клиентом ${formatDocDateTime(c.refundReceivedAt, tz)}`;
+    else if (c.refundSentAt) refund = `Исполнитель вернул ${sum} ${formatDocDateTime(c.refundSentAt, tz)}, клиент ещё не подтвердил`;
+    line(doc, refund);
   }
-  line(doc, 'Банковский перевод продукт не видит: строки выше — отметки сторон кнопками в MAX.', { size: 9, color: MUTED });
+
+  const log = data.transferLog ?? [];
+  if (log.length) {
+    doc.moveDown(0.4);
+    line(doc, 'Подтверждения перевода', { size: 10, bold: true });
+    for (const s of log) {
+      const what = `${PAYMENT_KIND_TEXT[s.kind].toLowerCase()} ${formatMoney(s.amountKopecks)}`;
+      line(doc, `${TRANSFER_STEP_TEXT[s.step]} ${formatDocDateTime(s.at, tz)}: ${what}`);
+    }
+    line(doc, 'Перевод продукт не видит: строки выше это отметки сторон кнопками в MAX.', { size: 9, color: MUTED });
+  }
   hairline(doc);
 }
 
+/** Хронология без журнала событий (данные старше квитанции нового вида): из отметок самой сделки. */
+function fallbackTimeline(data: ReceiptData): Array<{ at: Date; text: string }> {
+  const c = data.confirmations;
+  const out: Array<{ at: Date; text: string }> = [];
+  if (c.confirmedAt) out.push({ at: c.confirmedAt, text: 'Клиент подтвердил условия' });
+  if (c.doneAt) out.push({ at: c.doneAt, text: 'Исполнитель отметил выполнение' });
+  if (c.acceptedAt) out.push({ at: c.acceptedAt, text: 'Клиент принял работу' });
+  if (data.closing.closedAt) out.push({ at: data.closing.closedAt, text: 'Сделка закрыта' });
+  if (data.closing.cancelledAt) out.push({ at: data.closing.cancelledAt, text: 'Сделка отменена' });
+  if (data.closing.refundSentAt) out.push({ at: data.closing.refundSentAt, text: 'Исполнитель отметил возврат предоплаты' });
+  if (data.closing.refundReceivedAt) out.push({ at: data.closing.refundReceivedAt, text: 'Клиент подтвердил получение возврата' });
+  return out.sort((a, b) => a.at.getTime() - b.at.getTime());
+}
+
+/** 6. Хронология: все события строками «дата, время: событие». */
+function drawTimeline(doc: Doc, data: ReceiptData, tz: string): void {
+  const entries = data.history?.entries.length ? data.history.entries : fallbackTimeline(data);
+  if (!entries.length) return;
+  heading(doc, `Хронология, время ${zoneLabel(tz)}`);
+  for (const e of entries) field(doc, `${formatDocDateTime(e.at, tz)}:`, e.text, { size: 9.5, labelChars: 21 });
+  hairline(doc);
+}
+
+/** 7. Чек. */
 function drawReceiptLine(doc: Doc, data: ReceiptData, tz: string): void {
   heading(doc, 'Чек');
   if (data.receipt.taxMode === 'none') {
-    line(doc, 'Чек не требуется (режим без чека)');
+    line(doc, 'Чек не требуется: исполнитель работает без чека');
   } else if (data.receipt.attachedAt !== null) {
-    line(doc, `Файл чека приложен исполнителем ${formatFull(data.receipt.attachedAt, tz)} (содержимое не проверялось)`);
+    line(doc, `Чек приложен исполнителем ${formatDocDateTime(data.receipt.attachedAt, tz)}. Содержимое чека не проверялось`);
   } else {
     line(doc, 'Чек не приложен');
   }
-  hairline(doc);
 }
 
-function drawClosing(doc: Doc, data: ReceiptData, tz: string): void {
-  const c = data.closing;
-  heading(doc, 'Статус и завершение');
-  if (c.closedAt !== null) {
-    line(doc, `Сделка закрыта ${formatFull(c.closedAt, tz)}`);
-  } else if (c.cancelledAt !== null) {
-    const by = c.cancelledByRole === null ? '' : ` ${CANCELLED_BY_TEXT[c.cancelledByRole]}`;
-    const reason = c.cancelReason === null || c.cancelReason.trim() === '' ? 'без причины' : c.cancelReason.trim();
-    line(doc, `Отменена${by} ${formatFull(c.cancelledAt, tz)}: ${reason}`);
-    if (c.cancelRefundExpected !== null) {
-      line(
-        doc,
-        c.cancelRefundExpected
-          ? 'Предоплата: ожидается возврат'
-          : 'Предоплата: не возвращается по правилу отмены',
-      );
-    }
-    if (c.refundSentAt) line(doc, `Исполнитель отметил возврат ${formatFull(c.refundSentAt, tz)}`);
-    if (c.refundReceivedAt) line(doc, `Клиент подтвердил получение возврата ${formatFull(c.refundReceivedAt, tz)}`);
-  } else {
-    line(doc, `Текущий статус: ${STATUS_TEXT[data.status]}`);
+/** 8. Подвал на каждой странице: страницы буферизованы, поле под подвал оставлено при создании документа. */
+function drawFooters(doc: Doc): void {
+  const range = doc.bufferedPageRange();
+  for (let i = range.start; i < range.start + range.count; i += 1) {
+    doc.switchToPage(i);
+    const width = contentWidth(doc);
+    const savedBottom = doc.page.margins.bottom;
+    // Подвал стоит ниже поля содержимого: без обнуления нижнего поля pdfkit перенёс бы его на новую страницу.
+    doc.page.margins.bottom = 0;
+    useFont(doc, false, 7.5);
+    const height = doc.heightOfString(FOOTER_TEXT, textOptions({ width }));
+    const y = doc.page.height - MARGIN - height;
+    dashedRule(doc, y - 6);
+    doc.fillColor(MUTED).text(FOOTER_TEXT, MARGIN, y, textOptions({ width }));
+    doc.page.margins.bottom = savedBottom;
   }
-}
-
-function drawFooter(doc: Doc): void {
-  useFont(doc, false, 8);
-  const width = contentWidth(doc);
-  const height = doc.heightOfString(FOOTER_TEXT, { width });
-  const pinned = bottomY(doc) - height;
-  if (doc.y + 14 > pinned) {
-    // Контент дошёл до подвала: если места нет совсем — переносим подвал на новую страницу.
-    if (doc.y + 14 + height > bottomY(doc)) {
-      doc.addPage();
-      doc.y = bottomY(doc) - height;
-    } else {
-      doc.y += 14;
-    }
-  } else {
-    doc.y = pinned;
-  }
-  useFont(doc, false, 8);
-  doc.save().strokeColor(HAIRLINE).lineWidth(0.5).moveTo(MARGIN, doc.y - 6).lineTo(doc.page.width - MARGIN, doc.y - 6).stroke().restore();
-  doc.fillColor(MUTED).text(FOOTER_TEXT, MARGIN, doc.y, { width });
   doc.fillColor(INK);
 }
 
 /**
  * Пишет PDF в файл и возвращает путь и имя.
- * Путь передаёт вызывающий (обычно os.tmpdir()), файл удаляет тоже он — SDK MAX требует ПУТЬ,
+ * Путь передаёт вызывающий (обычно os.tmpdir()), файл удаляет тоже он: SDK MAX требует ПУТЬ,
  * а не Buffer, иначе имя файла у получателя станет UUID (CONTRACTS §1.8).
  */
 export async function renderReceiptPdf(data: ReceiptData, outPath: string): Promise<{ path: string; fileName: string }> {
@@ -440,7 +586,8 @@ export async function renderReceiptPdf(data: ReceiptData, outPath: string): Prom
   const tz = data.timezone ?? DEFAULT_TZ;
   const doc = new PDFDocument({
     size: 'A4',
-    margins: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN },
+    bufferPages: true,
+    margins: { top: MARGIN, bottom: MARGIN + FOOTER_SPACE, left: MARGIN, right: MARGIN },
     info: { Title: `Квитанция о сделке ${data.publicId}`, Creator: 'Договорились (MAX)' },
   });
   doc.registerFont(FONT, fonts.regular);
@@ -451,20 +598,19 @@ export async function renderReceiptPdf(data: ReceiptData, outPath: string): Prom
   doc.pipe(stream);
 
   if (data.demo) {
-    // Знак рисуется до контента, чтобы текст остался читаемым; на каждой новой странице — заново.
+    // Знак рисуется до содержимого, чтобы текст остался читаемым; на каждой новой странице заново.
     doc.on('pageAdded', () => drawWatermark(doc));
     drawWatermark(doc);
   }
 
   drawHeader(doc, data, tz);
+  drawStatus(doc, data, tz);
   drawParties(doc, data);
   drawTerms(doc, data, tz);
-  drawConfirmations(doc, data, tz);
   drawPayments(doc, data, tz);
-  drawTransferLog(doc, data, tz);
+  drawTimeline(doc, data, tz);
   drawReceiptLine(doc, data, tz);
-  drawClosing(doc, data, tz);
-  drawFooter(doc);
+  drawFooters(doc);
 
   doc.end();
   await finished(stream);

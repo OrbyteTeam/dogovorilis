@@ -1,22 +1,12 @@
-// Чипы шаблонов — своего компонента в MAX UI нет, сделан на токенах: docs/DESIGN.md §4, шаблоны — docs/SPEC.md §7.6.
+// Чипы примеров условий по нишам (DESIGN_BRIEF §5.3, блок «Услуга»; SPEC §7.6). Своих услуг пока нет (ЗАДАЧА_08 C),
+// поэтому показываем ниш-примеры с подписью «пример». Без эмодзи: иконки в мини-приложении только на токенах.
 import type { Template, TemplateKey } from '../types';
 
-const TEMPLATE_EMOJI: Record<TemplateKey, string> = {
-  beauty: '💅',
-  lesson: '📚',
-  repair: '🔧',
-  custom_order: '🎂',
-  freelance: '💻',
-  free: '✍️',
-};
+const STARTS_WITH_EMOJI = /^\p{Extended_Pictographic}️?\s*/u;
 
-const STARTS_WITH_EMOJI = /^\p{Extended_Pictographic}/u;
-
+/** Сервер старше редизайна присылает подписи с эмодзи («💅 Красота»): убираем, чтобы вид не зависел от версии. */
 function chipLabel(template: Template): string {
-  const label = template.label.trim();
-  if (STARTS_WITH_EMOJI.test(label)) return label;
-  const emoji = TEMPLATE_EMOJI[template.key];
-  return emoji ? `${emoji} ${label}` : label;
+  return template.label.replace(STARTS_WITH_EMOJI, '').trim();
 }
 
 export interface TemplateChipsProps {
@@ -27,7 +17,7 @@ export interface TemplateChipsProps {
   ariaLabel?: string;
 }
 
-export function TemplateChips({ items, value, onSelect, ariaLabel = 'Шаблон сделки' }: TemplateChipsProps) {
+export function TemplateChips({ items, value, onSelect, ariaLabel = 'Примеры условий' }: TemplateChipsProps) {
   return (
     <div className="dg-chips" role="group" aria-label={ariaLabel}>
       {items.map((template) => {

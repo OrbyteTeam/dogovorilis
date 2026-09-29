@@ -94,7 +94,7 @@ describe.skipIf(!DB)('ответ на кнопку карточки — карт
     expect(labels(sellerCard)).toEqual(expect.arrayContaining([texts.BTN.transferReceived, texts.BTN.transferNotReceived]));
     expect(h.max.byMid(sellerCard)!.text).toContain('клиент сообщил о переводе');
     // P2 по-прежнему приходит отдельным сообщением — правка карточки не даёт push-уведомления
-    expect(h.max.inChat(SELLER_CHAT).some((m) => m.kind === 'send' && m.text.includes('сообщает о переводе'))).toBe(true);
+    expect(h.max.inChat(SELLER_CHAT).some((m) => m.kind === 'send' && m.text.includes('сообщил(а) о переводе'))).toBe(true);
 
     // «Получил(а)» прямо из карточки двигает сделку
     await h.press(SELLER, SELLER_CHAT, `tr:g:${id}:${pid}`, sellerCard);
@@ -178,7 +178,7 @@ describe.skipIf(!DB)('ответ на кнопку карточки — карт
     expect(await dealStatus(h, id)).toBe('closed');
 
     for (const chat of [SELLER_CHAT, CLIENT_CHAT]) {
-      const n14 = h.max.inChat(chat).filter((m) => m.kind === 'send' && m.text.includes('закрыта. Квитанция'));
+      const n14 = h.max.inChat(chat).filter((m) => m.kind === 'send' && m.text.includes('закрыта.\nКвитанция'));
       expect(n14, `чат ${chat}`).toHaveLength(1);
       expect(n14[0].attachmentTypes).toContain('file');
     }

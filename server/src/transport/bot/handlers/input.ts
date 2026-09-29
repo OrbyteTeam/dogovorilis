@@ -84,7 +84,7 @@ async function handleMessage(ctx: Context, deps: Deps): Promise<void> {
     case 'remarks': {
       const text = (ctx.message?.body.text ?? '').trim();
       if (!text) {
-        await deps.max.send({ chatId }, 'Нужен текст одним сообщением.');
+        await deps.max.send({ chatId }, texts.INPUT_NEED_TEXT);
         return;
       }
       if (text.length > MAX_TEXT_LENGTH) {
@@ -96,7 +96,7 @@ async function handleMessage(ctx: Context, deps: Deps): Promise<void> {
         pending.kind === 'change_request'
           ? await dealService.requestChanges(deal.publicId, actor, text)
           : await dealService.remarks(deal.publicId, actor, text);
-      await deps.max.send({ chatId }, pending.kind === 'change_request' ? 'Передали исполнителю ваше предложение.' : 'Передали замечания исполнителю.');
+      await deps.max.send({ chatId }, pending.kind === 'change_request' ? texts.CHANGE_REQUEST_SENT : texts.REMARKS_SENT);
       await publishOutcome(deps.max, result);
       return;
     }
@@ -109,7 +109,7 @@ async function handleMessage(ctx: Context, deps: Deps): Promise<void> {
       }
       await inTx((c) => inputsRepo.clear(c, userId));
       const result = await dealService.cancel(deal.publicId, actor, text || null);
-      await deps.max.send({ chatId }, `Сделка #${deal.publicId} отменена.`);
+      await deps.max.send({ chatId }, texts.CANCELLED_ACK(deal.publicId));
       await publishOutcome(deps.max, result);
       return;
     }
@@ -150,7 +150,7 @@ async function handleMessage(ctx: Context, deps: Deps): Promise<void> {
         maxUrl: attachment.url,
         fileName: attachment.fileName,
       });
-      await deps.max.send({ chatId }, 'Чек принят. Готовлю квитанцию…');
+      await deps.max.send({ chatId }, texts.RECEIPT_ACCEPTED);
       await publishOutcome(deps.max, result); // карточки, N14 и квитанция PDF (T15)
       log.info({ deal: deal.publicId, role: viewRole }, 'чек приложен, сделка закрыта');
       return;

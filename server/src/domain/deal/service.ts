@@ -311,9 +311,9 @@ export const TRIAL_LIMIT_PER_HOUR = 5;
 export async function createDeal(input: CreateDealInput, now = new Date()): Promise<ServiceResult> {
   assertAmounts(input.totalKopecks, input.prepaymentKopecks);
   const title = input.title.trim();
-  if (title.length < 2 || title.length > 80) throw new ValidationError('Название — от 2 до 80 символов', 'title');
+  if (title.length < 2 || title.length > 80) throw new ValidationError('Название от 2 до 80 символов', 'title');
   if (input.description && input.description.length > 1000)
-    throw new ValidationError('Уточнения — до 1000 символов', 'description');
+    throw new ValidationError('Уточнения до 1000 символов', 'description');
   if (input.scheduledAt && input.scheduledAt.getTime() < addMinutes(now, 30).getTime())
     throw new ValidationError('Дата не раньше чем через 30 минут', 'scheduled_at');
 
@@ -394,7 +394,7 @@ export async function resolveRepeat(sellerUserId: number, repeatOf: string, same
   return inTx(async (c) => {
     const source = await dealsRepo.byPublicId(c, repeatOf);
     if (!source || source.sellerUserId !== sellerUserId) throw new ForbiddenError('repeat_not_yours');
-    if (source.demo) throw new ValidationError('Демо-сделку повторить нельзя — создайте новую сделку', 'repeat_of');
+    if (source.demo) throw new ValidationError('Демо-сделку повторить нельзя. Создайте новую сделку', 'repeat_of');
     if (!sameClient) return { client: null, attachClientId: null, clientNoDialog: false };
     const clientId = source.clientUserId;
     if (clientId === null || clientId === sellerUserId) throw new ForbiddenError('repeat_no_client');
@@ -632,9 +632,9 @@ export function changedTerms(
 export async function newVersion(publicId: string, actor: Actor, input: NewVersionInput, now = new Date()): Promise<ServiceResult> {
   assertAmounts(input.totalKopecks, input.prepaymentKopecks);
   const title = input.title.trim();
-  if (title.length < 2 || title.length > 80) throw new ValidationError('Название — от 2 до 80 символов', 'title');
+  if (title.length < 2 || title.length > 80) throw new ValidationError('Название от 2 до 80 символов', 'title');
   const description = normalizeDescription(input.description);
-  if (description && description.length > 1000) throw new ValidationError('Уточнения — до 1000 символов', 'description');
+  if (description && description.length > 1000) throw new ValidationError('Уточнения до 1000 символов', 'description');
 
   try {
     return await runTransition(
@@ -996,7 +996,7 @@ export function closeWithoutReceipt(publicId: string, actor: Actor, now = new Da
 // ─────────────────────── T16, T17: отмена ───────────────────────
 
 export function cancel(publicId: string, actor: Actor, reason: string | null, now = new Date()): Promise<ServiceResult> {
-  if (reason && reason.length > 300) throw new ValidationError('Причина — до 300 символов', 'reason');
+  if (reason && reason.length > 300) throw new ValidationError('Причина до 300 символов', 'reason');
   return runTransition(
     {
       publicId,

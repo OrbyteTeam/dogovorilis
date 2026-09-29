@@ -7,6 +7,7 @@ import { Button, Input, Panel, Radio, Textarea, Typography } from '@maxhub/max-u
 
 import { api, ApiError, errorText } from '../api';
 import { disableClosingConfirmation, enableClosingConfirmation, haptic } from '../bridge';
+import { AppHeader } from '../components/AppHeader';
 import { ControlRow } from '../components/ControlRow';
 import { Field, revealField } from '../components/Field';
 import { Segmented } from '../components/Segmented';
@@ -196,10 +197,10 @@ function ServiceForm({ service, initial, onDone }: ServiceFormProps) {
     values.prepayMode === 'none'
       ? 'Без предоплаты клиент платит всю сумму после выполнения'
       : values.autoPercent !== null
-        ? `${values.autoPercent} % от цены${prepay?.rub ? `: ${formatRub(prepay.rub)}` : ''}`
+        ? `${values.autoPercent} % от суммы${prepay?.rub ? `: ${formatRub(prepay.rub)}` : ''}`
         : prepay?.rub
           ? `Предоплата ${formatRub(prepay.rub)}`
-          : 'Сумма предоплаты считается от цены';
+          : 'Предоплата считается от суммы';
 
   const customValue = values.autoPercent !== null ? String(prepay?.rub ?? '') : values.prepayCustomRaw;
 
@@ -213,17 +214,10 @@ function ServiceForm({ service, initial, onDone }: ServiceFormProps) {
           void save();
         }}
       >
-        <header className="dg-head">
-          <Typography.Headline variant="large-strong" asChild>
-            <h1>{service ? 'Услуга' : 'Новая услуга'}</h1>
-          </Typography.Headline>
-          <div className="dg-deal-id">
-            <Typography.Text variant="body" color="secondary">
-              Подставится в новую сделку целиком, кроме даты
-            </Typography.Text>
-            {service && !service.active ? <span className="dg-tag">скрыта</span> : null}
-          </div>
-        </header>
+        <AppHeader
+          title={service ? 'Услуга' : 'Новая услуга'}
+          subtitle={service && !service.active ? 'Скрыта. Подставится в новую сделку целиком, кроме даты' : 'Подставится в новую сделку целиком, кроме даты'}
+        />
 
         <section className="dg-card" aria-label="Условия услуги">
           <Field label="Название" htmlFor="service-title" anchorId={anchor('title')} error={shown('title')}>
@@ -241,7 +235,7 @@ function ServiceForm({ service, initial, onDone }: ServiceFormProps) {
             label="Уточнения"
             htmlFor="service-description"
             anchorId={anchor('description')}
-            hint="Что входит в цену, материалы, адрес"
+            hint="Что входит, материалы, адрес"
             error={shown('description')}
           >
             <Textarea
@@ -255,7 +249,7 @@ function ServiceForm({ service, initial, onDone }: ServiceFormProps) {
             />
           </Field>
 
-          <Field label="Цена, ₽" htmlFor="service-price" anchorId={anchor('price')} error={shown('price')}>
+          <Field label="Сумма, ₽" htmlFor="service-price" anchorId={anchor('price')} error={shown('price')}>
             <Input
               id="service-price"
               inputMode="numeric"
@@ -271,7 +265,7 @@ function ServiceForm({ service, initial, onDone }: ServiceFormProps) {
             label="Длительность"
             htmlFor="service-duration"
             anchorId={anchor('duration')}
-            hint="Сколько занимает визит"
+            hint="Сколько занимает работа"
             error={shown('duration')}
           >
             <div className="dg-select">

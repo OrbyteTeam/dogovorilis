@@ -1,15 +1,24 @@
 // Единственное место, где живут тексты бота и уведомлений.
-// Первоисточник — docs/SPEC.md §6 (эталон), плюс §5.1 (эмодзи статусов), §5.3 (возврат предоплаты),
-// §5.5 (кнопки по ролям), §9.1 (рейл «перевод»), §10.2 (напоминания), §12 (демо-режим)
-// и docs/DESIGN.md §6 (порядок строк карточки, лимиты 12 строк / 1200 символов).
+// Правила языка: docs/DESIGN_BRIEF.md §2 (разделители, суммы, даты, статусы, тон, словарь, кнопки), §3 (карточка),
+// §4 (уведомления). Эталон перечня сообщений: docs/SPEC.md §6. Никаких длинных и коротких тире, «·» и «•» в
+// текстах: это проверяет test/texts.test.ts разбором исходника, комментарии проверка не трогает.
 //
-// Модуль намеренно «чистый»: из зависимостей — только доменные типы и форматтеры, никакого config,
+// Модуль намеренно «чистый»: из зависимостей только доменные типы и форматтеры, никакого config,
 // БД и SDK. Так тексты проверяются юнит-тестами без окружения, а часовой пояс берётся по умолчанию
 // из domain/time.ts (APP_TIMEZONE подставляется на уровне транспорта, если когда-то понадобится).
 
 import type { CancelRule, CardRole, DealStatus, PaymentProvider, PaymentRail, PaymentStatus, ReminderKind, Role, TermsField } from './types.js';
-import { formatMoney, prepaymentPercent } from './domain/money.js';
-import { dayAndTime, formatDateShort, formatDateTime, formatDateTimeShort, formatDayMonth } from './domain/time.js';
+import { formatMoney, formatPercent, prepaymentPercent } from './domain/money.js';
+import {
+  formatDateTime,
+  formatDayMonthShort,
+  formatMoment,
+  formatTime,
+  formatWeekdayDay,
+  listDateTime,
+  zoneLabel,
+  zoneOnce,
+} from './domain/time.js';
 
 // --- инфраструктура ---
 
@@ -29,16 +38,46 @@ export function quote(text: string): string {
     .join('\n');
 }
 
-/** Человеческая подпись рейла: «перевод по реквизитам» | «ссылка ЮKassa, тест» | «СБП Т-Банк, DEMO». */
-export function railLabel(rail: PaymentRail, provider: PaymentProvider): string {
-  if (rail === 'transfer') return 'перевод по реквизитам';
-  if (provider === 'yookassa') return 'ссылка ЮKassa, тест';
-  if (provider === 'tbank') return 'СБП Т-Банк, DEMO';
-  return 'ссылка на оплату';
+/** Пользовательский текст в одну строку: переносы ломают лимит строк карточки. */
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
 }
 
-/** Демо-карточка клиента (SPEC §12): префиксная строка, чтобы её нельзя было спутать с настоящей. */
-export const DEMO_CARD_PREFIX = '🧪 **ДЕМО — так видит клиент**';
+function clip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(1, max - 1)).trimEnd()}…`;
+}
+
+/** Первая буква строчная: статус после «Статус:» и фраза после двоеточия. */
+function lowerFirst(text: string): string {
+  return text ? text[0].toLowerCase() + text.slice(1) : text;
+}
+
+function upperFirst(text: string): string {
+  return text ? text[0].toUpperCase() + text.slice(1) : text;
+}
+
+/**
+ * Как прошла оплата, словами после «получена»: «переводом по реквизитам», «по ссылке ЮKassa» (DESIGN_BRIEF §3.1).
+ * Пометка теста идёт отдельной строкой, см. railTestLine.
+ */
+export function railHow(rail: PaymentRail, provider: PaymentProvider): string {
+  if (rail === 'transfer') return 'переводом по реквизитам';
+  if (provider === 'yookassa') return 'по ссылке ЮKassa';
+  if (provider === 'tbank') return 'по ссылке Т-Банка (СБП)';
+  return 'по ссылке';
+}
+
+/** Отдельная строка о тестовой среде платежа, который уже прошёл; для перевода её нет (SPEC §18). */
+export function railTestLine(rail: PaymentRail, provider: PaymentProvider): string | null {
+  if (rail !== 'link') return null;
+  if (provider === 'yookassa') return '🧪 Тестовый магазин, деньги не списывались';
+  if (provider === 'tbank') return '🧪 DEMO-терминал Т-Банка, деньги не списывались';
+  return null;
+}
+
+/** Демо-карточка клиента (SPEC §12, DESIGN_BRIEF §3.2): первая строка, чтобы её нельзя было спутать с настоящей. */
+export const DEMO_CARD_PREFIX = '🧪 **Демо: так видит клиент**';
 
 /** В демо обе стороны сидят в одном чате, поэтому уведомление помечается получателем (SPEC §12). */
 export function demoNotifyPrefix(to: 'seller' | 'client'): string {
@@ -47,11 +86,11 @@ export function demoNotifyPrefix(to: 'seller' | 'client'): string {
 
 // --- команды для setMyCommands (SPEC §6.1) ---
 
-/** `name` — без слэша: так его ждёт `PATCH /me/commands` (CONTRACTS §1). */
+/** `name` без слэша: так его ждёт `PATCH /me/commands` (CONTRACTS §1). */
 export const COMMANDS: readonly { name: string; description: string }[] = [
   { name: 'start', description: 'Главное меню' },
   { name: 'new', description: 'Новая сделка' },
-  { name: 'deals', description: 'Мои сделки' },
+  { name: 'deals', description: 'Сделки' },
   { name: 'settings', description: 'Настройки' },
   { name: 'help', description: 'Как это работает' },
   { name: 'cancel', description: 'Отменить ввод' },
@@ -59,133 +98,130 @@ export const COMMANDS: readonly { name: string; description: string }[] = [
 
 // --- меню, помощь, общее ---
 
-export const S1 = `👋 Это «Договорились» — карточка договорённости прямо в чате MAX.
+/** Единственная фраза со словом «договорённость», кроме названия продукта (DESIGN_BRIEF §2.7). */
+export const S1 = `Это «Договорились»: карточка договорённости прямо в чате MAX.
 
-Вы описываете, что, когда и за сколько; клиент подтверждает одной кнопкой; предоплата, статус, напоминания, чек и квитанция — здесь же, у обеих сторон.
+Вы описываете, что, когда и за сколько, клиент подтверждает одной кнопкой. Предоплата, статус, напоминания, чек и квитанция здесь же, у обеих сторон.
 
 Что дальше?`;
 
 export function S2(sellerName: string): string {
-  return `Исполнитель **${esc(sellerName)}** предлагает договорённость. Проверьте условия и подтвердите — или предложите изменения.`;
+  return `Исполнитель **${esc(sellerName)}** предлагает сделку. Проверьте условия и подтвердите или предложите изменения.`;
 }
 
-/** «🔁 Повторить» с тем же клиентом (ЗАДАЧА_04 F): карточка приходит клиенту сама, без ссылки — над ней это приветствие. */
+/** «Повторить сделку» с тем же клиентом (ЗАДАЧА_04 F): карточка приходит клиенту сама, без ссылки; над ней это приветствие. */
 export function S2_REPEAT(sellerName: string): string {
-  return `Исполнитель **${esc(sellerName)}** предлагает новую договорённость — проверьте условия и подтвердите.`;
+  return `Исполнитель **${esc(sellerName)}** предлагает новую сделку. Проверьте условия и подтвердите.`;
 }
 
 /** Исполнителю: карточка повторной сделки ушла клиенту в его чат с ботом. */
 export function REPEAT_CARD_SENT(clientName: string): string {
-  return `📨 Карточка отправлена клиенту (${esc(clientName)}) — ждём подтверждения.`;
+  return notice(`📨 Карточка отправлена клиенту (${esc(clientName)}).`, 'Ждём подтверждения.');
 }
 
-/** Карточку повторной сделки клиенту доставить не удалось (MAX не ответил) — ссылка откроет её у него. */
+/** Карточку повторной сделки клиенту доставить не удалось (MAX не ответил): ссылка откроет её у него. */
 export function REPEAT_CARD_FAILED(clientName: string, link: string): string {
-  return `Не получилось отправить карточку клиенту (${esc(clientName)}). Перешлите ему ссылку — карточка откроется у него: ${link}`;
+  return `Не получилось отправить карточку клиенту (${esc(clientName)}). Перешлите ему ссылку, карточка откроется у него: ${link}`;
 }
 
-export const S3 = 'Я понимаю только кнопки и команды. Откройте /deals или /new.';
+export const S3 = 'Я понимаю только кнопки и команды. Откройте /deals или /new';
 
 /**
  * Исполнитель открыл собственную ссылку на сделку. Карточки у него уже есть и правятся на месте,
  * поэтому без этой строки нажатие ссылки выглядело бы как «ничего не произошло» (SPEC §14 п. 6).
  */
 export function S4(id: string, demo: boolean): string {
-  // В демо-сделке клиент — сам исполнитель, поэтому кнопок шеринга в её карточке нет
+  // В демо-сделке клиент сам исполнитель, поэтому кнопок шеринга в её карточке нет
   // и звать по этой ссылке некого: посторонний получит E4. Не отправляем человека искать
   // кнопки, которых он не найдёт.
   if (demo) {
-    return `Это ваша демо-сделка #${id} — клиент в ней вы сами. Чтобы позвать настоящего клиента, создайте обычную сделку: «${BTN.newDeal}».`;
+    return `Это ваша демо-сделка #${id}, клиент в ней вы сами. Чтобы позвать настоящего клиента, создайте обычную сделку: «${BTN.newDeal}»`;
   }
-  return `Это ваша сделка #${id}, вы её исполнитель. Чтобы пригласить клиента, отправьте ему ссылку кнопкой «${BTN.sendToMax}» или «${BTN.copyLink}» в карточке.`;
+  return `Это ваша сделка #${id}, вы её исполнитель. Чтобы пригласить клиента, отправьте ему ссылку кнопкой «${BTN.sendToMax}» или «${BTN.copyLink}» в карточке`;
 }
 
 export const H1 = `Как это работает
-1. Исполнитель создаёт карточку: что, когда, сколько, предоплата, правило отмены.
+1. Исполнитель создаёт сделку: что, когда, сколько, предоплата, правило отмены.
 2. Отправляет ссылку клиенту в любой чат MAX.
-3. Клиент подтверждает условия кнопкой и вносит предоплату — по ссылке или переводом.
-4. После выполнения клиент принимает работу, оплачивает остаток.
-5. Исполнитель прикладывает чек; обе стороны получают квитанцию PDF.
+3. Клиент подтверждает условия кнопкой и вносит предоплату по ссылке или переводом.
+4. После выполнения клиент принимает работу и оплачивает остаток.
+5. Исполнитель прикладывает чек, обе стороны получают квитанцию PDF.
 Деньги идут напрямую исполнителю. Мы не платёжный агент и не храним реквизиты карт.
-Тестовый режим: оплата по ссылке проходит через тестовый магазин — реальные деньги не списываются.`;
+🧪 Тестовый режим: оплата по ссылке проходит через тестовый магазин, реальные деньги не списываются.`;
 
 export const INPUT_CANCELLED = 'Ввод отменён';
 
-// BTN объявлен ниже, а константы вычисляются при загрузке модуля, поэтому подписи кнопок — литералами.
-export const NEW_DEAL_PROMPT = `Новая сделка: заполните форму в мини-приложении — условия под себя.
-Посмотреть продукт за две минуты: «Демо: пройти одному» — обе стороны в этом чате; «Сделка-пример: позвать клиента» — готовая сделка, ссылку можно сразу отправить второму человеку.`;
+// BTN объявлен ниже, а константы вычисляются при загрузке модуля, поэтому подписи кнопок здесь литералами.
+export const NEW_DEAL_PROMPT = `Новая сделка: заполните форму в мини-приложении, условия под себя.
+Посмотреть продукт за две минуты:
+«🧪 Демо: пройти одному»: обе стороны в этом чате.
+«Пример: позвать клиента»: готовая сделка, ссылку можно сразу отправить второму человеку.`;
 
 /** Экран «🧪 Попробовать» из меню (ЗАДАЧА_04 A3). */
-export const TRY_PROMPT = `Два способа посмотреть продукт за две минуты:
-• «Демо: пройти одному» — обе карточки придут сюда, вы нажимаете и за исполнителя, и за клиента.
-• «Сделка-пример: позвать клиента» — настоящая сделка с готовыми условиями: отправьте ссылку второму человеку, он подтвердит у себя.`;
+export const TRY_PROMPT = `Два способа посмотреть продукт за две минуты.
+«🧪 Демо: пройти одному»: обе карточки придут сюда, вы нажимаете и за исполнителя, и за клиента.
+«Пример: позвать клиента»: настоящая сделка с готовыми условиями. Отправьте ссылку второму человеку, он подтвердит у себя.`;
 
 /** То же без демо (DEMO_MODE=false): остаётся одна сделка-пример. */
-export const TRY_PROMPT_NO_DEMO = `Посмотреть продукт за две минуты: «Сделка-пример: позвать клиента» — настоящая сделка с готовыми условиями. Отправьте ссылку второму человеку, он подтвердит у себя.`;
+export const TRY_PROMPT_NO_DEMO = `Посмотреть продукт за две минуты: «Пример: позвать клиента». Это настоящая сделка с готовыми условиями. Отправьте ссылку второму человеку, он подтвердит у себя.`;
 
 /**
- * Текст приглашения для шеринга — без ссылки: ссылка передаётся отдельно (`shareMaxContent({ text, link })`),
- * иначе в сообщении она оказывается дважды (ЗАДАЧА_04 A1). Текст — не markdown, экранировать не нужно.
+ * Текст приглашения для шеринга без ссылки: ссылка передаётся отдельно (`shareMaxContent({ text, link })`),
+ * иначе в сообщении она оказывается дважды (ЗАДАЧА_04 A1). Текст не markdown, экранировать не нужно.
  */
 export function shareInvite(title: string, scheduledAt: Date | null): string {
   const what = oneLine(title);
-  return scheduledAt
-    ? `Подтвердите нашу договорённость: ${what}, ${formatDateTime(scheduledAt)}`
-    : `Подтвердите нашу договорённость: ${what}`;
+  return scheduledAt ? `Подтвердите условия: ${what}, ${formatDateTime(scheduledAt)}` : `Подтвердите условия: ${what}`;
 }
 
 // --- «/deals» в чате (ЗАДАЧА_04 A2) ---
 
-export const DEALS_HEADER = 'Активные сделки (время — МСК):';
-export const DEALS_SELLER = '**Я исполнитель**';
-export const DEALS_CLIENT = '**Я клиент**';
-export const DEALS_EMPTY = 'Активных сделок нет. Создайте первую — это займёт полминуты.';
+export const DEALS_HEADER = 'Активные сделки, время МСК';
+export const DEALS_SELLER = '**Вы исполнитель**';
+export const DEALS_CLIENT = '**Вы клиент**';
+export const DEALS_EMPTY = 'Активных сделок нет. Создайте первую, это займёт полминуты';
 
 export function DEALS_MORE(n: number): string {
-  return `…и ещё ${n} — в «${BTN.myDeals}»`;
+  return `…и ещё ${n}, смотрите «${BTN.myDeals}»`;
 }
 
 type DealsRow = { title: string; scheduledAt: Date | null; totalKopecks: number; status: DealStatus; role: 'seller' | 'client'; demo: boolean };
 
-function listDate(at: Date | null, now: Date): { day: string; time: string } | null {
-  return at ? dayAndTime(at, undefined, now) : null;
-}
-
-/** `Пн 28 сен, 14:00 · [Маникюр с покрытием](ссылка) · 2 500 ₽ · ждём предоплату` — без кода и эмодзи-статусов. */
+/** `пн 28 сен, 14:00, [Маникюр с покрытием](ссылка), 2 500 ₽, ждём предоплату`: факты через запятую, статус последним. */
 export function dealsLine(row: DealsRow, link: string, now = new Date()): string {
-  const d = listDate(row.scheduledAt, now);
   const parts = [
-    d ? `${d.day}, ${d.time}` : 'без даты',
+    row.scheduledAt ? listDateTime(row.scheduledAt, undefined, now) : 'без даты',
     `[${esc(oneLine(row.title))}](${link})`,
     formatMoney(row.totalKopecks),
     statusShort(row.status, row.role),
   ];
-  return `${parts.join(' · ')}${row.demo ? ' · демо' : ''}`;
+  if (row.demo) parts.push('демо');
+  return parts.join(', ');
 }
 
-/** Подпись кнопки под списком: `Пн 28 сен 14:00 · Маникюр`. Длинное название обрезается — MAX режет подписи сам. */
+/** Подпись кнопки под списком: «Пн 28 сен, 14:00, Маникюр…». Длинное название обрезается: MAX режет подписи сам. */
 export function dealsButton(row: Pick<DealsRow, 'title' | 'scheduledAt'>, now = new Date()): string {
-  const d = listDate(row.scheduledAt, now);
-  return `${d ? `${d.day} ${d.time}` : 'Без даты'} · ${clip(oneLine(row.title), 18)}`;
+  const when = row.scheduledAt ? listDateTime(row.scheduledAt, undefined, now) : 'без даты';
+  return upperFirst(`${when}, ${clip(oneLine(row.title), 18)}`);
 }
 
-/** Ответ на «📝 Сделка-пример для клиента» (ЗАДАЧА_03 B). */
+/** Ответ на «Пример: позвать клиента» (ЗАДАЧА_03 B). */
 export function EXAMPLE_CREATED(id: string): string {
-  return `📝 Создана сделка #${id}. Это настоящая сделка с условиями-примером: отправьте ссылку клиенту — он увидит карточку и сможет подтвердить. Условия под себя — в «${BTN.newDeal}».
-Карточка — ниже, ссылка и кнопки «${BTN.sendToMax}» / «${BTN.copyLink}» — в ней.`;
+  return `Создана сделка #${id} с готовыми условиями. Это настоящая сделка: отправьте ссылку клиенту, он увидит карточку и сможет подтвердить. Свои условия: «${BTN.newDeal}».
+Карточка ниже, ссылка и кнопки «${BTN.sendToMax}» и «${BTN.copyLink}» в ней.`;
 }
 
 export function DEMO_CREATED(id: string, link: string): string {
-  return `🧪 Создана демо-сделка #${id}. Ниже — две карточки: как видите её вы и как видит клиент.\nСсылка клиента: \`${link}\``;
+  return `🧪 Создана демо-сделка #${id}. Ниже две карточки: как видите её вы и как видит клиент.\nСсылка клиента: \`${link}\``;
 }
 
-export const TOO_MANY_TRIALS = 'Слишком много пробных сделок, подождите — не больше 5 в час.';
+export const TOO_MANY_TRIALS = 'Слишком много пробных сделок: не больше 5 в час. Подождите немного';
 
 export const DEAL_FINISHED_LINE = 'Сделка завершена';
 
 /** Старое сообщение карточки после того, как она показана заново внизу чата. */
 export function CARD_MOVED(id: string): string {
-  return `↓ Карточка #${id} — ниже, актуальная версия.`;
+  return `↓ Карточка #${id} ниже, это актуальная версия`;
 }
 
 // --- статусы ---
@@ -211,14 +247,15 @@ export function statusEmoji(status: DealStatus): string {
 
 type StatusArgs = { prepaymentKopecks: number; remainingKopecks: number; scheduledAt: Date | null };
 
-// По одному тексту на пару (статус, роль) — SPEC §6.4. Демо-клиент читает клиентские тексты.
+// По одному тексту на пару (статус, роль): DESIGN_BRIEF §2.5. У стороны, от которой ждут действие, статус
+// начинается с глагола; у другой стороны это констатация. Демо-клиент читает клиентские тексты.
 const STATUS_TEXT: Record<DealStatus, (a: StatusArgs) => { seller: string; client: string }> = {
   awaiting_confirmation: () => ({
     seller: 'Ждём подтверждения клиента',
     client: 'Подтвердите условия',
   }),
   changes_requested: () => ({
-    seller: 'Клиент предложил изменения — измените условия или оставьте как есть',
+    seller: 'Клиент предложил изменения. Измените условия или оставьте как есть',
     client: 'Ждём новые условия от исполнителя',
   }),
   declined: () => ({
@@ -233,18 +270,16 @@ const STATUS_TEXT: Record<DealStatus, (a: StatusArgs) => { seller: string; clien
     seller: `Ждём предоплату ${formatMoney(a.prepaymentKopecks)}`,
     client: `Внесите предоплату ${formatMoney(a.prepaymentKopecks)}`,
   }),
-  scheduled: (a) => ({
-    seller: a.scheduledAt
-      ? `Всё согласовано на ${formatDateTime(a.scheduledAt)}. Отметьте «Выполнено», когда закончите`
-      : 'Всё согласовано. Отметьте «Выполнено», когда закончите',
-    client: a.scheduledAt ? `Всё согласовано на ${formatDateTime(a.scheduledAt)}. Ждём выполнения` : 'Всё согласовано. Ждём выполнения',
-  }),
+  scheduled: (a) => {
+    const agreed = a.scheduledAt ? `Всё согласовано на ${formatDateTime(a.scheduledAt)}` : 'Всё согласовано';
+    return { seller: `${agreed}. Отметьте «Выполнено», когда закончите`, client: `${agreed}. Ждём выполнения` };
+  },
   awaiting_acceptance: () => ({
     seller: 'Ждём приёмку клиентом',
     client: 'Примите работу или оставьте замечания',
   }),
   remarks: () => ({
-    seller: 'Клиент оставил замечания — исправьте и сообщите',
+    seller: 'Клиент оставил замечания. Исправьте и нажмите «Исправлено»',
     client: 'Ждём исправлений от исполнителя',
   }),
   awaiting_payment: (a) => ({
@@ -270,10 +305,10 @@ export function statusText(status: DealStatus, role: CardRole, a: StatusArgs): s
   return role === 'seller' ? pair.seller : pair.client;
 }
 
-// Статус одним-двумя словами — для строк списков и расписания, где эмодзи-статусы не используются (ЗАДАЧА_04 A2).
+// Короткая форма для строк списков, расписания и плашек (DESIGN_BRIEF §2.5, ЗАДАЧА_04 A2).
 const STATUS_SHORT: Record<DealStatus, { seller: string; client: string }> = {
   awaiting_confirmation: { seller: 'ждём подтверждения', client: 'подтвердите условия' },
-  changes_requested: { seller: 'клиент предложил изменения', client: 'ждём новые условия' },
+  changes_requested: { seller: 'предложены изменения', client: 'ждём новые условия' },
   declined: { seller: 'клиент отказался', client: 'вы отказались' },
   expired: { seller: 'срок истёк', client: 'срок истёк' },
   awaiting_prepayment: { seller: 'ждём предоплату', client: 'внесите предоплату' },
@@ -281,7 +316,7 @@ const STATUS_SHORT: Record<DealStatus, { seller: string; client: string }> = {
   awaiting_acceptance: { seller: 'ждём приёмку', client: 'примите работу' },
   remarks: { seller: 'есть замечания', client: 'ждём исправлений' },
   awaiting_payment: { seller: 'ждём остаток', client: 'оплатите остаток' },
-  paid: { seller: 'оплачено, нужен чек', client: 'ждём чек' },
+  paid: { seller: 'нужен чек', client: 'ждём чек' },
   closed: { seller: 'закрыта', client: 'закрыта' },
   cancelled: { seller: 'отменена', client: 'отменена' },
 };
@@ -298,11 +333,25 @@ const CANCEL_RULE_TEXT: Record<CancelRule, string> = {
   full_refund: 'Предоплата возвращается при любой отмене',
 };
 
+/** Правило отмены целой фразой: квитанция, мини-приложение. */
 export function cancelRuleText(rule: CancelRule): string {
   return CANCEL_RULE_TEXT[rule];
 }
 
-// --- карточка (§6.4). Данные собирает cards.ts, здесь только текст ---
+// После подписи «Отмена:» в карточке слово «отмена» не повторяем: «Отмена: без потери предоплаты за 24 ч…».
+const CANCEL_RULE_AFTER_LABEL: Record<CancelRule, string> = {
+  free_24h: 'без потери предоплаты за 24 ч и более до срока',
+  free_48h: 'без потери предоплаты за 48 ч и более до срока',
+  nonrefundable: 'предоплата не возвращается при отмене клиентом',
+  full_refund: 'предоплата возвращается при любой отмене',
+};
+
+/** Правило отмены после подписи «Отмена:» (DESIGN_BRIEF §3.1). */
+export function cancelRuleLine(rule: CancelRule): string {
+  return CANCEL_RULE_AFTER_LABEL[rule];
+}
+
+// --- карточка (DESIGN_BRIEF §3). Данные собирает cards.ts, здесь только текст ---
 
 export type CardView = {
   publicId: string;
@@ -319,18 +368,17 @@ export type CardView = {
   sellerName: string;
   clientName: string | null;
   demo: boolean;
-  paymentLine: string | null;
-  /** Реквизиты и подсказка рейла «перевод» в карточке клиента (§6.4) — заменяют строку оплаты. */
-  transferLines?: string[] | null;
+  /** Блок платежа (paymentLines или transferLines клиенту): от одной до трёх строк, пусто, если сказать нечего. */
+  paymentLines: string[];
   receiptLine: string | null;
   refundLine: string | null;
-  /** Отмена после «Я перевёл(а)» без подтверждения исполнителя — сверить поступление (ЗАДАЧА_03 F7). */
+  /** Отмена после «Я перевёл(а)» без подтверждения исполнителя: сверить поступление (ЗАДАЧА_03 F7). */
   claimLine?: string | null;
   clientLink: string | null;
-  /** Номер текущей версии условий и когда она создана: при версии > 1 — строка «Версия N · условия изменены …» (T5). */
+  /** Номер текущей версии условий и когда она создана: при версии > 1 строка «Версия N, условия изменены …» (T5). */
   version?: number;
   versionCreatedAt?: Date | null;
-  /** «120 сделок, 98 % без споров» — в карточке клиента, если исполнитель это включил (ЗАДАЧА_08 E). */
+  /** «12 сделок, 98 % без споров» в карточке клиента, если исполнитель это включил (ЗАДАЧА_08 E, SPEC §7.11). */
   reliabilityLine?: string | null;
 };
 
@@ -338,91 +386,91 @@ const CARD_MAX_LINES = 12;
 const CARD_MAX_CHARS = 1200;
 const DESCRIPTION_BUDGET = 320;
 
-/** Пользовательский текст в одну строку: переносы ломают лимит строк карточки. */
-function oneLine(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
+/** «**3 000 ₽**, предоплата **900 ₽** (30 %)» или «**3 000 ₽**, без предоплаты» (DESIGN_BRIEF §3.1). */
+function moneyLine(totalKopecks: number, prepaymentKopecks: number): string {
+  const total = `**${formatMoney(totalKopecks)}**`;
+  if (prepaymentKopecks <= 0) return `${total}, без предоплаты`;
+  const percent = formatPercent(prepaymentPercent(totalKopecks, prepaymentKopecks));
+  return `${total}, предоплата **${formatMoney(prepaymentKopecks)}** (${percent})`;
 }
 
-function clip(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return `${text.slice(0, Math.max(1, max - 1)).trimEnd()}…`;
+const WHEN_LABEL = 'Когда:';
+
+/**
+ * Пояс в карточке пишется один раз, и лучше всего у срока: «Когда: вт 12 окт, 14:00 (МСК)» (макет §3.1). Если срока
+ * нет, пояс остаётся у первого времени в карточке (строка версии, платежа, возврата).
+ */
+function cardZoneOnce(lines: string[]): string[] {
+  const mark = ` (${zoneLabel()})`;
+  const when = lines.findIndex((l) => l.startsWith(WHEN_LABEL) && l.includes(mark));
+  if (when < 0) return zoneOnce(lines.join('\n')).split('\n');
+  return lines.map((l, i) => (i === when ? l : l.split(mark).join('')));
 }
 
+/**
+ * Карточка сделки (DESIGN_BRIEF §3.1): шапка, условия, стороны, платёж и документы. Эмодзи только в первой строке
+ * (статус) и у тестовых строк 🧪; жирным только название и суммы. Не больше 12 строк и 1 200 символов.
+ */
 export function card(v: CardView): string {
-  // Сборка параметризована бюджетом описания: если карточка не влезает в 1200 символов, сжимаем именно его.
+  // Сборка параметризована бюджетом уточнений: если карточка не влезает в 1200 символов, сжимаем именно их.
   const build = (descBudget: number): string => {
     const head: string[] = [];
     if (v.role === 'client_demo') head.push(DEMO_CARD_PREFIX);
-    head.push(`${statusEmoji(v.status)} **${esc(oneLine(v.title))}** · #${v.publicId}`);
-    head.push(`Статус: ${statusText(v.status, v.role, v)}`);
-    const versionAt = head.length;
-    if (v.version && v.version > 1 && v.versionCreatedAt) {
-      head.push(`Версия ${v.version} · условия изменены ${formatDateTimeShort(v.versionCreatedAt)}`);
-    }
+    const demoMark = v.demo && v.role === 'seller' ? ', демо' : '';
+    head.push(`${statusEmoji(v.status)} **${esc(oneLine(v.title))}** #${v.publicId}${demoMark}`);
+    head.push(`Статус: ${lowerFirst(statusText(v.status, v.role, v))}`);
+    let version: string | null =
+      v.version && v.version > 1 && v.versionCreatedAt ? `Версия ${v.version}, условия изменены ${formatMoment(v.versionCreatedAt)}` : null;
 
-    const description = v.description ? esc(clip(oneLine(v.description), descBudget)) : '—';
-    const money =
-      v.prepaymentKopecks > 0
-        ? `**${formatMoney(v.totalKopecks)}** · предоплата **${formatMoney(v.prepaymentKopecks)}** (${prepaymentPercent(v.totalKopecks, v.prepaymentKopecks)}%)`
-        : `**${formatMoney(v.totalKopecks)}** · без предоплаты`;
+    let photo: string | null = v.hasPhoto ? 'Макет: приложён' : null;
+    const terms = (): string[] =>
+      [
+        `${WHEN_LABEL} ${v.scheduledAt ? formatDateTime(v.scheduledAt) : 'без даты, срок обсудите отдельно'}`,
+        `Сумма: ${moneyLine(v.totalKopecks, v.prepaymentKopecks)}`,
+        `Отмена: ${cancelRuleLine(v.cancelRule)}`,
+        v.description ? `Уточнения: ${esc(clip(oneLine(v.description), descBudget))}` : null,
+        photo,
+      ].filter((l): l is string => l !== null);
 
-    const terms: (string | null)[] = [
-      `📌 ${description}`,
-      `🗓 ${v.scheduledAt ? formatDateTime(v.scheduledAt) : 'без даты'}`,
-      `💰 ${money}`,
-      `↩️ ${cancelRuleText(v.cancelRule)}`,
-      v.hasPhoto ? '🖼 макет приложён' : null,
-    ];
+    let link: string | null = v.clientLink ? `Ссылка для клиента: \`${v.clientLink}\`` : null;
+    let receipt = v.receiptLine;
+    let reliability: string | null = v.reliabilityLine ? `Надёжность: ${v.reliabilityLine}` : null;
+    const parties = (): string[] =>
+      [
+        `Исполнитель: ${esc(oneLine(v.sellerName))}`,
+        reliability,
+        `Клиент: ${v.clientName ? esc(oneLine(v.clientName)) : 'ещё не открыл ссылку'}`,
+        ...v.paymentLines,
+        receipt,
+        v.refundLine,
+        v.claimLine ?? null,
+        link,
+      ].filter((l): l is string => Boolean(l));
 
-    const transfer = v.transferLines?.length ? v.transferLines : null;
-    const base: (string | null)[] = [
-      `👤 Исполнитель: ${esc(oneLine(v.sellerName))}`,
-      v.reliabilityLine ? `🛡 ${v.reliabilityLine}` : null,
-      `👤 Клиент: ${v.clientName ? esc(oneLine(v.clientName)) : 'ещё не открыл ссылку'}`,
-      ...(transfer ?? [v.paymentLine]),
-    ];
-    const receiptAt = base.length;
-    const linkAt = base.length + 3;
-    const parties: (string | null)[] = [
-      ...base,
-      v.receiptLine,
-      v.refundLine,
-      v.claimLine ?? null,
-      v.clientLink ? `🔗 Ссылка для клиента: \`${v.clientLink}\`` : null,
-    ];
-
-    // Гарантия DESIGN §6: не больше 12 строк. В реальных статусах строк ≤ 12 и так; на всякий
-    // случай убираем необязательные в порядке возрастания важности: макет → ссылка → версия → строка чека.
-    const countLines = () => head.filter(Boolean).length + terms.filter(Boolean).length + parties.filter(Boolean).length;
+    // Переполнение по строкам: убираем необязательное по возрастанию важности (DESIGN_BRIEF §3):
+    // макет, ссылка для клиента (она же в кнопке «Скопировать ссылку»), строка версии, строка чека.
+    const count = () => head.length + (version ? 1 : 0) + terms().length + parties().length;
+    // Строка надёжности исполнителя (ЗАДАЧА_08 E) — самая необязательная, уходит первой.
     const dropOrder: (() => void)[] = [
-      () => {
-        parties[1] = null; // 🛡 надёжность исполнителя — самое необязательное
-      },
-      () => {
-        terms[4] = null; // 🖼 макет приложён
-      },
-      () => {
-        parties[linkAt] = null; // 🔗 ссылка для клиента (она же в кнопке «Скопировать ссылку»)
-      },
-      () => {
-        if (head.length > versionAt) head.splice(versionAt, 1); // «Версия N · условия изменены …»
-      },
-      () => {
-        parties[receiptAt] = null; // строка чека
-      },
+      () => (reliability = null),
+      () => (photo = null),
+      () => (link = null),
+      () => (version = null),
+      () => (receipt = null),
     ];
-    for (const dropIt of dropOrder) {
-      if (countLines() <= CARD_MAX_LINES) break;
-      dropIt();
+    for (const drop of dropOrder) {
+      if (count() <= CARD_MAX_LINES) break;
+      drop();
     }
 
-    const separators = Math.max(0, Math.min(2, CARD_MAX_LINES - countLines()));
-    const lines: string[] = [...head];
-    if (separators >= 1) lines.push('');
-    lines.push(...terms.filter((l): l is string => Boolean(l)));
-    if (separators >= 2) lines.push('');
-    lines.push(...parties.filter((l): l is string => Boolean(l)));
-    return lines.join('\n');
+    // Блоки разделяются пустой строкой, пока это укладывается в 12 строк.
+    const blanks = Math.max(0, Math.min(2, CARD_MAX_LINES - count()));
+    const lines = [...head, ...(version ? [version] : [])];
+    if (blanks >= 1) lines.push('');
+    lines.push(...terms());
+    if (blanks >= 2) lines.push('');
+    lines.push(...parties());
+    return cardZoneOnce(lines.slice(0, CARD_MAX_LINES)).join('\n');
   };
 
   let budget = DESCRIPTION_BUDGET;
@@ -434,9 +482,10 @@ export function card(v: CardView): string {
   return text.length > CARD_MAX_CHARS ? clip(text, CARD_MAX_CHARS) : text;
 }
 
-// --- строки внутри карточки ---
+// --- строки внутри карточки (DESIGN_BRIEF §3.1, блок платежа и документов) ---
 
-export function paymentLine(a: {
+/** Строки платежа: одна, а у оплаты тестовым магазином ещё отдельная строка 🧪 (§2.1: тестовая пометка своей строкой). */
+export function paymentLines(a: {
   kind: 'prepayment' | 'final';
   state: 'awaiting' | 'link_issued' | 'link_expired' | 'link_canceled' | 'transfer_chosen' | 'claimed' | 'received';
   sumKopecks: number;
@@ -444,100 +493,120 @@ export function paymentLine(a: {
   rail: PaymentRail | null;
   provider: PaymentProvider | null;
   linkExpiresAt: Date | null;
-  /** cancellation_details.reason провайдера — показывается как есть (SPEC §9.2). */
+  /** cancellation_details.reason провайдера показывается как есть (SPEC §9.2). */
   cancelReason?: string | null;
-  /** Кто читает строку: «клиент сообщил о переводе» исполнителю и «вы сообщили» — клиенту. */
+  /** Кто читает строку: «клиент сообщил о переводе» исполнителю и «вы сообщили» клиенту. */
   viewer?: 'seller' | 'client';
-}): string {
+}): string[] {
   const label = a.kind === 'prepayment' ? 'Предоплата' : 'Остаток';
   const sum = formatMoney(a.sumKopecks);
-  const rail = a.rail && a.provider ? ` (${railLabel(a.rail, a.provider)})` : '';
   switch (a.state) {
     case 'awaiting':
-      return `${label} ${sum} ждёт оплаты`;
+      return [`${label} ${sum} ждёт оплаты`];
     case 'link_issued':
-      return a.linkExpiresAt
-        ? `Ссылка на оплату ${sum} действует до ${formatDateTimeShort(a.linkExpiresAt)}`
-        : `Ссылка на оплату ${sum} создана`;
+      return [a.linkExpiresAt ? `Ссылка на оплату ${sum} действует до ${formatMoment(a.linkExpiresAt)}` : `Ссылка на оплату ${sum} создана`];
     case 'link_expired':
-      return `Ссылка на оплату ${sum} истекла — нужна новая`;
+      return [`Ссылка на оплату ${sum} истекла, нужна новая`];
     case 'link_canceled':
-      return a.cancelReason
-        ? `Оплата ${sum} отменена: ${cancelReasonText(a.cancelReason)}`
-        : `Оплата ${sum} отменена — можно создать новую ссылку`;
+      return [a.cancelReason ? `Оплата ${sum} отменена: ${cancelReasonText(a.cancelReason)}` : `Оплата ${sum} отменена, можно создать новую ссылку`];
     case 'transfer_chosen':
-      return `${label} ${sum}: клиент выбрал перевод по реквизитам — ждём перевода`;
+      return [`${label} ${sum}: клиент выбрал перевод по реквизитам, ждём перевода`];
     case 'claimed': {
-      const when = a.at ? ` ${formatDateTimeShort(a.at)}` : '';
-      return a.viewer === 'client'
-        ? `Вы сообщили о переводе ${sum}${when}. Ждём подтверждения исполнителя`
-        : `${label} ${sum}: клиент сообщил о переводе${when} — проверьте поступление и подтвердите кнопкой`;
+      const when = a.at ? ` ${formatMoment(a.at)}` : '';
+      return [
+        a.viewer === 'client'
+          ? `Вы сообщили о переводе ${sum}${when}. Ждём подтверждения исполнителя`
+          : `${label} ${sum}: клиент сообщил о переводе${when}. Проверьте поступление и подтвердите`,
+      ];
     }
     case 'received': {
       const verb = a.kind === 'prepayment' ? 'получена' : 'получен';
-      // Оплата тестовым магазином — прямо в строке, что денег не было (ЗАДАЧА_04 A4, SPEC §18).
-      const how = a.rail === 'link' && a.provider === 'yookassa' ? ' — ссылка ЮKassa, тестовый магазин, деньги не списывались' : rail;
-      return a.at ? `${label} ${verb} ${formatDateTimeShort(a.at)}${how}` : `${label} ${verb}${how}`;
+      const when = a.at ? ` ${formatMoment(a.at)}` : '';
+      const how = a.rail && a.provider ? ` ${railHow(a.rail, a.provider)}` : '';
+      // Оплата тестовым магазином: отдельной строкой, что денег не было (ЗАДАЧА_04 A4, SPEC §18).
+      const test = a.rail && a.provider ? railTestLine(a.rail, a.provider) : null;
+      return [`${label} ${sum} ${verb}${when}${how}`, ...(test ? [test] : [])];
     }
   }
 }
 
 export function receiptLine(a: { attachedAt: Date | null; deadline: Date | null; taxModeNone: boolean }): string {
-  if (a.attachedAt) return `Файл чека приложен ${formatDateShort(a.attachedAt)} (содержимое не проверялось)`;
+  if (a.attachedAt) return `Чек приложен ${formatDayMonthShort(a.attachedAt)} (содержимое не проверялось)`;
   if (a.taxModeNone) return 'Чек не требуется (исполнитель работает без чека)';
-  return a.deadline ? `Чек: до ${formatDayMonth(a.deadline)}` : 'Чек: ждём от исполнителя';
+  return a.deadline ? `Чек: до ${formatDayMonthShort(a.deadline)}` : 'Чек: ждём от исполнителя';
 }
 
 /**
  * Сделку отменили, когда клиент уже сообщил о переводе, а исполнитель его не подтвердил (ЗАДАЧА_03 F7).
- * Продукт перевод не видит — строка в карточке, в N15 и отдельным сообщением обеим сторонам.
+ * Продукт перевод не видит: строка в карточке, в N15 и отдельным сообщением обеим сторонам.
  */
-export function claimedTransferOnCancel(a: { sumKopecks: number; at: Date | null }): string {
-  const when = a.at ? ` ${formatDateTimeShort(a.at)}` : '';
-  return `Клиент сообщал о переводе ${formatMoney(a.sumKopecks)}${when} — проверьте поступление и верните при необходимости`;
+export function claimedTransferOnCancel(a: { sumKopecks: number; at: Date | null; viewer: 'seller' | 'client' }): string {
+  const when = a.at ? ` ${formatMoment(a.at)}` : '';
+  // Возвращает исполнитель: ему действие, клиенту ожидание (DESIGN_BRIEF §2.5, §4).
+  return a.viewer === 'seller'
+    ? `Клиент сообщал о переводе ${formatMoney(a.sumKopecks)}${when}. Проверьте поступление и верните при необходимости`
+    : `Вы сообщали о переводе ${formatMoney(a.sumKopecks)}${when}. Исполнитель сверит поступление и вернёт деньги, если они пришли`;
+}
+
+/**
+ * Отдельное сообщение стороне, которая отменила сделку после «Я перевёл(а)» клиента (ЗАДАЧА_03 F7): вторая сторона
+ * узнаёт о переводе из N15, а отменившей нужен свой повод сверить поступление.
+ */
+export function CLAIM_AFTER_CANCEL(a: { id: string; sumKopecks: number; at: Date | null; to: 'seller' | 'client' }): string {
+  const when = a.at ? ` ${formatMoment(a.at)}` : '';
+  const who = a.to === 'seller' ? 'клиент сообщал' : 'вы сообщали';
+  return notice(
+    `⚠️ Сделка #${a.id} отменена, а ${who} о переводе ${formatMoney(a.sumKopecks)}${when}.`,
+    a.to === 'seller' ? 'Проверьте поступление и верните перевод, если он пришёл.' : 'Исполнитель сверит поступление и вернёт деньги, если они пришли.',
+  );
 }
 
 export function refundLine(a: {
   prepaymentKopecks: number;
   expected: boolean | null;
-  /** «Вернул(а)» исполнителя и «Возврат получил(а)» клиента (SPEC §5.3, ЗАДАЧА_03 H1) */
+  /** «Вернул(а) предоплату» исполнителя и «Возврат получил(а)» клиента (SPEC §5.3, ЗАДАЧА_03 H1) */
   sentAt?: Date | null;
   receivedAt?: Date | null;
 }): string | null {
   if (a.prepaymentKopecks <= 0 || a.expected === null) return null;
   const sum = formatMoney(a.prepaymentKopecks);
   if (!a.expected) return `Предоплата ${sum} не возвращается по правилу отмены`;
-  if (a.receivedAt) return `Возврат ${sum} получен клиентом ${formatDateTimeShort(a.receivedAt)}`;
-  if (a.sentAt) return `Исполнитель вернул ${sum} ${formatDateTimeShort(a.sentAt)} — ждём подтверждения клиента`;
+  if (a.receivedAt) return `Возврат ${sum} получен клиентом ${formatMoment(a.receivedAt)}`;
+  if (a.sentAt) return `Исполнитель вернул ${sum} ${formatMoment(a.sentAt)}. Ждём подтверждения клиента`;
   return `Предоплата ${sum}: ожидается возврат`;
 }
 
 /** Уведомления второй стороне об отметке возврата (H1). */
 export function REFUND_SENT_NOTICE(a: { id: string; sumKopecks: number }): string {
-  return `💸 Исполнитель сообщает, что вернул ${formatMoney(a.sumKopecks)} по отменённой #${a.id}. Проверьте поступление и нажмите «${BTN.refundReceived}».`;
+  return `💸 Исполнитель вернул ${formatMoney(a.sumKopecks)} по отменённой сделке #${a.id}.\nПроверьте поступление и нажмите «${BTN.refundReceived}».`;
 }
 
 export function REFUND_RECEIVED_NOTICE(a: { client: string; id: string; sumKopecks: number }): string {
-  return `✅ ${esc(a.client)} подтвердил(а) возврат ${formatMoney(a.sumKopecks)} по #${a.id}.`;
+  return `✅ ${esc(a.client)} подтвердил(а) возврат ${formatMoney(a.sumKopecks)} по сделке #${a.id}.\nСделка завершена, делать ничего не нужно.`;
 }
 
-export const REFUND_SENT_ACK = 'Отметили возврат — клиенту ушло уведомление.';
-export const REFUND_RECEIVED_ACK = 'Спасибо — возврат отмечен, исполнитель получил уведомление.';
+export const REFUND_SENT_ACK = 'Отметили возврат, клиент получил сообщение';
+export const REFUND_RECEIVED_ACK = 'Возврат отмечен, исполнитель получил сообщение';
 
-// --- уведомления второй стороне (§6.5). id = public_id сделки ---
+// --- уведомления второй стороне (§6.5, DESIGN_BRIEF §4). id = public_id сделки ---
+// Шаблон §4: первая строка это факт в прошедшем времени с номером сделки и эмодзи типа события, вторая это
+// действие получателя или «ждём …». Кнопка одна, её выбирает notify.ts. Пользовательский текст (N3, N11) цитатой
+// между фактом и действием.
+
+function notice(fact: string, action?: string | null): string {
+  return action ? `${fact}\n${action}` : fact;
+}
 
 export function N1(a: { client: string; id: string }): string {
-  return `👀 ${esc(a.client)} открыл(а) карточку #${a.id}.`;
+  return notice(`👀 ${esc(a.client)} открыл(а) карточку #${a.id}.`, 'Ждём подтверждения условий.');
 }
 
 export function N2(a: { client: string; id: string; prepaymentKopecks: number; scheduledAt: Date | null }): string {
-  const tail =
+  const action =
     a.prepaymentKopecks > 0
       ? `Ждём предоплату ${formatMoney(a.prepaymentKopecks)}`
-      : a.scheduledAt
-        ? `Всё согласовано на ${formatDateTime(a.scheduledAt)}`
-        : 'Всё согласовано';
-  return `✅ ${esc(a.client)} подтвердил(а) условия #${a.id}. ${tail}.`;
+      : `${a.scheduledAt ? `Всё согласовано на ${formatDateTime(a.scheduledAt)}` : 'Всё согласовано'}. Отметьте «${BTN.done}», когда закончите`;
+  return notice(`✅ ${esc(a.client)} подтвердил(а) условия #${a.id}.`, `${action}.`);
 }
 
 export function N3(a: { client: string; id: string; text: string }): string {
@@ -554,77 +623,86 @@ export type TermsValues = {
 };
 
 /**
- * Что изменилось в новой версии — словами, по порядку карточки: «срок → сб, 27 сен, 14:00 (МСК); сумма → 3 000 ₽,
- * предоплата → 600 ₽». Сумма и предоплата — одной группой через запятую, остальное — через «;».
+ * Что изменилось в новой версии, по порядку формы: «когда: вт 12 окт, 15:00 (МСК); сумма: 3 000 ₽, предоплата
+ * 600 ₽». Сумма и предоплата одной группой через запятую, остальное через «;» (DESIGN_BRIEF §4, N4).
  */
 export function termsChanges(changed: readonly TermsField[], v: TermsValues): string {
   const has = (f: TermsField) => changed.includes(f);
-  const money = [
-    has('total') ? `сумма → ${formatMoney(v.totalKopecks)}` : null,
-    has('prepayment') ? `предоплата → ${v.prepaymentKopecks > 0 ? formatMoney(v.prepaymentKopecks) : 'без предоплаты'}` : null,
-  ].filter(Boolean);
+  const prepayment = v.prepaymentKopecks > 0 ? formatMoney(v.prepaymentKopecks) : 'без предоплаты';
+  let money: string | null = null;
+  if (has('total') && has('prepayment')) {
+    money = `сумма: ${formatMoney(v.totalKopecks)}, ${v.prepaymentKopecks > 0 ? `предоплата ${prepayment}` : prepayment}`;
+  } else if (has('total')) money = `сумма: ${formatMoney(v.totalKopecks)}`;
+  else if (has('prepayment')) money = `предоплата: ${prepayment}`;
   const groups = [
-    has('title') ? `что делаем → «${esc(oneLine(v.title))}»` : null,
-    has('description') ? 'уточнения → изменены' : null,
-    has('scheduled_at') ? `срок → ${v.scheduledAt ? formatDateTime(v.scheduledAt) : 'без даты'}` : null,
-    money.length ? money.join(', ') : null,
-    has('cancel_rule') ? `правило отмены → ${cancelRuleText(v.cancelRule).toLowerCase()}` : null,
+    has('title') ? `что делаем: «${esc(oneLine(v.title))}»` : null,
+    has('description') ? 'уточнения изменены' : null,
+    has('scheduled_at') ? `когда: ${v.scheduledAt ? formatDateTime(v.scheduledAt) : 'без даты'}` : null,
+    money,
+    has('cancel_rule') ? `правило отмены: ${lowerFirst(cancelRuleText(v.cancelRule))}` : null,
   ].filter(Boolean);
   return groups.join('; ');
 }
 
-/** N4 (SPEC §6.5): клиенту — новая версия условий и только то, что в ней изменилось. */
+/** N4 (SPEC §6.5): клиенту новая версия условий и только то, что в ней изменилось. */
 export function N4(a: { id: string; version: number; changed?: readonly TermsField[]; terms?: TermsValues }): string {
   const list = a.changed?.length && a.terms ? termsChanges(a.changed, a.terms) : '';
-  return `✏️ Исполнитель изменил условия #${a.id} (версия ${a.version})${list ? `: ${list}` : ''}. Проверьте и подтвердите.`;
+  return notice(`✏️ Исполнитель изменил условия #${a.id}, версия ${a.version}${list ? `: ${list}` : ''}.`, 'Проверьте и подтвердите.');
 }
 
 /** Ответ исполнителю после T5 (N4a): дошла ли новая версия до клиента. */
 export function TERMS_UPDATED(a: { id: string; version: number; client: 'notified' | 'no_client' | 'not_delivered' }): string {
-  if (a.client === 'notified') return `✏️ Условия #${a.id} обновлены, клиент получил версию ${a.version}.`;
-  if (a.client === 'no_client') return `✏️ Условия #${a.id} обновлены — клиент увидит версию ${a.version}, когда откроет ссылку.`;
-  return `✏️ Условия #${a.id} обновлены — клиент увидит версию ${a.version} в карточке, когда вернётся в чат с ботом.`;
+  if (a.client === 'notified') return notice(`✏️ Условия #${a.id} обновлены, клиент получил версию ${a.version}.`, 'Ждём подтверждения.');
+  if (a.client === 'no_client') return notice(`✏️ Условия #${a.id} обновлены, версия ${a.version}.`, 'Клиент увидит её, когда откроет ссылку.');
+  return notice(`✏️ Условия #${a.id} обновлены, версия ${a.version}.`, 'Клиент увидит её в карточке, когда вернётся в чат с ботом.');
 }
 
 export function N5(a: { id: string }): string {
-  return `ℹ️ Исполнитель оставил условия #${a.id} без изменений. Подтвердите или откажитесь.`;
+  return notice(`✏️ Исполнитель оставил условия #${a.id} без изменений.`, 'Подтвердите или откажитесь.');
 }
 
 export function N6(a: { client: string; id: string }): string {
-  return `⛔ ${esc(a.client)} отказался(ась) от #${a.id}.`;
+  return notice(`⛔ ${esc(a.client)} отказался(ась) от сделки #${a.id}.`, 'Можно создать новую.');
 }
 
-export function N7(a: { id: string }): string {
-  return `⌛ Срок подтверждения #${a.id} истёк (72 ч). Сделка закрыта. Можно создать новую.`;
+/** N7 уходит обеим сторонам; создать новую сделку может исполнитель, клиенту подсказываем попросить его. */
+export function N7(a: { id: string; to?: 'seller' | 'client' }): string {
+  const fact = `⌛ Срок подтверждения #${a.id} истёк (72 ч), сделка закрыта.`;
+  return notice(fact, a.to === 'client' ? 'Если сделка ещё нужна, попросите исполнителя прислать новую ссылку.' : 'Можно создать новую.');
 }
 
-export function N8(a: { id: string; sumKopecks: number; rail: PaymentRail; provider: PaymentProvider }): string {
-  return `💸 Предоплата ${formatMoney(a.sumKopecks)} по #${a.id} получена (${railLabel(a.rail, a.provider)}).`;
+/** Предоплата пришла: обеим сторонам, действие по роли (исполнитель отмечает выполнение, клиент ждёт). */
+export function N8(a: { id: string; sumKopecks: number; rail: PaymentRail; provider: PaymentProvider; to?: 'seller' | 'client' }): string {
+  const test = railTestLine(a.rail, a.provider);
+  const action = a.to === 'seller' ? `Всё согласовано. Отметьте «${BTN.done}», когда закончите.` : 'Всё согласовано, ждём выполнения.';
+  return [`💸 Предоплата ${formatMoney(a.sumKopecks)} по #${a.id} получена ${railHow(a.rail, a.provider)}.`, test ? `${test}.` : null, action]
+    .filter(Boolean)
+    .join('\n');
 }
 
 export function N9(a: { id: string }): string {
-  return `✔️ Исполнитель отметил #${a.id} выполненной. Примите работу или оставьте замечания.`;
+  return notice(`✔️ Исполнитель отметил #${a.id} выполненной.`, 'Примите работу или оставьте замечания.');
 }
 
 export function N10(a: { client: string; id: string; remainingKopecks: number }): string {
-  const tail = a.remainingKopecks > 0 ? `Ждём остаток ${formatMoney(a.remainingKopecks)}` : 'Оплачено полностью';
-  return `👍 ${esc(a.client)} принял(а) работу по #${a.id}. ${tail}.`;
+  const action = a.remainingKopecks > 0 ? `Ждём остаток ${formatMoney(a.remainingKopecks)}.` : 'Сделка оплачена полностью.';
+  return notice(`👍 ${esc(a.client)} принял(а) работу по #${a.id}.`, action);
 }
 
 export function N11(a: { client: string; id: string; text: string }): string {
-  return `⚠️ ${esc(a.client)} оставил(а) замечания по #${a.id}:\n${quote(esc(a.text))}`;
+  return `⚠️ ${esc(a.client)} оставил(а) замечания по #${a.id}:\n${quote(esc(a.text))}\n\nИсправьте и нажмите «${BTN.fixed}».`;
 }
 
 export function N12(a: { id: string }): string {
-  return `🔧 Исполнитель сообщает: замечания по #${a.id} исправлены. Проверьте ещё раз.`;
+  return notice(`🔧 Исполнитель исправил замечания по #${a.id}.`, 'Проверьте ещё раз и примите работу.');
 }
 
 export function N13(a: { id: string; deadline: Date }): string {
-  return `🧾 #${a.id} оплачена полностью. Сформируйте чек в «Мой налог» сейчас и приложите его сюда. Для безналичных расчётов закон допускает до ${formatDayMonth(a.deadline)}.`;
+  return notice(`🧾 Сделка #${a.id} оплачена полностью.`, `Сформируйте чек в «Мой налог» и приложите его сюда, срок до ${formatDayMonthShort(a.deadline)}.`);
 }
 
 export function N14(a: { id: string; withReceipt: boolean }): string {
-  return `✅ Сделка #${a.id} закрыта. Квитанция во вложении${a.withReceipt ? ', чек — выше' : ''}.`;
+  return notice(`✅ Сделка #${a.id} закрыта.`, `Квитанция во вложении${a.withReceipt ? ', чек выше' : ''}.`);
 }
 
 const RECEIPT_STATUS_WORD: Partial<Record<DealStatus, string>> = {
@@ -634,10 +712,10 @@ const RECEIPT_STATUS_WORD: Partial<Record<DealStatus, string>> = {
   expired: 'срок подтверждения истёк',
 };
 
-/** Квитанция по кнопке «📄 Квитанция PDF» — подпись по фактическому статусу, а не «закрыта» всегда. */
+/** Квитанция по кнопке «Квитанция PDF»: подпись по фактическому статусу, а не «закрыта» всегда. */
 export function RECEIPT_ON_DEMAND(a: { id: string; status: DealStatus }): string {
   const word = RECEIPT_STATUS_WORD[a.status];
-  return `📄 Квитанция по #${a.id}${word ? ` — ${word}` : ''}.`;
+  return `📄 Квитанция по сделке #${a.id}${word ? `: ${word}` : ''}.`;
 }
 
 export function N15(a: {
@@ -645,19 +723,18 @@ export function N15(a: {
   by: 'seller' | 'client' | 'system';
   reason: string | null;
   refundLine: string | null;
-  /** claimedTransferOnCancel — если клиент успел сообщить о переводе (ЗАДАЧА_03 F7). */
+  /** claimedTransferOnCancel, если клиент успел сообщить о переводе (ЗАДАЧА_03 F7). */
   claimLine?: string | null;
 }): string {
   const by: Record<Role, string> = { seller: 'исполнителем', client: 'клиентом', system: 'автоматически' };
   const reason = a.reason ? `: ${esc(oneLine(a.reason))}` : '';
-  const refund = a.refundLine ? ` ${a.refundLine}` : '';
-  const claim = a.claimLine ? `\n${a.claimLine}.` : '';
-  return `🚫 #${a.id} отменена ${by[a.by]}${reason}.${refund}${claim}`;
+  const next = [a.refundLine, a.claimLine].filter((l): l is string => Boolean(l)).map((l) => `${l}.`);
+  return zoneOnce([`🚫 Сделка #${a.id} отменена ${by[a.by]}${reason}.`, ...next].join('\n'));
 }
 
 export function N16(a: { id: string; context: string }): string {
-  // context — наш собственный текст (контекст статуса), пользовательского ввода в нём нет.
-  return `🔔 Напоминание от исполнителя по #${a.id}: ${a.context}.`;
+  // context наш собственный текст (статус для клиента), пользовательского ввода в нём нет.
+  return zoneOnce(notice(`🔔 Исполнитель напоминает о сделке #${a.id}.`, `${upperFirst(a.context)}.`));
 }
 
 // --- рейл «перевод» (§9.1) ---
@@ -668,7 +745,7 @@ export function N16(a: { id: string; context: string }): string {
  */
 export function transferLines(a: { sumKopecks: number; payoutDetails: string }): string[] {
   return [
-    `💸 Переведите **${formatMoney(a.sumKopecks)}** по реквизитам и нажмите «${BTN.transferDone}»:`,
+    `Переведите **${formatMoney(a.sumKopecks)}** по реквизитам и нажмите «${BTN.transferDone}»`,
     `\`${esc(oneLine(a.payoutDetails))}\``,
     testRailNotice('manual'),
   ];
@@ -677,54 +754,59 @@ export function transferLines(a: { sumKopecks: number; payoutDetails: string }):
 export function P1(a: { sumKopecks: number; payoutDetails: string }): string {
   return `Переведите ${formatMoney(a.sumKopecks)} исполнителю:
 \`${esc(a.payoutDetails)}\`
-После перевода нажмите «Я перевёл(а)». Подсказка: перевод можно сделать прямо в чате MAX через «+» → «Перевести деньги» (СБП).`;
+После перевода нажмите «${BTN.transferDone}». Подсказка: перевод можно сделать прямо в чате MAX через «+», пункт «Перевести деньги» (СБП).`;
 }
 
 export function P2(a: { client: string; sumKopecks: number; id: string }): string {
-  return `${esc(a.client)} сообщает о переводе ${formatMoney(a.sumKopecks)} по #${a.id}. Проверьте поступление.`;
+  return notice(`💸 ${esc(a.client)} сообщил(а) о переводе ${formatMoney(a.sumKopecks)} по #${a.id}.`, 'Проверьте поступление и подтвердите.');
 }
 
 /**
- * Второе «Не вижу перевода» подряд: дальше пинг-понг бесполезен. Предлагаем оплату по ссылке — там
- * подтверждение приходит от провайдера — и честно говорим, что продукт не арбитр (аудит 22.09 §4.3).
+ * Второе «Не вижу перевода» подряд: дальше пинг-понг бесполезен. Предлагаем оплату по ссылке (там
+ * подтверждение приходит от провайдера) и честно говорим, что продукт споры не решает (аудит 22.09 §4.3).
  */
-export function P3_DISPUTE(a: { sumKopecks: number; linkAvailable: boolean }): string {
+export function P3_DISPUTE(a: { id: string; sumKopecks: number; linkAvailable: boolean }): string {
   const next = a.linkAvailable
-    ? 'Если перевод не находится — оплатите по ссылке: там подтверждение приходит от платёжного сервиса.'
-    : 'Если перевод не находится — договоритесь с исполнителем в чате.';
-  return `Исполнитель снова не видит перевод ${formatMoney(a.sumKopecks)}. ${next}
-Продукт не арбитр: спор решают стороны, хронология «перевёл / не вижу» — в квитанции.`;
+    ? 'Если перевод не находится, оплатите по ссылке: там подтверждение приходит от платёжного сервиса.'
+    : 'Если перевод не находится, договоритесь с исполнителем в чате.';
+  return `⚠️ Исполнитель снова не видит перевод ${formatMoney(a.sumKopecks)} по #${a.id}.
+${next}
+Продукт споры не решает: их решают стороны, отметки «перевёл» и «не вижу» попадут в квитанцию.`;
 }
 
-export function P3(a: { sumKopecks: number }): string {
-  return `Исполнитель пока не видит перевод ${formatMoney(a.sumKopecks)}. Проверьте операцию и нажмите «Я перевёл(а)» ещё раз (не раньше чем через 10 минут после прошлого) — или «↩️ Отмена перевода» и оплата по ссылке.`;
+export function P3(a: { id: string; sumKopecks: number }): string {
+  return notice(
+    `⚠️ Исполнитель пока не видит перевод ${formatMoney(a.sumKopecks)} по #${a.id}.`,
+    `Проверьте операцию и нажмите «${BTN.transferDone}» ещё раз, не раньше чем через 10 минут, или выберите другой способ оплаты.`,
+  );
 }
 
 /**
  * Провайдер подтвердил оплату, которую сделка принять уже не может (ЗАДАЧА_03 F1): сделка отменена или этот
- * этап уже оплачен другим платежом. Деньги ушли исполнителю — вернуть их может только он, продукт их не касается.
+ * этап уже оплачен другим платежом. Деньги ушли исполнителю, вернуть их может только он, продукт их не касается.
  * Уходит обеим сторонам.
  */
-export function LATE_PAYMENT_REFUND(a: { id: string; sumKopecks: number; dealCancelled: boolean }): string {
-  const what = a.dealCancelled ? 'отменённой сделке' : 'уже оплаченному этапу';
-  return `⚠️ Поступила оплата ${formatMoney(a.sumKopecks)} по ${what} #${a.id} — верните её клиенту.`;
+export function LATE_PAYMENT_REFUND(a: { id: string; sumKopecks: number; dealCancelled: boolean; to?: 'seller' | 'client' }): string {
+  const what = a.dealCancelled ? 'отменённой сделке' : 'уже оплаченному этапу сделки';
+  const action = a.to === 'client' ? 'Исполнитель вернёт её тем же способом.' : 'Верните её клиенту тем же способом.';
+  return notice(`⚠️ Поступила оплата ${formatMoney(a.sumKopecks)} по ${what} #${a.id}.`, action);
 }
 
 /**
- * Причина отказа от провайдера — человеческим языком (CONTRACTS §2.7).
+ * Причина отказа от провайдера человеческим языком (CONTRACTS §2.7).
  * Полного перечня в документации нет, поэтому незнакомый код показываем как есть,
  * а не прячем: клиенту важно понять, звонить в банк или менять карту.
  */
 const CANCEL_REASONS: Record<string, string> = {
   '3d_secure_failed': 'не пройдено подтверждение 3-D Secure',
-  call_issuer: 'банк отклонил операцию — позвоните в банк',
+  call_issuer: 'банк отклонил операцию, позвоните в банк',
   card_expired: 'истёк срок действия карты',
   fraud_suspected: 'операция отклонена как подозрительная',
   general_decline: 'банк отклонил операцию',
   insufficient_funds: 'недостаточно средств',
   invalid_card_number: 'неверный номер карты',
   invalid_csc: 'неверный код CVC',
-  issuer_unavailable: 'банк-эмитент недоступен',
+  issuer_unavailable: 'банк, выпустивший карту, недоступен',
   payment_method_limit_exceeded: 'превышен лимит по карте',
   payment_method_restricted: 'карта не поддерживает такие операции',
   country_forbidden: 'оплата картой этой страны недоступна',
@@ -737,113 +819,133 @@ export function cancelReasonText(reason: string): string {
   return CANCEL_REASONS[reason] ?? reason;
 }
 
-/** Ответ на «🔄 Проверить оплату», когда провайдер ещё не подтвердил платёж (SPEC §9.1 п. 3). */
+/** Ответ на «Проверить оплату», когда провайдер ещё не подтвердил платёж (SPEC §9.1 п. 3). */
 export function paymentStillPending(status: PaymentStatus): string {
-  if (status === 'expired') return 'Срок ссылки истёк. Нажмите «🆕 Новая ссылка» — создадим новую.';
-  if (status === 'canceled') return 'Платёж отменён. Нажмите «🆕 Новая ссылка», чтобы попробовать ещё раз.';
-  return 'Оплата пока не подтверждена. Если вы только что заплатили — подождите немного и нажмите ещё раз.';
+  if (status === 'expired') return `Срок ссылки истёк. Нажмите «${BTN.newLink}», создадим новую`;
+  if (status === 'canceled') return `Платёж отменён. Нажмите «${BTN.newLink}», чтобы попробовать ещё раз`;
+  return `Оплата пока не подтверждена. Если вы только что заплатили, подождите минуту и нажмите «${BTN.checkPayment}» ещё раз`;
+}
+
+/** Подпись кнопки-ссылки на оплату с суммой: «Оплатить 900 ₽» (DESIGN_BRIEF §2.3, §2.8). */
+export function payButtonLabel(sumKopecks: number): string {
+  return `${BTN.goToPayment} ${formatMoney(sumKopecks)}`;
 }
 
 /** Сообщение клиенту при выдаче ссылки (SPEC §9.1 п. 2, §9.2 п. 4). */
 export function linkIssued(a: { sumKopecks: number; expiresAt: Date | null; provider: PaymentProvider }): string {
-  // Срок и сумма уже в строке оплаты карточки под заметкой — здесь только что делать и пометка теста.
+  // Срок и сумма уже в строке оплаты карточки под заметкой: здесь только что делать и пометка теста.
   // Форма тестового магазина принимает любые дату и CVC, но человек этого не знает (замечание тестировщика 26.09).
   const hint = a.provider === 'yookassa' ? YOOKASSA_TEST_CARD_HINT : testRailNotice(a.provider);
-  return `💳 Ссылка готова — нажмите «${BTN.goToPayment}». После оплаты карточка обновится сама.\n${hint}`;
+  return `Ссылка на оплату готова. Нажмите «${payButtonLabel(a.sumKopecks)}», после оплаты карточка обновится сама.\n${hint}`;
 }
 
-/** Тестовая карта ЮKassa — из документации провайдера (CONTRACTS §2, SPEC §9.2), не данные пользователя. */
+/** Тестовая карта ЮKassa из документации провайдера (CONTRACTS §2, SPEC §9.2), не данные пользователя. */
 export const YOOKASSA_TEST_CARD_HINT =
-  '🧪 Тестовый магазин: подойдёт карта 5555 5555 5555 4444, любая будущая дата, любой CVC; деньги не списываются.';
+  '🧪 Тестовый магазин: подойдёт карта 5555 5555 5555 4444, любая будущая дата и любой CVC. Деньги не списываются';
 
 /** Строка про тестовую среду провайдера для карточки и сообщения об оплате по ссылке (§9.2 п.4, §18). */
 export function testRailNotice(provider: PaymentProvider): string {
-  if (provider === 'yookassa') return '🧪 Тестовый магазин ЮKassa: реальные деньги не списываются.';
-  if (provider === 'tbank') return '🧪 DEMO-терминал Т-Банка: реальные деньги не списываются.';
-  return '🧪 Перевод продукт не видит — его подтверждают обе стороны кнопками.';
+  if (provider === 'yookassa') return '🧪 Тестовый магазин ЮKassa, реальные деньги не списываются';
+  if (provider === 'tbank') return '🧪 DEMO-терминал Т-Банка, реальные деньги не списываются';
+  return '🧪 Перевод продукт не видит, его подтверждают обе стороны кнопками';
 }
 
 // --- запросы ввода (§6.6) ---
 
-export const ASK_CHANGE_REQUEST = 'Напишите одним сообщением, что изменить (например: «давайте 15:00 и без предоплаты»).';
-export const ASK_REMARKS = 'Опишите замечания одним сообщением.';
-export const ASK_RECEIPT = 'Пришлите чек из «Мой налог» — фото или PDF одним сообщением.';
-export const ASK_CANCEL_REASON = 'Причина отмены одним сообщением — или нажмите «Без причины».';
+export const ASK_CHANGE_REQUEST = 'Напишите одним сообщением, что изменить. Например: «давайте 15:00 и без предоплаты»';
+export const ASK_REMARKS = 'Опишите замечания одним сообщением';
+export const ASK_RECEIPT = 'Пришлите чек из «Мой налог» одним сообщением: фото или PDF';
+export const ASK_CANCEL_REASON = 'Напишите причину отмены одним сообщением или нажмите «Без причины»';
+
+/** Ответы на присланный текст или файл (SPEC §6.6). */
+export const INPUT_NEED_TEXT = 'Нужен текст одним сообщением';
+export const CHANGE_REQUEST_SENT = 'Передали предложение исполнителю. Ждём новые условия';
+export const REMARKS_SENT = 'Передали замечания исполнителю. Ждём исправлений';
+export const RECEIPT_ACCEPTED = 'Чек принят. Готовлю квитанцию, пришлю отдельным сообщением';
+
+export function CANCELLED_ACK(id: string): string {
+  return `Сделка #${id} отменена`;
+}
+
+/** Ответ на нажатие без карточки под рукой (кнопка из уведомления). */
+export const DONE_ACK = 'Готово';
+export const DONE_CARD_UPDATED = 'Готово, карточка обновлена';
+export const SETTINGS_IN_APP = 'Настройки профиля в мини-приложении';
 
 // --- подтверждения перед необратимым действием ---
 
 export function CONFIRM_DECLINE(id: string): string {
-  return `Отказаться от сделки #${id}? Исполнитель получит уведомление, вернуться к этой карточке будет нельзя.`;
+  return `Отказаться от сделки #${id}? Исполнитель узнает об этом, вернуться к этой карточке будет нельзя`;
 }
 
 export function CONFIRM_CANCEL(id: string): string {
-  return `Отменить сделку #${id}? Действие необратимо, вторая сторона получит уведомление.`;
+  return `Отменить сделку #${id}? Это необратимо, вторая сторона получит сообщение`;
 }
 
-/** Последствие отмены для предоплаты — в том же вопросе, до подтверждения (SPEC §5.3). */
+/** Последствие отмены для предоплаты: в том же вопросе, до подтверждения (SPEC §5.3). */
 export function CANCEL_CONSEQUENCE(a: { by: 'seller' | 'client'; prepaymentKopecks: number; expected: boolean | null }): string | null {
   if (a.expected === null || a.prepaymentKopecks <= 0) return null;
   const sum = formatMoney(a.prepaymentKopecks);
-  if (a.by === 'seller') return `Предоплату ${sum} нужно будет вернуть клиенту — тем же способом, каким она пришла.`;
+  if (a.by === 'seller') return `Предоплату ${sum} нужно будет вернуть клиенту тем же способом, каким она пришла`;
   return a.expected
-    ? `По правилу отмены предоплата ${sum} должна вернуться — исполнитель вернёт её тем же способом.`
-    : `⚠️ По правилу отмены предоплата ${sum} не вернётся.`;
+    ? `По правилу отмены предоплата ${sum} вернётся: исполнитель вернёт её тем же способом`
+    : `По правилу отмены предоплата ${sum} не вернётся`;
 }
 
 export function CONFIRM_CLOSE_WITHOUT_RECEIPT(id: string): string {
-  return `Закрыть #${id} без чека? Квитанция уйдёт обеим сторонам, но чека из «Мой налог» в ней не будет.`;
+  return `Закрыть сделку #${id} без чека? Квитанция уйдёт обеим сторонам, но чека из «Мой налог» в ней не будет`;
 }
 
-// --- ошибки (§6.3, §6.6, §6.7). Дословно ---
+// --- ошибки (§6.3, §6.6, §6.7): «что случилось. что делать» (DESIGN_BRIEF §4) ---
 
-export const E1 = 'Это действие уже недоступно — карточка обновлена.';
-export const E2 = 'Не нашёл такую сделку. Проверьте ссылку или попросите исполнителя отправить её ещё раз.';
-export const E3 = 'По этой ссылке уже подтверждает другой пользователь. Попросите исполнителя создать новую сделку.';
-export const E4 = 'Это демонстрационная сделка исполнителя, к ней нельзя присоединиться.';
-export const E5 = 'Слишком длинно — до 500 символов.';
-export const E6 = 'Нужен файл или фото. Пришлите чек вложением.';
-export const E7 = 'После выполнения работы отмена — только по согласованию с исполнителем. Напишите ему в чат.';
-export const E8 = 'Время ожидания истекло. Нажмите кнопку ещё раз.';
+export const E1 = 'Это действие уже недоступно, карточка обновлена';
+export const E2 = 'Не нашёл такую сделку. Проверьте ссылку или попросите исполнителя прислать её ещё раз';
+export const E3 = 'По этой ссылке уже подтверждает другой человек. Попросите исполнителя создать новую сделку';
+export const E4 = 'Это демо-сделка исполнителя, к ней нельзя присоединиться';
+export const E5 = 'Слишком длинно: нужно до 500 символов. Сократите и пришлите ещё раз';
+export const E6 = 'Нужен файл или фото. Пришлите чек вложением';
+export const E7 = 'После выполнения работы отменить сделку можно только по согласованию с исполнителем. Напишите ему в чат';
+export const E8 = 'Время ожидания истекло. Нажмите кнопку ещё раз';
 export const E9 =
-  'Не удалось создать ссылку на оплату (провайдер недоступен). Попробуйте через минуту или выберите перевод по реквизитам.';
-export const E10 = 'Что-то пошло не так, мы уже разбираемся. Попробуйте ещё раз через минуту.';
-export const E11 = 'Оплата по ссылке не подключена. Доступен перевод по реквизитам.';
-export const E12 = 'Исполнитель не указал реквизиты для перевода. Попросите его заполнить их в Настройках.';
-export const E13 = 'Подождите: повторно сообщить о переводе можно через 10 минут после прошлого раза — за это время исполнитель проверит поступление.';
+  'Не удалось создать ссылку на оплату: провайдер недоступен. Попробуйте через минуту или выберите перевод по реквизитам';
+export const E10 = 'Что-то пошло не так, мы уже разбираемся. Попробуйте ещё раз через минуту';
+export const E11 = 'Оплата по ссылке не подключена. Доступен перевод по реквизитам';
+export const E12 = 'Исполнитель не указал реквизиты для перевода. Попросите его заполнить их в настройках';
+export const E13 = 'Повторно сообщить о переводе можно через 10 минут после прошлого раза. За это время исполнитель проверит поступление';
 
 /** «Подтверждаю» на карточке прежней версии: исполнитель успел изменить условия (T5, SPEC §5.2 T3). */
-export const VERSION_CHANGED = 'Условия изменились — посмотрите новую версию.';
+export const VERSION_CHANGED = 'Условия изменились. Посмотрите новую версию';
 
 /** Двойной тап «Оплатить по ссылке», пока провайдер ещё создаёт первую ссылку (ЗАДАЧА_03 F3). */
-export const LINK_IN_PROGRESS = 'Ссылка формируется, секунду — нажмите ещё раз.';
+export const LINK_IN_PROGRESS = 'Ссылка на оплату готовится. Нажмите ещё раз через секунду';
 
-/** Кнопка чужой сделки (пересланная карточка, подобранный payload) — ЗАДАЧА_03 G1. */
-export const NOT_YOUR_DEAL = 'Это не ваша сделка.';
+/** Кнопка чужой сделки (пересланная карточка, подобранный payload): ЗАДАЧА_03 G1. */
+export const NOT_YOUR_DEAL = 'Это не ваша сделка';
 
 /** Идемпотентный повтор: карточка уже в целевом состоянии (SPEC §5.2, конкурентность). */
-export const ALREADY_DONE = 'Это уже сделано — карточка актуальна.';
+export const ALREADY_DONE = 'Это уже сделано, карточка актуальна';
 
-// --- заметки над карточкой в ответ на нажатие (§6.4) ---
+// --- заметки над карточкой в ответ на нажатие (§6.4): факт одной строкой, без эмодзи и кнопок ---
 
-export const REMIND_SENT = '🔔 Напоминание отправлено клиенту.';
-export const REMIND_COOLDOWN = 'Напоминание уже отправлено — следующее можно через 4 часа.';
-export const REMIND_NO_CHAT = 'Клиент ещё не открывал бота — напоминание отправить некуда.';
-export const RECEIPT_NOT_YET = 'Квитанция формируется после закрытия или отмены сделки.';
-export const TRANSFER_CLAIMED = '📨 Сообщили исполнителю о переводе. Ждём его подтверждения.';
-export const TRANSFER_NOT_SEEN_ACK = 'Отметили, что перевода не видно. Клиент получил подсказку.';
-export const RAIL_CANCELLED = 'Способ оплаты отменён. Выберите другой.';
-export const RECEIPT_FORWARDED = 'Файл чека от исполнителя (содержимое не проверялось):';
-export const RECEIPT_PREPARING = '📄 Готовлю квитанцию — пришлю отдельным сообщением.';
+export const REMIND_SENT = 'Напоминание отправлено клиенту';
+export const REMIND_COOLDOWN = 'Напоминание уже отправлено. Следующее можно через 4 часа';
+export const REMIND_NO_CHAT = 'Клиент ещё не открывал бота, напоминание отправить некуда';
+export const RECEIPT_NOT_YET = 'Квитанция появится после закрытия или отмены сделки';
+export const TRANSFER_CLAIMED = 'Сообщили исполнителю о переводе. Ждём его подтверждения';
+export const TRANSFER_NOT_SEEN_ACK = 'Отметили, что перевода не видно. Клиент получил подсказку';
+export const RAIL_CANCELLED = 'Способ оплаты отменён. Выберите другой';
+export const RECEIPT_FORWARDED = 'Чек от исполнителя (содержимое не проверялось):';
+export const RECEIPT_PREPARING = 'Готовлю квитанцию, пришлю отдельным сообщением';
 
 // --- напоминания (§10.2) ---
 
 /** Пометка к напоминанию, которое у демо-сделки пришло через 2 минуты вместо суток (domain/reminder/plan.ts). */
-export const DEMO_ACCELERATED_NOTE = '🧪 в демо — ускорено: в настоящей сделке это напоминание придёт через сутки.';
+export const DEMO_ACCELERATED_NOTE = '🧪 В демо ускорено: в настоящей сделке это напоминание придёт через сутки';
 
 /** Виды со своими текстами и данными: «через 30 минут» (eventSoon) и утренняя сводка (dailyDigest). */
 export type PlainReminderKind = Exclude<ReminderKind, 'event_soon' | 'daily_digest'>;
 
-/** Кому адресовано — решает план (§10.2); текст написан под эту сторону. `accelerated` — демо-сделка, срок ускорен. */
+/** Кому адресовано, решает план (§10.2); текст написан под эту сторону. `accelerated`: демо-сделка, срок ускорен. */
 export function reminderText(
   kind: PlainReminderKind,
   a: { id: string; title: string; sumKopecks: number; scheduledAt: Date | null; deadline: Date | null; accelerated?: boolean },
@@ -854,41 +956,49 @@ export function reminderText(
 
 function reminderBody(
   kind: PlainReminderKind,
-  a: { id: string; title: string; sumKopecks: number; scheduledAt: Date | null },
+  a: { id: string; title: string; sumKopecks: number; scheduledAt: Date | null; deadline: Date | null },
 ): string {
   const sum = formatMoney(a.sumKopecks);
+  const deadline = a.deadline ? `, срок до ${formatDayMonthShort(a.deadline)}` : '';
+  const receipt = 'Сформируйте его в «Мой налог» и приложите.';
   switch (kind) {
     case 'client_not_opened':
-      return `Клиент ещё не открыл карточку #${a.id}. Отправьте ссылку ещё раз или напомните ему.`;
+      return notice(`🔔 Клиент ещё не открыл карточку #${a.id}.`, 'Отправьте ему ссылку ещё раз.');
     case 'confirmation_expired':
-      // Это напоминание выполняет T8; текст получателям — тот же N7.
+      // Это напоминание выполняет T8; текст получателям тот же N7.
       return N7({ id: a.id });
     case 'prepayment_due':
-      return `Напоминаем: предоплата ${sum} по #${a.id} ещё не внесена.`;
+      return notice(`🔔 Предоплата ${sum} по #${a.id} ещё не внесена.`, 'Внесите её, чтобы сделка состоялась.');
     case 'prepayment_overdue':
-      return `Предоплата по #${a.id} не получена 2 дня. Напомнить клиенту или отменить?`;
+      return notice(`🔔 Предоплата по #${a.id} не получена 2 дня.`, 'Напомните клиенту или отмените сделку.');
     case 'event_tomorrow':
-      return `Завтра ${a.scheduledAt ? formatDateTime(a.scheduledAt) : 'по плану'}: ${esc(oneLine(a.title))} (#${a.id}).`;
+      // Факт и есть главное: что и когда. Действия нет, кнопка открывает сделку (DESIGN_BRIEF §4).
+      return a.scheduledAt
+        ? `📅 Завтра, ${formatDateTime(a.scheduledAt)}: ${esc(oneLine(a.title))}, #${a.id}.`
+        : `📅 Завтра по плану: ${esc(oneLine(a.title))}, #${a.id}.`;
     case 'event_passed':
-      return `Срок #${a.id} прошёл. Отметьте «Выполнено», когда закончите.`;
+      return notice(`🔔 Срок сделки #${a.id} прошёл.`, `Отметьте «${BTN.done}», когда закончите.`);
     case 'acceptance_due':
-      return `Исполнитель ждёт приёмку по #${a.id}: примите работу или оставьте замечания.`;
+      return notice(`🔔 Исполнитель ждёт приёмку по #${a.id}.`, 'Примите работу или оставьте замечания.');
     case 'payment_due':
-      return `Остаток ${sum} по #${a.id} ждёт оплаты.`;
+      return notice(`🔔 Остаток ${sum} по #${a.id} ждёт оплаты.`, 'Оплатите его в карточке сделки.');
     case 'payment_overdue':
-      return `Остаток по #${a.id} не оплачен 3 дня.`;
+      return notice(`🔔 Остаток по #${a.id} не оплачен 3 дня.`, 'Напомните клиенту.');
     case 'receipt_due':
-      return `Не забудьте чек по #${a.id}: сформируйте в «Мой налог» и приложите.`;
+      return notice(`🔔 Чек по #${a.id} ещё не приложен${deadline}.`, receipt);
     case 'receipt_deadline':
-      return `До 9-го числа осталось 2 дня: чек по #${a.id} ещё не приложен (ст. 14 422-ФЗ).`;
+      return notice(`🔔 Чек по #${a.id} всё ещё не приложен${deadline}, осталось 2 дня (ст. 14 422-ФЗ).`, receipt);
     case 'refund_due':
-      return `Сделка #${a.id} отменена двое суток назад, возврат ${sum} клиенту не отмечен. Верните тем же способом, каким получили, и нажмите «${BTN.refundSent}» в карточке.`;
+      return notice(
+        `🔔 Сделка #${a.id} отменена двое суток назад, возврат ${sum} клиенту не отмечен.`,
+        `Верните тем же способом, каким получили, и нажмите «${BTN.refundSent}» в карточке.`,
+      );
   }
 }
 
 /**
- * «⏰ Через 30 минут» (ЗАДАЧА_04 B1). Исполнителю — кто придёт и что с предоплатой, клиенту — к кому и что.
- * Адреса отдельным полем нет (он в «Уточнениях») — в текст не добавляем; карточка — по кнопке «Открыть».
+ * «⏰ Через 30 минут» (ЗАДАЧА_04 B1, DESIGN_BRIEF §4). Исполнителю: кто придёт и что с предоплатой, клиенту: что и у
+ * кого. Адреса отдельным полем нет (он в «Уточнениях»), поэтому в текст не добавляем. Кнопки нет.
  */
 export function eventSoon(a: {
   to: 'seller' | 'client';
@@ -899,67 +1009,67 @@ export function eventSoon(a: {
   prepaymentKopecks: number;
 }): string {
   const title = esc(oneLine(a.title));
-  if (a.to === 'client') return `⏰ Через 30 минут — ${title} у ${esc(oneLine(a.sellerName))}.`;
+  if (a.to === 'client') return `⏰ Через 30 минут: ${title}, исполнитель ${esc(oneLine(a.sellerName))}.`;
   const prepayment =
     a.prepayment === 'none'
       ? 'Без предоплаты.'
       : a.prepayment === 'received'
-        ? 'Предоплата: получена.'
-        : `Предоплата: ждём ${formatMoney(a.prepaymentKopecks)}.`;
-  return `⏰ Через 30 минут: ${esc(oneLine(a.clientName))} — ${title}. ${prepayment}`;
+        ? 'Предоплата получена.'
+        : `Предоплата ${formatMoney(a.prepaymentKopecks)} ещё не внесена.`;
+  return notice(`⏰ Через 30 минут: ${esc(oneLine(a.clientName))}, ${title}.`, prepayment);
 }
 
-/** «1 запись», «3 записи», «5 записей», «21 запись». */
-export function recordsWord(n: number): string {
+/** «1 сделка», «3 сделки», «5 сделок», «21 сделка». */
+export function dealsWord(n: number): string {
   const mod10 = n % 10;
   const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return `${n} запись`;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} записи`;
-  return `${n} записей`;
+  if (mod10 === 1 && mod100 !== 11) return `${n} сделка`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} сделки`;
+  return `${n} сделок`;
 }
 
 export type DigestLine = {
   scheduledAt: Date;
   title: string;
-  /** null — клиент ещё не открыл ссылку */
+  /** null: клиент ещё не открыл ссылку */
   clientName: string | null;
   status: DealStatus;
   prepaymentKopecks: number;
   demo: boolean;
 };
 
-/** Что с записью — словом (ЗАДАЧА_04 B2): для согласованной — есть ли предоплата, для остальных — чего ждём. */
+/** Что со сделкой, словом (ЗАДАЧА_04 B2): для согласованной есть ли предоплата, для остальных чего ждём. */
 function digestState(l: DigestLine): string {
   if (l.status === 'scheduled') return l.prepaymentKopecks > 0 ? 'предоплата получена' : 'без предоплаты';
   return statusShort(l.status, 'seller');
 }
 
-/** Сколько записей показываем в сводке; остальное — в «📅 Расписание» (лимит сообщения MAX — 4000 символов). */
+/** Сколько сделок показываем в сводке; остальное в «Расписании» (лимит сообщения MAX 4000 символов). */
 const DIGEST_MAX_LINES = 20;
 
 /**
- * Утренняя сводка исполнителю (ЗАДАЧА_04 B2): «📅 Сегодня, вт 29 сен — 3 записи (МСК):» и по строке на запись
- * «10:00 — Саша · Маникюр с покрытием · предоплата получена». Строки уже отсортированы по времени.
+ * Утренняя сводка исполнителю (ЗАДАЧА_04 B2, DESIGN_BRIEF §4): «📅 Сегодня, вт 29 сен: 3 сделки (МСК)» и по строке
+ * на сделку «10:00, Саша, Маникюр с покрытием, предоплата получена». Строки уже отсортированы по времени.
  */
 export function dailyDigest(a: { day: Date; lines: DigestLine[]; now?: Date }): string {
   const now = a.now ?? new Date();
-  const { day } = dayAndTime(a.day, undefined, now);
-  const head = `📅 Сегодня, ${day[0].toLowerCase()}${day.slice(1)} — ${recordsWord(a.lines.length)} (МСК):`;
+  const head = `📅 Сегодня, ${formatWeekdayDay(a.day, undefined, now)}: ${dealsWord(a.lines.length)} (МСК)`;
   const rows = a.lines.slice(0, DIGEST_MAX_LINES).map((l) => {
     const who = l.demo ? 'демо-клиент' : l.clientName ? esc(clip(oneLine(l.clientName), 40)) : 'клиент не открыл ссылку';
-    const parts = [`${dayAndTime(l.scheduledAt, undefined, now).time} — ${who}`, esc(clip(oneLine(l.title), 60)), digestState(l)];
-    return `${parts.join(' · ')}${l.demo ? ' · демо' : ''}`;
+    const parts = [formatTime(l.scheduledAt), who, esc(clip(oneLine(l.title), 60)), digestState(l)];
+    if (l.demo) parts.push('демо');
+    return parts.join(', ');
   });
-  const more = a.lines.length > DIGEST_MAX_LINES ? [`…и ещё ${a.lines.length - DIGEST_MAX_LINES} — в «${BTN.schedule}»`] : [];
+  const more = a.lines.length > DIGEST_MAX_LINES ? [`…и ещё ${a.lines.length - DIGEST_MAX_LINES}, смотрите «${BTN.schedule}»`] : [];
   return [head, ...rows, ...more].join('\n');
 }
 
-// --- ответы API мини-приложения на правку условий (SPEC §7.8). Экран показывает свой текст по коду, это — запасной ---
+// --- ответы API мини-приложения на правку условий (SPEC §7.8). Экран показывает свой текст по коду, это запасной ---
 
 export const API_DEAL_NOT_FOUND = 'Сделка не найдена';
 export const API_FORBIDDEN_DEAL = 'Это не ваша сделка';
 export const API_NOT_EDITABLE = 'Условия можно изменить, только пока клиент их не подтвердил';
-export const API_NO_CHANGES = 'Условия не изменились — отправлять клиенту нечего';
+export const API_NO_CHANGES = 'Условия не изменились, отправлять клиенту нечего';
 
 // --- экран сделки в мини-приложении (ЗАДАЧА_08 B, SPEC §7.9). Простой текст без markdown: его рисует React ---
 
@@ -1002,6 +1112,14 @@ const PAYMENT_STATUS_WORD: Record<PaymentStatus, string> = {
   expired: 'ссылка истекла',
 };
 
+/** Способ оплаты коротко для экрана сделки, с пометкой теста: «ссылка ЮKassa, тест». */
+function railLabel(rail: PaymentRail, provider: PaymentProvider): string {
+  if (rail === 'transfer') return 'перевод по реквизитам';
+  if (provider === 'yookassa') return 'ссылка ЮKassa, тест';
+  if (provider === 'tbank') return 'СБП Т-Банк, DEMO';
+  return 'ссылка на оплату';
+}
+
 /** Строка платежа на экране сделки: «Предоплата 500 ₽, ссылка ЮKassa, тест: оплачено 21.09 14:03 (МСК)». */
 export function paymentLabel(a: {
   kind: 'prepayment' | 'final';
@@ -1012,7 +1130,7 @@ export function paymentLabel(a: {
   at: Date | null;
 }): string {
   const how = a.rail === 'transfer' ? 'перевод по реквизитам, подтверждают стороны' : railLabel(a.rail, a.provider);
-  const when = a.at && (a.status === 'succeeded' || a.status === 'claimed') ? ` ${formatDateTimeShort(a.at)}` : '';
+  const when = a.at && (a.status === 'succeeded' || a.status === 'claimed') ? ` ${formatMoment(a.at)}` : '';
   return `${kindLabel(a.kind)} ${formatMoney(a.amountKopecks)}, ${how}: ${PAYMENT_STATUS_WORD[a.status]}${when}`;
 }
 
@@ -1115,7 +1233,7 @@ export function timelineText(
 // --- «Другое время» (ЗАДАЧА_08 D, SPEC §7.10) ---
 
 /** Выбор на месте карточки после «Предложить изменения»: время из календаря или текстом. */
-export const ASK_CHANGE_KIND = 'Что изменить? Выберите другое время в календаре исполнителя или напишите текстом.';
+export const ASK_CHANGE_KIND = 'Что изменить? Выберите другое время в календаре исполнителя или напишите текстом';
 
 /** Текст запроса изменений при предложении времени: попадёт в следующую версию как «клиент просил». */
 export function TIME_PROPOSAL_TEXT(at: Date): string {
@@ -1124,55 +1242,45 @@ export function TIME_PROPOSAL_TEXT(at: Date): string {
 
 /** N3T — исполнителю: клиент выбрал время в календаре. */
 export function N3T(a: { client: string; id: string; at: Date }): string {
-  return `🗓 ${esc(a.client)} предлагает другое время по #${a.id}: ${formatDateTime(a.at)}.\n\nПримите одним нажатием или предложите другое.`;
+  return notice(`🗓 ${esc(a.client)} предлагает другое время по #${a.id}: ${formatDateTime(a.at)}.`, 'Примите одним нажатием или предложите другое время.');
 }
 
 /** Подпись кнопки «Принять»: короткая дата, чтобы не обрезалась (своим рядом). */
 export function acceptTimeLabel(at: Date): string {
-  const { day, time } = dayAndTime(at);
-  return `✅ Принять ${day}, ${time}`;
+  return `Принять ${formatWeekdayDay(at)}, ${formatTime(at)}`;
 }
 
-export const TIME_ACCEPTED_ACK = 'Время принято: клиент получил новую версию условий и подтвердит её.';
-export const TIME_TAKEN_SELLER = 'Это время уже занято другой записью. Предложение снято, предложите клиенту другое время.';
+export const TIME_ACCEPTED_ACK = 'Время принято. Клиент получил новую версию условий и подтвердит её';
+export const TIME_TAKEN_SELLER = 'Это время уже занято другой сделкой. Предложение снято, предложите клиенту другое время';
 export function TIME_TAKEN_CLIENT(a: { id: string; at: Date }): string {
-  return `🗓 Исполнитель не может ${formatDateTime(a.at)} по #${a.id}: это время уже занято. Выберите другое.`;
+  return notice(`🗓 Исполнитель не может ${formatDateTime(a.at)} по #${a.id}: это время уже занято.`, 'Выберите другое время.');
 }
-export const TIME_STALE = 'Это предложение уже неактуально: условия изменились или время прошло. Карточка обновлена.';
+export const TIME_STALE = 'Это предложение уже неактуально: условия изменились или время прошло. Карточка обновлена';
 
 // --- надёжность исполнителя и оценка клиента (ЗАДАЧА_08 E, SPEC §7.11) ---
 
-/** Склонение «сделка» по числу: 1 сделка, 3 сделки, 120 сделок. */
-export function dealsWord(n: number): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return 'сделка';
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'сделки';
-  return 'сделок';
-}
-
 /** Строка надёжности: «120 сделок, 98 % без споров» (без спорных — только число сделок). */
 export function reliabilityLine(r: { closed: number; noDisputePercent: number | null }): string {
-  const base = `${r.closed} ${dealsWord(r.closed)}`;
+  const base = dealsWord(r.closed);
   return r.noDisputePercent === null ? base : `${base}, ${r.noDisputePercent} % без споров`;
 }
 
 /** R1 — клиенту после закрытия: одна просьба оценить, оценку видит только исполнитель. */
 export function R1(a: { id: string; title: string }): string {
-  return `⭐ Оцените работу по #${a.id}: ${esc(a.title)}.\nОт 1 до 5, где 5 — отлично. Оценку увидит только исполнитель.`;
+  return notice(`⭐ Оцените работу по #${a.id}: ${esc(a.title)}.`, 'От 1 до 5, где 5 значит отлично. Оценку увидит только исполнитель.');
 }
 
 export function RATING_THANKS(score: number): string {
-  return `Спасибо! Ваша оценка: ${score} из 5. Можно добавить комментарий одним сообщением или нажать «Без комментария».`;
+  return `Спасибо, ваша оценка ${score} из 5. Можно добавить комментарий одним сообщением или нажать «${BTN.noComment}»`;
 }
-export const RATING_ALREADY = 'Оценка по этой сделке уже сохранена. Спасибо!';
-export const RATING_DONE = 'Спасибо, оценка сохранена.';
-export const RATING_COMMENT_SAVED = 'Комментарий передан исполнителю. Спасибо!';
-export const RATING_COMMENT_TOO_LONG = 'Слишком длинно, до 500 символов.';
+export const RATING_ALREADY = 'Оценка по этой сделке уже сохранена';
+export const RATING_DONE = 'Спасибо, оценка сохранена';
+export const RATING_COMMENT_SAVED = 'Спасибо, комментарий передан исполнителю';
+export const RATING_COMMENT_TOO_LONG = 'Слишком длинно: до 500 символов';
 
 /** R2 — исполнителю: клиент оценил работу. */
 export function R2(a: { client: string; id: string; score: number }): string {
-  return `⭐ ${esc(a.client)} оценил(а) работу по #${a.id}: ${a.score} из 5.`;
+  return notice(`⭐ ${esc(a.client)} оценил(а) работу по #${a.id}: ${a.score} из 5.`);
 }
 
 /** R3 — исполнителю: комментарий клиента к оценке. */
@@ -1180,57 +1288,61 @@ export function R3(a: { client: string; id: string; comment: string }): string {
   return `💬 Комментарий ${esc(a.client)} к оценке по #${a.id}:\n${quote(esc(a.comment))}`;
 }
 
-// --- подписи кнопок. Ровно те, что в SPEC §5.5, §6.4, §6.5 и DESIGN §6 ---
+
+// --- подписи кнопок: DESIGN_BRIEF §2.8, колонка «После». Коды callback не меняются (callbacks.ts) ---
+// Глагол или результат от первого лица, первая буква прописная, без эмодзи (кроме 🧪 у демо и теста),
+// деструктивное действие называет объект.
 
 export const BTN = {
-  newDeal: '➕ Новая сделка',
-  myDeals: '📁 Мои сделки',
-  settings: '⚙️ Настройки',
-  help: '❓ Как это работает',
+  newDeal: 'Новая сделка',
+  myDeals: 'Сделки',
+  settings: 'Настройки',
+  help: 'Как это работает',
   tryIt: '🧪 Попробовать',
-  tryDemo: 'Демо: пройти одному',
-  exampleDeal: 'Сделка-пример: позвать клиента',
-  menu: '↩️ Меню',
-  sendToMax: '📤 Отправить в MAX',
-  copyLink: '📋 Скопировать ссылку',
-  editTerms: '✏️ Изменить условия',
+  tryDemo: '🧪 Демо: пройти одному',
+  exampleDeal: 'Пример: позвать клиента',
+  menu: 'Меню',
+  sendToMax: 'Отправить клиенту',
+  copyLink: 'Скопировать ссылку',
+  editTerms: 'Изменить условия',
   openAsClient: '🧪 Открыть как клиент',
-  cancelDeal: '🚫 Отменить',
+  cancelDeal: 'Отменить сделку',
   remindClient: 'Напомнить клиенту',
   keepAsIs: 'Оставить как есть',
-  confirm: '✅ Подтверждаю',
-  requestChanges: '✏️ Предложить изменения',
-  decline: '⛔ Отказаться',
-  declineYes: 'Да, отказаться',
-  payByLink: '💳 Оплатить по ссылке',
-  payByTransfer: '🔁 Перевести по реквизитам',
-  transferDone: '✅ Я перевёл(а)',
-  transferReceived: '✅ Получил(а)',
-  transferNotReceived: '❌ Не вижу перевода',
-  transferCancel: '↩️ Отмена перевода',
-  goToPayment: 'Перейти к оплате',
-  checkPayment: '🔄 Проверить оплату',
+  confirm: 'Подтверждаю',
+  requestChanges: 'Предложить изменения',
+  decline: 'Отказаться',
+  declineYes: 'Отказаться от сделки',
+  payByLink: 'Оплатить по ссылке',
+  payByTransfer: 'Перевести по реквизитам',
+  transferDone: 'Я перевёл(а)',
+  transferReceived: 'Получил(а)',
+  transferNotReceived: 'Не вижу перевода',
+  transferCancel: 'Другой способ оплаты',
+  /** Подпись собирается с суммой: payButtonLabel → «Оплатить 900 ₽». */
+  goToPayment: 'Оплатить',
+  checkPayment: 'Проверить оплату',
   emulatePayment: '🧪 Эмулировать оплату',
-  newLink: '🆕 Новая ссылка',
-  done: '✔️ Выполнено',
-  accept: '👍 Принимаю',
-  remarks: '⚠️ Есть замечания',
-  fixed: 'Исправлено, проверьте',
-  attachReceipt: '📎 Приложить чек',
+  newLink: 'Новая ссылка',
+  done: 'Выполнено',
+  accept: 'Принимаю',
+  remarks: 'Есть замечания',
+  fixed: 'Исправлено',
+  attachReceipt: 'Приложить чек',
   closeWithoutReceipt: 'Закрыть без чека',
-  closeWithoutReceiptYes: 'Да, закрыть без чека',
-  cancelYes: 'Да, отменить',
+  closeWithoutReceiptYes: 'Закрыть без чека',
+  cancelYes: 'Отменить сделку',
   noReason: 'Без причины',
-  receiptPdf: '📄 Квитанция PDF',
-  repeat: '🔁 Повторить',
-  refundSent: '✅ Вернул(а)',
-  refundReceived: '✅ Возврат получил(а)',
-  open: 'Открыть',
-  schedule: '📅 Расписание',
-  back: '↩️ Назад',
-  keepDeal: '↩️ Не отменять',
-  otherTime: '🗓 Другое время',
-  writeText: '✍️ Написать текстом',
-  proposeOther: '✏️ Предложить другое',
+  receiptPdf: 'Квитанция PDF',
+  repeat: 'Повторить сделку',
+  refundSent: 'Вернул(а) предоплату',
+  refundReceived: 'Возврат получил(а)',
+  open: 'Открыть сделку',
+  schedule: 'Расписание',
+  back: 'Назад',
+  keepDeal: 'Оставить сделку',
+  otherTime: 'Другое время',
+  writeText: 'Написать текстом',
+  proposeOther: 'Предложить другое время',
   noComment: 'Без комментария',
 };

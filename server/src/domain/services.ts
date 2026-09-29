@@ -27,7 +27,7 @@ export function validateService(f: ServiceFields): ServiceFields {
   const description = f.description?.trim() ? f.description.trim() : null;
   if (description && description.length > 1000) throw new ValidationError('Уточнения до 1000 символов', 'description');
   if (!Number.isInteger(f.priceKopecks) || f.priceKopecks < MIN_TOTAL_KOPECKS || f.priceKopecks > MAX_TOTAL_KOPECKS) {
-    throw new ValidationError('Цена от 1 до 1 000 000 ₽', 'price_rub');
+    throw new ValidationError('Сумма от 1 до 1 000 000 ₽', 'price_rub');
   }
   if (!Number.isInteger(f.durationMin) || f.durationMin < DURATION_STEP_MIN || f.durationMin > DURATION_MAX_MIN || f.durationMin % DURATION_STEP_MIN !== 0) {
     throw new ValidationError('Длительность от 15 минут до 12 часов, шаг 15 минут', 'duration_min');

@@ -1,6 +1,6 @@
-// Лента дней расписания: горизонтальный скролл, сегодня подсвечено, под числом — сколько записей (ЗАДАЧА_04 C3).
-// Та же лента — в «Другом времени» (ЗАДАЧА_08 D): там день без свободного времени приглушён, но выбирается.
-// Своего компонента в MAX UI нет — собрано на токенах, как чипы (docs/DESIGN.md §4).
+// Лента дней расписания: горизонтальный скролл, сегодня подсвечено, под числом сколько сделок (ЗАДАЧА_04 C3).
+// Та же лента в «Другом времени» (ЗАДАЧА_08 D): там день без свободного времени приглушён, но выбирается.
+// Своего компонента в MAX UI нет, собрано на токенах, как чипы (DESIGN_BRIEF §5.2).
 import { useLayoutEffect, useRef } from 'react';
 
 import { dayAriaLabel, type Day } from '../schedule';
@@ -60,7 +60,7 @@ export function DayStrip({ days, selected, counts, onSelect, muted, mutedLabel }
             </span>
             <span className="dg-day__num">{day.day}</span>
             <span className={count > 0 ? 'dg-day__count' : 'dg-day__count dg-day__count_empty'} aria-hidden="true">
-              {count > 0 ? count : '·'}
+              {count > 0 ? count : ''}
             </span>
           </button>
         );

@@ -1,17 +1,20 @@
-// Форма сделки — docs/SPEC.md §7.2 (таблица полей и правил), §7.5 (правка условий и повтор), §7.6 (шаблоны),
-// §7.6a («Выбрать услугу» и «Сохранить как услугу»); вид — docs/DESIGN.md §4–§5. Одна форма на создание, правку (T5)
-// и повтор: режим задаёт заголовок, предзаполнение и кнопку, а куда отправлять — решает экран-владелец через onSubmit.
+// Форма сделки: SPEC §7.2 (поля и правила), §7.5 (правка условий и повтор), §7.6 (примеры условий), §7.6a
+// («Выбрать услугу» и «Сохранить как услугу»); вид по DESIGN_BRIEF §5.3. Одна форма на создание, правку (T5) и повтор: режим задаёт заголовок, предзаполнение
+// и кнопку, а куда отправлять, решает экран-владелец через onSubmit.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Input, Panel, Radio, Switch, Textarea, Typography } from '@maxhub/max-ui';
+import { Button, Input, Radio, Switch, Textarea, Typography } from '@maxhub/max-ui';
 
+import { useFormDirty } from '../formGuard';
 import { api, ApiError, errorText, isRetryable } from '../api';
 import { disableClosingConfirmation, enableClosingConfirmation, haptic, userDisplayName } from '../bridge';
+import { AppHeader } from '../components/AppHeader';
 import { ControlRow } from '../components/ControlRow';
 import { Field, revealField } from '../components/Field';
+import { Island, Screen } from '../components/Screen';
 import { Segmented } from '../components/Segmented';
 import { ServiceChips } from '../components/ServiceChips';
+import { useSnackbar } from '../components/Snackbar';
 import { TemplateChips } from '../components/TemplateChips';
-import { useToast } from '../components/Toast';
 import { CANCEL_RULE_LABEL, CANCEL_RULE_TEXT, CANCEL_RULES, formatRub, isoToMoscowInput, moscowInputToIso, TAX_MODE_LABEL, TAX_MODES } from '../format';
 import { canSaveAsService, dealFillFromService, serviceBodyFromDeal, serviceChips, type PrepayMode } from '../services';
 import type {
@@ -119,14 +122,14 @@ export interface NewScreenProps {
   templates: Template[];
   mode?: DealFormMode;
   /**
-   * Отправка. Разрешился — экран-владелец сам решил, что дальше (переход, экран успеха, тост и остаться).
-   * Бросил — форма покажет тост, а при сбое сети или сервера ещё и «Повторить».
+   * Отправка. Разрешился: экран-владелец сам решил, что дальше (переход, экран успеха, Snackbar и остаться).
+   * Бросил: форма покажет Snackbar, а при сбое сети или сервера с действием «Повторить».
    */
   onSubmit: (payload: CreateDealRequest) => Promise<void>;
 }
 
 export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }: NewScreenProps) {
-  const showToast = useToast();
+  const snackbar = useSnackbar();
   const editing = mode.kind === 'edit';
   const repeating = mode.kind === 'repeat';
   /** «Тот же клиент» — только при повторе сделки, у которой был настоящий клиент. */
@@ -161,18 +164,16 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
   const [touched, setTouched] = useState<Partial<Record<FieldName, boolean>>>({});
   const [submitted, setSubmitted] = useState(false);
   const [sending, setSending] = useState(false);
-  /** Текст последнего сбоя сети/сервера — под ним кнопка «Повторить». */
-  const [submitError, setSubmitError] = useState<string | null>(null);
   const [sameClient, setSameClient] = useState(sameClientName !== null);
   const dateRef = useRef<HTMLInputElement>(null);
 
-  // ── «Мои услуги» (§7.6a): чипы над полями, выбор подставляет условия; сделка запоминает service_id ──
-  /** Услуга прежней сделки (повтор, правка) — выбрана сразу. */
+  // «Мои услуги» (§7.6a): чипы над примерами, выбор подставляет условия; сделка запоминает service_id.
+  /** Услуга прежней сделки (повтор, правка): выбрана сразу. */
   const [initialServiceId] = useState<number | null>(() => (mode.kind === 'create' ? null : (mode.source.service_id ?? null)));
   const [serviceId, setServiceId] = useState<number | null>(initialServiceId);
-  /** Показываемые услуги; null — не загрузились (блока нет, форма работает как раньше). */
+  /** Показываемые услуги; null: не загрузились (блока нет, форма работает как раньше). */
   const [services, setServices] = useState<Service[] | null>(null);
-  /** Услуга прежней сделки, которую потом скрыли: её чип всё равно виден — выбранным и с пометкой. */
+  /** Услуга прежней сделки, которую потом скрыли: её чип всё равно виден, выбранным и с пометкой. */
   const [hiddenService, setHiddenService] = useState<Service | null>(null);
   const [savingService, setSavingService] = useState(false);
 
@@ -188,7 +189,7 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
           if (alive) setHiddenService(all.items.find((s) => s.id === initialServiceId) ?? null);
         }
       } catch {
-        /* услуги не загрузились — форма работает без блока «Выбрать услугу» (контракт ЗАДАЧА_08 C, п. 4) */
+        /* услуги не загрузились: форма работает без блока «Выбрать услугу» (контракт ЗАДАЧА_08 C, п. 4) */
       }
     })();
     return () => {
@@ -232,23 +233,23 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
     if (needProfile) {
       const name = displayName.trim();
       if (name.length < NAME_MIN || name.length > NAME_MAX) {
-        next.display_name = `Имя — от ${NAME_MIN} до ${NAME_MAX} символов`;
+        next.display_name = `Имя от ${NAME_MIN} до ${NAME_MAX} символов`;
       }
       if (payoutDetails.trim().length > PAYOUT_MAX) {
-        next.payout_details = `Реквизиты — не больше ${PAYOUT_MAX} символов`;
+        next.payout_details = `Реквизиты не больше ${PAYOUT_MAX} символов`;
       }
     }
 
     const dealTitle = title.trim();
     if (dealTitle.length < TITLE_MIN || dealTitle.length > TITLE_MAX) {
-      next.title = `Название — от ${TITLE_MIN} до ${TITLE_MAX} символов`;
+      next.title = `Название от ${TITLE_MIN} до ${TITLE_MAX} символов`;
     }
     if (description.trim().length > DESCRIPTION_MAX) {
-      next.description = `Уточнения — не больше ${DESCRIPTION_MAX} символов`;
+      next.description = `Уточнения не больше ${DESCRIPTION_MAX} символов`;
     }
 
     if (noDate) {
-      if (dateRequired) next.scheduled_at = 'Для этого шаблона нужны дата и время';
+      if (dateRequired) next.scheduled_at = 'Для этой услуги нужны дата и время';
     } else if (!scheduledLocal) {
       next.scheduled_at = 'Укажите дату и время или выберите «Без даты»';
     } else {
@@ -259,13 +260,13 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
     }
 
     if (totalRub === null || totalRub < TOTAL_MIN || totalRub > TOTAL_MAX) {
-      next.total = 'Сумма — от 1 до 1 000 000 ₽';
+      next.total = 'Сумма от 1 до 1 000 000 ₽';
     }
 
     if (prepaymentRub === null) {
       next.prepayment = 'Укажите предоплату числом';
     } else if (prepaymentRub < 0 || (totalRub !== null && prepaymentRub > totalRub)) {
-      next.prepayment = totalRub === null ? 'Предоплата не больше суммы' : `Предоплата — от 0 до ${formatRub(totalRub)}`;
+      next.prepayment = totalRub === null ? 'Предоплата не больше суммы' : `Предоплата от 0 до ${formatRub(totalRub)}`;
     }
 
     return next;
@@ -307,9 +308,11 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
   }, [dirty]);
 
   useEffect(() => () => disableClosingConfirmation(), []);
+  // Переход по нижней панели с заполненной формы спросит подтверждение (DESIGN_BRIEF §5.2, BottomSheet).
+  useFormDirty(dirty && !sending);
 
   function applyTemplate(template: Template) {
-    // Пример ниши — другой путь, чем готовая услуга: он переписывает предоплату и правило, выбор услуги снимаем.
+    // Пример ниши: другой путь, чем готовая услуга. Он переписывает предоплату и правило, выбор услуги снимаем.
     setServiceId(null);
     setTemplateKey(template.key);
     setTemplateHint(template.hint);
@@ -351,7 +354,7 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
     setTemplateKey(fill.templateKey);
     setTemplateHint(template?.hint ?? null);
     setDateRequired(template?.date_required ?? false);
-    // Как у шаблона: ниша с обязательной датой снимает «Без даты», иначе подсказка и переключатель спорили бы.
+    // Как у примера: ниша с обязательной датой снимает «Без даты», иначе подсказка и переключатель спорили бы.
     if (template?.date_required) setNoDate(false);
     setTitle(fill.title);
     templateTitle.current = '';
@@ -363,14 +366,14 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
     setCancelRule(fill.cancelRule);
   }
 
-  /** «Сохранить как услугу» (§7.6a): из полей формы — в «Мои услуги»; новая услуга сразу выбрана. */
+  /** «Сохранить как услугу» (§7.6a): из полей формы в «Мои услуги»; новая услуга сразу выбрана. */
   async function saveAsService() {
     if (savingService) return;
     const fields = ['title', 'description', 'total', 'prepayment'] as const;
     if (fields.some((f) => errors[f]) || totalRub === null || prepaymentRub === null) {
       setTouched((prev) => ({ ...prev, title: true, description: true, total: true, prepayment: true }));
       haptic('error');
-      showToast('Проверьте название, сумму и предоплату', 'error');
+      snackbar('Проверьте название, сумму и предоплату', { tone: 'error' });
       return;
     }
     setSavingService(true);
@@ -381,10 +384,10 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
       setServices((prev) => [...(prev ?? []), service]);
       setServiceId(service.id);
       haptic('success');
-      showToast('Сохранено в «Мои услуги»');
+      snackbar('Сохранено в «Мои услуги»', { tone: 'success' });
     } catch (error) {
       haptic('error');
-      showToast(errorText(error), 'error');
+      snackbar(errorText(error), { tone: 'error' });
     } finally {
       setSavingService(false);
     }
@@ -406,7 +409,7 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
     setSubmitted(true);
     if (Object.keys(errors).length > 0 || totalRub === null || prepaymentRub === null) {
       haptic('error');
-      showToast('Проверьте выделенные поля', 'error');
+      snackbar('Проверьте выделенные поля', { tone: 'error' });
       const first = FIELD_ORDER.find((field) => errors[field]);
       // После перерисовки: подсказки с ошибками уже на месте и не сдвинут поле из-под фокуса.
       // Ошибка предоплаты при «Своей сумме» — про поле суммы предоплаты, а не про сегменты.
@@ -415,7 +418,7 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
       return;
     }
     if (editing && terms === initialTerms) {
-      showToast('Вы ничего не изменили');
+      snackbar('Вы ничего не изменили');
       return;
     }
     if (sending) return;
@@ -436,7 +439,7 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
       payload.repeat_of = mode.source.public_id;
       if (sameClientName !== null) payload.same_client = sameClient;
     }
-    // Услуга: при правке — только если выбор изменился (null — отвязать), иначе поля нет; при создании — если выбрана.
+    // Услуга: при правке только если выбор изменился (null: отвязать), иначе поля нет; при создании, если выбрана.
     if (editing) {
       if (serviceId !== initialServiceId) payload.service_id = serviceId;
     } else if (serviceId !== null) {
@@ -444,23 +447,21 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
     }
 
     setSending(true);
-    setSubmitError(null);
     try {
       await onSubmit(payload);
     } catch (error) {
       haptic('error');
-      // Услугу скрыли насовсем или она чужая — 404: снимаем выбор, остальной ввод на месте (контракт ЗАДАЧА_08 C).
+      // Услугу скрыли насовсем или она чужая (404): снимаем выбор, остальной ввод на месте (контракт ЗАДАЧА_08 C).
       const lostService = payload.service_id;
       if (error instanceof ApiError && error.status === 404 && typeof lostService === 'number') {
-        showToast('Услуга не найдена, выберите другую', 'error');
+        snackbar('Услуга не найдена, выберите другую', { tone: 'error' });
         setServiceId(null);
         setServices((prev) => prev?.filter((s) => s.id !== lostService) ?? prev);
         setHiddenService((prev) => (prev?.id === lostService ? null : prev));
         return;
       }
-      const text = errorText(error);
-      showToast(text, 'error');
-      if (isRetryable(error)) setSubmitError(text);
+      // Сбой сети или сервера: «Повторить» прямо в Snackbar; ошибка данных чинится в полях, повторять нечего.
+      snackbar(errorText(error), { tone: 'error', action: isRetryable(error) ? { label: 'Повторить', onClick: () => void submit() } : undefined });
     } finally {
       setSending(false);
     }
@@ -468,132 +469,21 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
 
   const payoutEmpty = payoutDetails.trim() === '';
 
+  const screenTitle = mode.kind === 'edit' ? 'Изменить условия' : mode.kind === 'repeat' ? 'Повторить сделку' : 'Новая сделка';
+  const subtitle =
+    mode.kind === 'edit'
+      ? `Сделка #${mode.source.public_id}. Клиент получит новую версию и подтвердит её заново`
+      : mode.kind === 'repeat'
+        ? `Условия из сделки #${mode.source.public_id}, дата новая`
+        : undefined;
+  const submitLabel = editing ? 'Отправить новые условия' : sameClientName !== null && sameClient ? 'Создать и отправить клиенту' : 'Создать сделку';
+
   return (
-    <Panel mode="secondary" className="dg-root">
-      <form
-        className="dg-screen"
-        noValidate
-        onSubmit={(event) => {
-          event.preventDefault();
-          void submit();
-        }}
-      >
-        <div className="dg-head">
-          <Typography.Headline variant="large-strong" asChild>
-            <h1>
-              {mode.kind === 'edit'
-                ? `Изменить условия #${mode.source.public_id}`
-                : mode.kind === 'repeat'
-                  ? `Повторить #${mode.source.public_id}`
-                  : 'Новая сделка'}
-            </h1>
-          </Typography.Headline>
-          {editing ? (
-            <Typography.Text variant="body" color="secondary">
-              Клиент получит новую версию и подтвердит её заново
-            </Typography.Text>
-          ) : null}
-          {repeating ? (
-            <Typography.Text variant="body" color="secondary">
-              Условия — как в прошлый раз. Выберите новую дату и проверьте остальное
-            </Typography.Text>
-          ) : null}
-        </div>
+    <Screen as="form" onSubmit={() => void submit()}>
+      <AppHeader title={screenTitle} subtitle={subtitle} />
 
-        {sameClientName !== null ? (
-          <section className="dg-card" aria-labelledby="deal-client">
-            <Typography.Text variant="title" asChild>
-              <h2 id="deal-client">Клиент</h2>
-            </Typography.Text>
-            <ControlRow
-              title={`Тот же клиент: ${sameClientName}`}
-              subtitle={
-                sameClient
-                  ? 'Карточка сразу уйдёт клиенту в чат с ботом — ссылку пересылать не нужно'
-                  : 'Будет обычная ссылка — отправите её клиенту сами'
-              }
-              control={<Switch checked={sameClient} onChange={(event) => setSameClient(event.currentTarget.checked)} />}
-            />
-          </section>
-        ) : null}
-
-        {needProfile ? (
-          <section className="dg-card" aria-labelledby="about-you">
-            <Typography.Text variant="title" asChild>
-              <h2 id="about-you">О вас</h2>
-            </Typography.Text>
-
-            <Field
-              label="Как вас подписать в карточке"
-              htmlFor="display-name"
-              anchorId={anchor('display_name')}
-              hint="Клиент увидит это имя как исполнителя"
-              error={shown('display_name')}
-            >
-              <Input
-                id="display-name"
-                value={displayName}
-                maxLength={NAME_MAX}
-                placeholder="Анна Аксёнова"
-                onChange={(event) => setDisplayName(event.currentTarget.value)}
-                onBlur={() => markTouched('display_name')}
-              />
-            </Field>
-
-            <Field label="Ваш статус">
-              <div>
-                {TAX_MODES.map((mode) => (
-                  <ControlRow
-                    key={mode}
-                    title={TAX_MODE_LABEL[mode]}
-                    control={
-                      <Radio
-                        name="tax-mode"
-                        value={mode}
-                        checked={taxMode === mode}
-                        onChange={() => setTaxMode(mode)}
-                      />
-                    }
-                  />
-                ))}
-              </div>
-            </Field>
-
-            <Field
-              label="Реквизиты для перевода"
-              htmlFor="payout-details"
-              anchorId={anchor('payout_details')}
-              hint="например: СБП +7 900 000-00-00, Т-Банк, получатель Анна А."
-              error={shown('payout_details')}
-            >
-              <Textarea
-                id="payout-details"
-                mode="secondary"
-                rows={2}
-                value={payoutDetails}
-                maxLength={PAYOUT_MAX}
-                onChange={(event) => setPayoutDetails(event.currentTarget.value)}
-                onBlur={() => markTouched('payout_details')}
-              />
-            </Field>
-
-            {payoutEmpty ? (
-              <p className="dg-warning">
-                <span aria-hidden="true">⚠️</span>
-                <span>
-                  Без реквизитов клиент не сможет перевести вам деньги — останется только оплата по ссылке
-                  {me.config.provider === 'none' ? ', а она на этом сервере пока не подключена' : ''}.
-                </span>
-              </p>
-            ) : null}
-          </section>
-        ) : null}
-
-        <section className="dg-card" aria-labelledby="deal-terms">
-          <Typography.Text variant="title" asChild>
-            <h2 id="deal-terms">Условия</h2>
-          </Typography.Text>
-
+      {editing && chips.length === 0 ? null : (
+        <Island id="deal-service" title="Услуга">
           {chips.length > 0 ? (
             <Field
               label="Выбрать услугу"
@@ -606,196 +496,243 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
               <ServiceChips chips={chips} value={serviceId} onSelect={selectService} />
             </Field>
           ) : null}
-
-          <Field
-            label={chips.length > 0 ? 'Или начните с примера' : 'Шаблон'}
-            hint={templateHint ?? 'Шаблон подставит название, предоплату и правило отмены'}
-          >
-            <TemplateChips items={templates} value={serviceId === null ? templateKey : null} onSelect={applyTemplate} />
-          </Field>
-
-          <Field label="Что делаем" htmlFor="deal-title" anchorId={anchor('title')} error={shown('title')}>
-            <Input
-              id="deal-title"
-              value={title}
-              maxLength={TITLE_MAX}
-              placeholder="Маникюр с покрытием"
-              onChange={(event) => setTitle(event.currentTarget.value)}
-              onBlur={() => markTouched('title')}
-            />
-          </Field>
-
-          <Field
-            label="Уточнения"
-            htmlFor="deal-description"
-            anchorId={anchor('description')}
-            hint="Адрес, материалы, что входит в цену — всё, о чём договорились"
-            error={shown('description')}
-          >
-            <Textarea
-              id="deal-description"
-              mode="secondary"
-              rows={3}
-              value={description}
-              maxLength={DESCRIPTION_MAX}
-              onChange={(event) => setDescription(event.currentTarget.value)}
-              onBlur={() => markTouched('description')}
-            />
-          </Field>
-
-          <Field
-            label="Когда"
-            htmlFor="deal-date"
-            anchorId={anchor('scheduled_at')}
-            hint="Время по Москве (МСК)"
-            error={shown('scheduled_at')}
-          >
-            <div className="dg-field">
-              <input
-                ref={dateRef}
-                id="deal-date"
-                className="dg-datetime"
-                type="datetime-local"
-                value={scheduledLocal}
-                min={minDateValue}
-                disabled={noDate}
-                onChange={(event) => setScheduledLocal(event.currentTarget.value)}
-                onBlur={() => markTouched('scheduled_at')}
-              />
-              <ControlRow
-                title="Без даты"
-                subtitle="Срок обсудим отдельно"
-                control={
-                  <Switch
-                    checked={noDate}
-                    onChange={(event) => {
-                      const on = event.currentTarget.checked;
-                      setNoDate(on);
-                      markTouched('scheduled_at');
-                      if (on) setScheduledLocal('');
-                    }}
-                  />
-                }
-              />
-            </div>
-          </Field>
-
-          <Field label="Сумма, ₽" htmlFor="deal-total" anchorId={anchor('total')} error={shown('total')}>
-            <Input
-              id="deal-total"
-              inputMode="numeric"
-              autoComplete="off"
-              value={totalRaw}
-              placeholder="2500"
-              onChange={(event) => setTotalRaw(digitsOnly(event.currentTarget.value, 7))}
-              onBlur={() => markTouched('total')}
-            />
-          </Field>
-
-          <Field
-            label="Предоплата"
-            anchorId={anchor('prepayment')}
-            error={shown('prepayment')}
-            hint={
-              prepaymentRub !== null && prepaymentRub > 0
-                ? `Предоплата ${formatRub(prepaymentRub)}, остаток ${formatRub(Math.max((totalRub ?? 0) - prepaymentRub, 0))}`
-                : 'Без предоплаты клиент платит всю сумму после выполнения'
-            }
-          >
-            <Segmented<PrepayMode>
-              ariaLabel="Предоплата"
-              value={prepayMode}
-              onChange={(mode) => {
-                setPrepayMode(mode);
-                setAutoPercent(null);
-                markTouched('prepayment');
-              }}
-              options={[
-                { value: 'none', label: 'Нет' },
-                { value: 'p30', label: '30 %' },
-                { value: 'p50', label: '50 %' },
-                { value: 'custom', label: 'Своя' },
-              ]}
-            />
-          </Field>
-
-          {prepayMode === 'custom' ? (
-            <Field label="Сумма предоплаты, ₽" htmlFor="deal-prepayment" anchorId={PREPAY_CUSTOM_ANCHOR}>
-              <Input
-                id="deal-prepayment"
-                inputMode="numeric"
-                autoComplete="off"
-                value={prepayCustomValue}
-                placeholder="0"
-                onChange={(event) => {
-                  setAutoPercent(null);
-                  setPrepayCustomRaw(digitsOnly(event.currentTarget.value, 7));
-                }}
-                onBlur={() => markTouched('prepayment')}
-              />
+          {editing ? null : (
+            <Field
+              label={chips.length > 0 ? 'Или начните с примера' : 'Пример по нише'}
+              hint={templateHint ?? 'Пример подставит название, предоплату и правило отмены, дальше их можно поменять'}
+            >
+              <TemplateChips items={templates} value={serviceId === null ? templateKey : null} onSelect={applyTemplate} />
             </Field>
-          ) : null}
+          )}
+        </Island>
+      )}
 
-          <Field label="Правило отмены" hint={CANCEL_RULE_TEXT[cancelRule]}>
+      {sameClientName !== null ? (
+        <Island id="deal-client" title="Клиент">
+          <ControlRow
+            title={`Тот же клиент: ${sameClientName}`}
+            subtitle={
+              sameClient
+                ? 'Карточка сразу уйдёт клиенту в чат с ботом, ссылку пересылать не нужно'
+                : 'Будет обычная ссылка, отправите её клиенту сами'
+            }
+            control={<Switch checked={sameClient} onChange={(event) => setSameClient(event.currentTarget.checked)} />}
+          />
+        </Island>
+      ) : null}
+
+      {needProfile ? (
+        <Island id="about-you" title="О вас">
+          <Field
+            label="Как вас подписать в карточке"
+            htmlFor="display-name"
+            anchorId={anchor('display_name')}
+            hint="Клиент увидит это имя как исполнителя"
+            error={shown('display_name')}
+          >
+            <Input
+              id="display-name"
+              value={displayName}
+              maxLength={NAME_MAX}
+              placeholder="Анна Аксёнова"
+              onChange={(event) => setDisplayName(event.currentTarget.value)}
+              onBlur={() => markTouched('display_name')}
+            />
+          </Field>
+
+          <Field label="Ваш статус">
             <div>
-              {CANCEL_RULES.map((rule) => (
+              {TAX_MODES.map((mode) => (
                 <ControlRow
-                  key={rule}
-                  title={CANCEL_RULE_LABEL[rule]}
-                  control={
-                    <Radio
-                      name="cancel-rule"
-                      value={rule}
-                      checked={cancelRule === rule}
-                      onChange={() => setCancelRule(rule)}
-                    />
-                  }
+                  key={mode}
+                  title={TAX_MODE_LABEL[mode]}
+                  control={<Radio name="tax-mode" value={mode} checked={taxMode === mode} onChange={() => setTaxMode(mode)} />}
                 />
               ))}
             </div>
           </Field>
-        </section>
 
-        {services !== null && canSaveAsService({ selectedId: serviceId, title, totalRaw }) ? (
-          <div className="dg-save-service">
-            <Button type="button" variant="ghost" size="medium" loading={savingService} onClick={() => void saveAsService()}>
-              Сохранить как услугу
-            </Button>
-            <Typography.Text variant="description" color="tertiary">
-              В следующий раз эти условия подставятся в одно нажатие
-            </Typography.Text>
+          <Field
+            label="Реквизиты для перевода"
+            htmlFor="payout-details"
+            anchorId={anchor('payout_details')}
+            hint="Например: СБП +7 900 000-00-00, Т-Банк, получатель Анна А."
+            error={shown('payout_details')}
+          >
+            <Textarea
+              id="payout-details"
+              mode="secondary"
+              rows={2}
+              value={payoutDetails}
+              maxLength={PAYOUT_MAX}
+              onChange={(event) => setPayoutDetails(event.currentTarget.value)}
+              onBlur={() => markTouched('payout_details')}
+            />
+          </Field>
+
+          {payoutEmpty ? (
+            <p className="dg-warning">
+              Без реквизитов клиент не сможет перевести вам деньги, останется только оплата по ссылке
+              {me.config.provider === 'none' ? ', а она на этом сервере пока не подключена' : ''}.
+            </p>
+          ) : null}
+        </Island>
+      ) : null}
+
+      <Island id="deal-terms" title="Условия">
+        <Field label="Что делаем" htmlFor="deal-title" anchorId={anchor('title')} error={shown('title')}>
+          <Input
+            id="deal-title"
+            value={title}
+            maxLength={TITLE_MAX}
+            placeholder="Маникюр с покрытием"
+            onChange={(event) => setTitle(event.currentTarget.value)}
+            onBlur={() => markTouched('title')}
+          />
+        </Field>
+
+        <Field
+          label="Уточнения"
+          htmlFor="deal-description"
+          anchorId={anchor('description')}
+          hint="Адрес, материалы, что входит в сумму: всё, о чём договорились"
+          error={shown('description')}
+        >
+          <Textarea
+            id="deal-description"
+            mode="secondary"
+            rows={3}
+            value={description}
+            maxLength={DESCRIPTION_MAX}
+            onChange={(event) => setDescription(event.currentTarget.value)}
+            onBlur={() => markTouched('description')}
+          />
+        </Field>
+
+        <Field label="Когда" htmlFor="deal-date" anchorId={anchor('scheduled_at')} hint="Время по Москве (МСК)" error={shown('scheduled_at')}>
+          <div className="dg-field">
+            <input
+              ref={dateRef}
+              id="deal-date"
+              className="dg-datetime"
+              type="datetime-local"
+              value={scheduledLocal}
+              min={minDateValue}
+              disabled={noDate}
+              onChange={(event) => setScheduledLocal(event.currentTarget.value)}
+              onBlur={() => markTouched('scheduled_at')}
+            />
+            <ControlRow
+              title="Без даты"
+              subtitle="Срок обсудите отдельно"
+              control={
+                <Switch
+                  checked={noDate}
+                  onChange={(event) => {
+                    const on = event.currentTarget.checked;
+                    setNoDate(on);
+                    markTouched('scheduled_at');
+                    if (on) setScheduledLocal('');
+                  }}
+                />
+              }
+            />
           </div>
+        </Field>
+
+        <Field label="Сумма, ₽" htmlFor="deal-total" anchorId={anchor('total')} error={shown('total')}>
+          <Input
+            id="deal-total"
+            inputMode="numeric"
+            autoComplete="off"
+            value={totalRaw}
+            placeholder="2500"
+            onChange={(event) => setTotalRaw(digitsOnly(event.currentTarget.value, 7))}
+            onBlur={() => markTouched('total')}
+          />
+        </Field>
+
+        <Field
+          label="Предоплата"
+          anchorId={anchor('prepayment')}
+          error={shown('prepayment')}
+          hint={
+            prepaymentRub !== null && prepaymentRub > 0
+              ? `Предоплата ${formatRub(prepaymentRub)}, остаток ${formatRub(Math.max((totalRub ?? 0) - prepaymentRub, 0))}`
+              : 'Без предоплаты клиент платит всю сумму после выполнения'
+          }
+        >
+          <Segmented<PrepayMode>
+            ariaLabel="Предоплата"
+            value={prepayMode}
+            onChange={(mode) => {
+              setPrepayMode(mode);
+              setAutoPercent(null);
+              markTouched('prepayment');
+            }}
+            options={[
+              { value: 'none', label: 'Нет' },
+              { value: 'p30', label: '30\u00A0%' },
+              { value: 'p50', label: '50\u00A0%' },
+              { value: 'custom', label: 'Своя' },
+            ]}
+          />
+        </Field>
+
+        {prepayMode === 'custom' ? (
+          <Field label="Сумма предоплаты, ₽" htmlFor="deal-prepayment" anchorId={PREPAY_CUSTOM_ANCHOR}>
+            <Input
+              id="deal-prepayment"
+              inputMode="numeric"
+              autoComplete="off"
+              value={prepayCustomValue}
+              placeholder="0"
+              onChange={(event) => {
+                setAutoPercent(null);
+                setPrepayCustomRaw(digitsOnly(event.currentTarget.value, 7));
+              }}
+              onBlur={() => markTouched('prepayment')}
+            />
+          </Field>
         ) : null}
 
-        {submitError ? (
-          <section className="dg-card dg-card_flat" role="alert">
-            <Typography.Text variant="body" color="secondary">
-              {`Не отправилось: ${submitError}`}
-            </Typography.Text>
-            <Button type="button" variant="secondary" size="medium" stretched disabled={sending} onClick={() => void submit()}>
-              Повторить
-            </Button>
-          </section>
-        ) : null}
+        <Field label="Правило отмены" hint={CANCEL_RULE_TEXT[cancelRule]}>
+          <div>
+            {CANCEL_RULES.map((rule) => (
+              <ControlRow
+                key={rule}
+                title={CANCEL_RULE_LABEL[rule]}
+                control={<Radio name="cancel-rule" value={rule} checked={cancelRule === rule} onChange={() => setCancelRule(rule)} />}
+              />
+            ))}
+          </div>
+        </Field>
+      </Island>
 
+      {services !== null && canSaveAsService({ selectedId: serviceId, title, totalRaw }) ? (
+        <div className="dg-save-service">
+          <Button type="button" variant="secondary" size="medium" loading={savingService} onClick={() => void saveAsService()}>
+            Сохранить как услугу
+          </Button>
+          <Typography.Label variant="small" className="dg-note">
+            В следующий раз эти условия подставятся в одно нажатие
+          </Typography.Label>
+        </div>
+      ) : null}
+
+      <div className="dg-actions">
         <Button type="submit" variant="primary" size="large" stretched loading={sending} disabled={sending}>
-          {editing ? 'Отправить новые условия' : sameClientName !== null && sameClient ? 'Создать и отправить клиенту' : 'Создать карточку'}
+          {submitLabel}
         </Button>
-
-        <Typography.Text variant="description" color="tertiary">
-          {editing ? (
-            'Карточка обновится у вас и у клиента, а клиенту придёт перечень изменений.'
-          ) : sameClientName !== null && sameClient ? (
-            `Карточка сразу уйдёт клиенту (${sameClientName}), а вам — в чат с ботом.`
-          ) : (
-            <>
-              Карточка появится в вашем чате с ботом — оттуда её можно отправить клиенту ссылкой.
-              {me.config.demo ? ' Демо-режим включён: в карточке будет кнопка «Открыть как клиент».' : ''}
-            </>
-          )}
-          {me.config.provider === 'none' ? ' Оплата по ссылке на этом сервере не подключена (тестовая среда).' : ''}
-        </Typography.Text>
-      </form>
-    </Panel>
+        <Typography.Label variant="small" className="dg-note dg-note_center">
+          {editing
+            ? 'Карточка обновится у вас и у клиента, а клиенту придёт перечень изменений'
+            : sameClientName !== null && sameClient
+              ? `Карточка сразу уйдёт клиенту (${sameClientName}), а вам в чат с ботом`
+              : 'Карточка появится в вашем чате с ботом, ссылку на неё вы отправите клиенту'}
+          {me.config.provider === 'none' ? '. Оплата по ссылке на этом сервере не подключена (тестовая среда)' : ''}
+        </Typography.Label>
+      </div>
+    </Screen>
   );
 }

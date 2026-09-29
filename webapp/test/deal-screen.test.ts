@@ -107,8 +107,8 @@ describe('другое время (ЗАДАЧА_08 D)', () => {
       'keep_as_is:secondary',
       'cancel:destructive',
     ]);
-    expect(layout.buttons[0].label).toBe('Принять Чт 1 окт, 19:00');
-    expect(acceptTimeLabel(proposal.scheduled_at)).toBe('Принять Чт 1 окт, 19:00');
+    expect(layout.buttons[0].label).toBe('Принять чт 1 окт, 19:00');
+    expect(acceptTimeLabel(proposal.scheduled_at)).toBe('Принять чт 1 окт, 19:00');
   });
 
   it('действие без предложения — нейтральная подпись', () => {
@@ -123,8 +123,8 @@ describe('другое время (ЗАДАЧА_08 D)', () => {
   });
 
   it('строка над действиями: исполнителю — что предлагает клиент, клиенту — что он предложил', () => {
-    expect(proposalNote('seller', proposal)).toBe('Клиент предлагает 01.10.2026 19:00 (МСК)');
-    expect(proposalNote('client', proposal)).toBe('Вы предложили 01.10.2026 19:00 (МСК). Ждём ответа исполнителя');
+    expect(proposalNote('seller', proposal)).toBe('Клиент предлагает чт 1 окт, 19:00 (МСК)');
+    expect(proposalNote('client', proposal)).toBe('Вы предложили чт 1 окт, 19:00 (МСК). Ждём ответа исполнителя');
   });
 
   it('новые подписи без длинных тире и точек-разделителей', () => {
@@ -248,7 +248,7 @@ describe('вид', () => {
 
 describe('тост после действия (прогон удобства ЗАДАЧА_08 F)', () => {
   it('говорит, что произошло, а не просто «Готово»', () => {
-    expect(doneText('confirm')).toBe('Условия подтверждены. Исполнитель получил уведомление');
+    expect(doneText('confirm')).toBe('Условия подтверждены. Исполнитель получил сообщение');
     expect(doneText('accept')).toMatch(/^Работа принята/);
     expect(doneText('receipt_pdf')).toBe('Готово');
   });

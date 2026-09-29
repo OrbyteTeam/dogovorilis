@@ -1,6 +1,14 @@
 // DEV-ONLY заглушка API для визуальной проверки экранов без сервера: включается VITE_MOCK_API=1.
-// В прод-бандл не попадает — импорт в api.ts стоит под `import.meta.env.DEV` (мёртвая ветка вырезается сборкой).
-// Данные повторяют контракт docs/SPEC.md §7.8 и шаблоны §7.6; экран сделки — §7.9 и переходы §5.2 (упрощённо).
+// В прод-бандл не попадает: импорт в api.ts стоит под `import.meta.env.DEV` (мёртвая ветка вырезается сборкой).
+// Данные повторяют контракт SPEC §7.8 и примеры §7.6, тексты статусов как у сервера (server/src/texts.ts).
+//
+// Сценарии для скриншотов состояний (ЗАДАЧА_07), без перезапуска Vite, параметрами адреса до «#»:
+//   ?mock_hang=me,deals,deal    запрос не отвечает: видно загрузку (скелет);
+//   ?mock_fail=me,deals,deal    запрос падает «нет связи»: видно ошибку с «Повторить»;
+//   ?mock_fail=write            отправка формы падает: Snackbar с «Повторить»;
+//   ?mock_deals=none|seller|client|all, ?mock_profile=1   данные, как у одноимённых VITE_MOCK_*.
+// Переменные VITE_MOCK_* по-прежнему работают и действуют, если параметра в адресе нет.
+// Экран сделки (§7.9), «Мои услуги» (§7.6a), «Другое время» (§7.10), надёжность (§7.11) и переходы §5.2 — упрощённо.
 import { ApiError } from '../api';
 import { CANCEL_RULE_TEXT, formatDateTime, formatKopecks, moscowInputToIso } from '../format';
 import { addDays, dayKey } from '../schedule';
@@ -31,12 +39,27 @@ import type {
   UpdateDealResponse,
 } from '../types';
 
+/** Параметр сценария из адреса (`?mock_x=…`) или переменной VITE_MOCK_X. */
+function scenario(name: string, env: unknown): string {
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get(`mock_${name}`);
+    if (fromUrl !== null) return fromUrl;
+  } catch {
+    /* адреса нет (тесты): берём переменную */
+  }
+  return String(env ?? '');
+}
+
+const listed = (name: string, env: unknown) =>
+  scenario(name, env)
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+
 const BOT = String(import.meta.env.VITE_BOT_USERNAME ?? 'dogovorilis_bot').trim();
 const CARD_SENT = import.meta.env.VITE_MOCK_CARD_SENT !== '0';
-/** VITE_MOCK_PROFILE=1 или `?mock_profile=1` — как будто профиль исполнителя уже сохранён (блок «О вас» скрыт). */
-const HAS_PROFILE =
-  import.meta.env.VITE_MOCK_PROFILE === '1' ||
-  (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('mock_profile') === '1');
+/** VITE_MOCK_PROFILE=1 или ?mock_profile=1: профиль исполнителя уже сохранён (блок «О вас» скрыт). */
+const HAS_PROFILE = scenario('profile', import.meta.env.VITE_MOCK_PROFILE) === '1';
 
 const DEMO_PROFILE: SellerProfile = {
   display_name: 'Анна Аксёнова',
@@ -82,7 +105,7 @@ const TEMPLATES: TemplatesResponse = {
       prepayment_percent: 30,
       cancel_rule: 'free_24h',
       date_required: true,
-      hint: 'Дата обязательна — клиент увидит время визита',
+      hint: 'Дата обязательна: клиент увидит, когда приходить',
     },
     {
       key: 'lesson',
@@ -91,16 +114,16 @@ const TEMPLATES: TemplatesResponse = {
       prepayment_percent: 100,
       cancel_rule: 'free_24h',
       date_required: true,
-      hint: 'Предоплата 100 % — занятие оплачивается заранее',
+      hint: 'Предоплата 100 %: занятие оплачивается заранее',
     },
     {
       key: 'repair',
-      label: 'Ремонт / выезд',
-      title: 'Ремонт / выезд мастера',
+      label: 'Ремонт и выезд',
+      title: 'Ремонт с выездом',
       prepayment_percent: 0,
       cancel_rule: 'free_24h',
       date_required: false,
-      hint: 'В «Уточнениях» напишите адрес и что входит в диагностику',
+      hint: 'В уточнениях укажите адрес и сколько стоит диагностика',
     },
     {
       key: 'custom_order',
@@ -109,7 +132,7 @@ const TEMPLATES: TemplatesResponse = {
       prepayment_percent: 50,
       cancel_rule: 'nonrefundable',
       date_required: true,
-      hint: 'Дата — день выдачи заказа',
+      hint: 'Дата: день, когда отдаёте изделие',
     },
     {
       key: 'freelance',
@@ -118,7 +141,7 @@ const TEMPLATES: TemplatesResponse = {
       prepayment_percent: 50,
       cancel_rule: 'full_refund',
       date_required: true,
-      hint: 'Дата — срок сдачи',
+      hint: 'Дата: срок сдачи работы',
     },
     {
       key: 'free',
@@ -132,13 +155,13 @@ const TEMPLATES: TemplatesResponse = {
   ],
 };
 
-// ───────────── «Мои сделки»: набор на разные дни, роли и статусы (VITE_MOCK_DEALS=none|seller|client) ─────────────
+// ───────────── «Сделки»: набор на разные дни, роли и статусы (?mock_deals / VITE_MOCK_DEALS=none|seller|client) ─────────────
 
-const MOCK_DEALS = String(import.meta.env.VITE_MOCK_DEALS ?? 'all');
+const MOCK_DEALS = scenario('deals', import.meta.env.VITE_MOCK_DEALS) || 'all';
 
 const SHORT: Record<DealStatus, { seller: string; client: string }> = {
   awaiting_confirmation: { seller: 'ждём подтверждения', client: 'подтвердите условия' },
-  changes_requested: { seller: 'клиент предложил изменения', client: 'ждём новые условия' },
+  changes_requested: { seller: 'предложены изменения', client: 'ждём новые условия' },
   declined: { seller: 'клиент отказался', client: 'вы отказались' },
   expired: { seller: 'срок истёк', client: 'срок истёк' },
   awaiting_prepayment: { seller: 'ждём предоплату', client: 'внесите предоплату' },
@@ -146,7 +169,7 @@ const SHORT: Record<DealStatus, { seller: string; client: string }> = {
   awaiting_acceptance: { seller: 'ждём приёмку', client: 'примите работу' },
   remarks: { seller: 'есть замечания', client: 'ждём исправлений' },
   awaiting_payment: { seller: 'ждём остаток', client: 'оплатите остаток' },
-  paid: { seller: 'оплачено, нужен чек', client: 'ждём чек' },
+  paid: { seller: 'нужен чек', client: 'ждём чек' },
   closed: { seller: 'закрыта', client: 'закрыта' },
   cancelled: { seller: 'отменена', client: 'отменена' },
 };
@@ -202,7 +225,7 @@ const MOCK_DEAL_ROWS: MockDeal[] = [
   { id: 'Cl2Past110', role: 'seller', status: 'closed', title: 'Маникюр с покрытием', at: [-2, '11:00'], total: 2500, prepay: 750, client: 'Саша', description: 'Френч, форма миндаль', serviceId: 1, durationMin: 90 },
   // «Повторить» со скрытой услугой: услуга «Педикюр» потом скрыта, но повтор берёт её (§7.6a).
   { id: 'Cn1Cancel9', role: 'seller', status: 'cancelled', title: 'Педикюр', at: [-1, '09:00'], total: 3000, prepay: 900, client: 'Вера', serviceId: 4, durationMin: 120 },
-  { id: 'NoDateRep1', role: 'seller', status: 'awaiting_confirmation', title: 'Ремонт / выезд мастера', at: null, total: 4000, prepay: 0, template: 'repair', description: 'Адрес: ул. Ленина, 5. Диагностика стиральной машины' },
+  { id: 'NoDateRep1', role: 'seller', status: 'awaiting_confirmation', title: 'Ремонт с выездом', at: null, total: 4000, prepay: 0, template: 'repair', description: 'Адрес: ул. Ленина, 5. Диагностика стиральной машины' },
   { id: 'ExpNoDate1', role: 'seller', status: 'expired', title: 'Изделие на заказ', at: null, total: 6000, prepay: 3000, template: 'free', cancel: 'nonrefundable' },
   { id: 'Later30day', role: 'seller', status: 'scheduled', title: 'Занятие 60 минут', at: [30, '19:00'], total: 2000, prepay: 2000, client: 'Игорь', template: 'lesson' },
   { id: 'PaidRcpt01', role: 'seller', status: 'paid', title: 'Маникюр и покрытие', at: [-1, '16:00'], total: 2200, prepay: 660, client: 'Ксения' },
@@ -215,11 +238,11 @@ const MOCK_DEAL_ROWS: MockDeal[] = [
     at: [2, '19:00'],
     total: 2000,
     prepay: 600,
-    seller: 'Мастер Ирина',
+    seller: 'Ирина Смирнова',
     version: 2,
     history: [{ at: [2, '10:00'], total: 2000, prepay: 600, requestAfter: 'Можно перенести на вечер? Утром работаю' }],
   },
-  { id: 'Cli1Accept', role: 'client', status: 'awaiting_acceptance', title: 'Ремонт стиральной машины', at: [-1, '12:00'], total: 4500, prepay: 0, seller: 'Сервис «Мастер на час»', template: 'repair' },
+  { id: 'Cli1Accept', role: 'client', status: 'awaiting_acceptance', title: 'Ремонт стиральной машины', at: [-1, '12:00'], total: 4500, prepay: 0, seller: 'Сервис «Руки на час»', template: 'repair' },
   { id: 'Cli3Closed', role: 'client', status: 'closed', title: 'Стрижка', at: [-3, '13:00'], total: 1200, prepay: 0, seller: 'Дмитрий' },
 ];
 
@@ -324,8 +347,8 @@ function dealView(row: MockDeal): DealView {
   };
 }
 
-/** VITE_MOCK_WRITE_FAIL=network|500 — отправка формы падает: видно тост и «Повторить»; conflict — действие экрана сделки отвечает 409. */
-const WRITE_FAIL = String(import.meta.env.VITE_MOCK_WRITE_FAIL ?? '');
+/** VITE_MOCK_WRITE_FAIL=network|500 или ?mock_fail=write: отправка формы падает; conflict — действие экрана сделки отвечает 409. */
+const WRITE_FAIL = listed('fail', '').includes('write') ? 'network' : String(import.meta.env.VITE_MOCK_WRITE_FAIL ?? '');
 
 function maybeFailWrite(): void {
   if (WRITE_FAIL === 'network') throw new ApiError(0, 'network', 'Нет связи. Проверьте интернет и повторите');
@@ -405,7 +428,7 @@ function createDeal(body: CreateDealRequest): CreateDealResponse {
   return {
     deal,
     link: deal.link,
-    share_text: `Подтвердите нашу договорённость: ${body.title}`,
+    share_text: `Подтвердите условия: ${body.title}`,
     card_sent: CARD_SENT,
     client_card_sent: withClient,
     client: body.same_client && source?.client ? { name: source.client } : null,
@@ -452,7 +475,7 @@ function checkService(body: ServiceBody): Omit<Service, 'id' | 'active' | 'sort_
   const description = body.description?.trim() ? body.description.trim() : null;
   if (description && description.length > 1000) throw new ApiError(400, 'validation', 'Уточнения до 1000 символов');
   if (!Number.isInteger(body.price_rub) || body.price_rub < 1 || body.price_rub > 1_000_000) {
-    throw new ApiError(400, 'validation', 'Цена от 1 до 1 000 000 ₽');
+    throw new ApiError(400, 'validation', 'Сумма от 1 до 1 000 000 ₽');
   }
   const duration = body.duration_min ?? 60;
   if (!Number.isInteger(duration) || duration < 15 || duration > 720 || duration % 15 !== 0) {
@@ -463,7 +486,7 @@ function checkService(body: ServiceBody): Omit<Service, 'id' | 'active' | 'sort_
     (kind === 'none' && value === 0) ||
     (kind === 'percent' && Number.isInteger(value) && value >= 1 && value <= 100) ||
     (kind === 'amount' && Number.isInteger(value) && value >= 1 && value <= body.price_rub);
-  if (!prepaymentOk) throw new ApiError(400, 'validation', 'Предоплата: процент от 1 до 100 или сумма не больше цены');
+  if (!prepaymentOk) throw new ApiError(400, 'validation', 'Предоплата: процент от 1 до 100 или не больше суммы');
   return {
     title,
     description,
@@ -518,8 +541,8 @@ const ME_NAME = 'Анна Аксёнова';
 /** Сделка, которую сервер не покажет: 403 «Это не ваша сделка» (`#/deals/NotYours01`). */
 const FORBIDDEN_ID = 'NotYours01';
 
-const E1 = 'Это действие уже недоступно — карточка обновлена.';
-const E7 = 'После выполнения работы отмена — только по согласованию с исполнителем. Напишите ему в чат.';
+const E1 = 'Это действие уже недоступно, карточка обновлена';
+const E7 = 'После выполнения работы отменить сделку можно только по согласованию с исполнителем. Напишите ему в чат';
 
 interface MockFull {
   /** Все версии по возрастанию; последняя — текущая, её условия берутся из строки (их правит PUT). */
@@ -543,7 +566,7 @@ interface MockFull {
 const FULL = new Map<string, MockFull>();
 
 function sellerNameOf(row: MockDeal): string {
-  return row.role === 'seller' ? (profile?.display_name ?? DEMO_PROFILE.display_name) : (row.seller ?? 'Мастер Ирина');
+  return row.role === 'seller' ? (profile?.display_name ?? DEMO_PROFILE.display_name) : (row.seller ?? 'Ирина Смирнова');
 }
 
 function clientNameOf(row: MockDeal): string | null {
@@ -589,7 +612,7 @@ function mockPayment(
     status,
     amount_kopecks: amountKopecks,
     at,
-    label: `${what} ${formatKopecks(amountKopecks)} · ${how} · ${PAYMENT_STATUS[status]}`,
+    label: `${what} ${formatKopecks(amountKopecks)}, ${how}: ${PAYMENT_STATUS[status]}`,
   };
 }
 
@@ -724,7 +747,7 @@ function statusTextOf(row: MockDeal, role: DealRole): string {
   const when = iso ? formatDateTime(iso) : null;
   const text: Record<DealStatus, [string, string]> = {
     awaiting_confirmation: ['Ждём подтверждения клиента', 'Подтвердите условия'],
-    changes_requested: ['Клиент предложил изменения — измените условия или оставьте как есть', 'Ждём новые условия от исполнителя'],
+    changes_requested: ['Клиент предложил изменения. Измените условия или оставьте как есть', 'Ждём новые условия от исполнителя'],
     declined: ['Клиент отказался от сделки', 'Вы отказались от сделки'],
     expired: ['Срок подтверждения истёк (72 ч)', 'Срок подтверждения истёк (72 ч)'],
     awaiting_prepayment: [`Ждём предоплату ${prepay}`, `Внесите предоплату ${prepay}`],
@@ -733,7 +756,7 @@ function statusTextOf(row: MockDeal, role: DealRole): string {
       when ? `Всё согласовано на ${when}. Ждём выполнения` : 'Всё согласовано. Ждём выполнения',
     ],
     awaiting_acceptance: ['Ждём приёмку клиентом', 'Примите работу или оставьте замечания'],
-    remarks: ['Клиент оставил замечания — исправьте и сообщите', 'Ждём исправлений от исполнителя'],
+    remarks: ['Клиент оставил замечания. Исправьте и сообщите', 'Ждём исправлений от исполнителя'],
     awaiting_payment: [`Ждём остаток ${remaining}`, `Оплатите остаток ${remaining}`],
     paid: ['Оплачено. Приложите чек', 'Оплачено. Ждём чек от исполнителя'],
     closed: ['Сделка закрыта, квитанция отправлена', 'Сделка закрыта, квитанция отправлена'],
@@ -768,9 +791,9 @@ function cancelConsequenceOf(row: MockDeal, st: MockFull, role: DealRole): strin
   const prepaid = st.payments.some((p) => p.kind === 'prepayment' && p.status === 'succeeded');
   if (!prepaid) return null;
   const sum = formatKopecks(row.prepay * 100);
-  if (role === 'seller') return `Предоплату ${sum} нужно будет вернуть клиенту — тем же способом, каким она пришла.`;
+  if (role === 'seller') return `Предоплату ${sum} нужно будет вернуть клиенту тем же способом, каким она пришла`;
   return clientRefundExpected(row)
-    ? `По правилу отмены предоплата ${sum} должна вернуться — исполнитель вернёт её тем же способом.`
+    ? `По правилу отмены предоплата ${sum} должна вернуться, исполнитель вернёт её тем же способом`
     : `⚠️ По правилу отмены предоплата ${sum} не вернётся.`;
 }
 
@@ -836,7 +859,7 @@ function dealFull(row: MockDeal, role: DealRole): DealFull {
     status_text: statusTextOf(row, role),
     status_short: SHORT[row.status][role],
     link: `https://max.ru/${BOT}?start=d_${row.id}`,
-    share_text: `Подтвердите нашу договорённость: ${row.title}`,
+    share_text: `Подтвердите условия: ${row.title}`,
     terms: {
       version: current.version,
       title: row.title,
@@ -890,8 +913,8 @@ function maybeFailAction(): void {
 
 function textOf(body: DealActionRequest): string {
   const text = (body.text ?? '').trim();
-  if (text.length === 0) throw new ApiError(400, 'validation', 'Напишите текст — от 1 до 500 символов');
-  if (text.length > 500) throw new ApiError(400, 'validation', 'Слишком длинно — до 500 символов.');
+  if (text.length === 0) throw new ApiError(400, 'validation', 'Напишите текст от 1 до 500 символов');
+  if (text.length > 500) throw new ApiError(400, 'validation', 'Слишком длинно: до 500 символов');
   return text;
 }
 
@@ -924,7 +947,7 @@ function applyAction(publicId: string, body: DealActionRequest): DealActionRespo
       const current = st.versions[st.versions.length - 1];
       if (typeof body.version !== 'number') throw new ApiError(400, 'validation', 'Не указана версия условий');
       if (body.version !== current.version) {
-        throw new ApiError(409, 'version_mismatch', 'Условия изменились — посмотрите новую версию');
+        throw new ApiError(409, 'version_mismatch', 'Условия изменились, посмотрите новую версию');
       }
       current.confirmed_at = now;
       row.status = row.prepay > 0 ? 'awaiting_prepayment' : 'scheduled';
@@ -995,7 +1018,7 @@ function applyAction(publicId: string, body: DealActionRequest): DealActionRespo
       break;
     case 'cancel': {
       const reason = (body.reason ?? '').trim();
-      if (reason.length > 300) throw new ApiError(400, 'validation', 'Причина — до 300 символов');
+      if (reason.length > 300) throw new ApiError(400, 'validation', 'Причина до 300 символов');
       const prepaid = st.payments.some((p) => p.kind === 'prepayment' && p.status === 'succeeded');
       st.refundExpected = prepaid && (role === 'seller' || clientRefundExpected(row));
       st.payments = st.payments.map((p) => (p.status === 'pending' ? mockPayment(p.kind, p.rail, 'canceled', p.amount_kopecks, p.at) : p));
@@ -1010,11 +1033,11 @@ function applyAction(publicId: string, body: DealActionRequest): DealActionRespo
       if (role === 'seller') {
         st.refundSentAt = now;
         log('seller', `Исполнитель вернул ${prepay}`);
-        notice = 'Отметили возврат — клиенту ушло уведомление.';
+        notice = 'Отметили возврат, клиент получил сообщение';
       } else {
         st.refundReceivedAt = now;
         log('client', `Клиент получил возврат ${prepay}`);
-        notice = 'Спасибо — возврат отмечен, исполнитель получил уведомление.';
+        notice = 'Спасибо, возврат отмечен, исполнитель получил сообщение';
       }
       break;
     case 'receipt_pdf':
@@ -1101,8 +1124,19 @@ function proposeTime(publicId: string, body: { scheduled_at: string; as?: DealRo
   return { proposal: { ...st.proposal, status: 'pending' as const }, deal: dealFull(row, role) };
 }
 
+/** Какой группе запросов принадлежит путь: для ?mock_hang и ?mock_fail. */
+function groupOf(method: string, path: string): 'me' | 'deals' | 'deal' | 'other' {
+  if (path === '/me' || path === '/templates') return 'me';
+  if (method === 'GET' && path.startsWith('/deals?')) return 'deals';
+  if (method === 'GET' && path.startsWith('/deals/')) return 'deal';
+  return 'other';
+}
+
 export async function mockRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const group = groupOf(method, path);
+  if (listed('hang', '').includes(group)) await new Promise<never>(() => undefined);
   await delay(300);
+  if (listed('fail', '').includes(group)) throw new ApiError(0, 'network', 'Нет связи. Проверьте интернет и повторите');
   if (AUTH_FAIL) throw new ApiError(401, 'init_data_invalid', 'Откройте мини-приложение внутри MAX');
   if (method === 'GET' && path === '/me') return me() as unknown as T;
   if (method === 'GET' && path === '/templates') return TEMPLATES as unknown as T;

@@ -216,7 +216,7 @@ describe.skipIf(!DB)('правка условий: API и сквозной сц�
       expect(h.max.inChat(SELLER_CHAT).map((m) => m.text)).toContain(texts.TERMS_UPDATED({ id, version: 2, client: 'no_client' }));
       // Карточка исполнителя обновилась на месте — со строкой версии и ссылкой для клиента
       const card = h.max.byMid(await cardMid(h, id, 'seller'));
-      expect(card?.text).toContain('Версия 2 · условия изменены');
+      expect(card?.text).toContain('Версия 2, условия изменены');
       expect(card?.text).toContain(formatMoney(300_000));
 
       // Третья версия — номер растёт дальше
@@ -268,7 +268,7 @@ describe.skipIf(!DB)('правка условий: API и сквозной сц�
     // N4 клиенту — только изменившиеся поля
     const n4 = h.max.inChat(CLIENT_CHAT).find((m) => m.text.startsWith('✏️ Исполнитель изменил условия'));
     expect(n4?.text).toBe(
-      `✏️ Исполнитель изменил условия #${id} (версия 2): срок → ${formatDateTime(later)}; сумма → ${formatMoney(300_000)}, предоплата → ${formatMoney(60_000)}. Проверьте и подтвердите.`,
+      `✏️ Исполнитель изменил условия #${id}, версия 2: когда: ${formatDateTime(later)}; сумма: ${formatMoney(300_000)}, предоплата ${formatMoney(60_000)}.\nПроверьте и подтвердите.`,
     );
     expect(n4?.text).not.toContain('что делаем');
     expect(n4?.text).not.toContain('уточнения');
@@ -276,7 +276,7 @@ describe.skipIf(!DB)('правка условий: API и сквозной сц�
     expect(h.max.inChat(SELLER_CHAT).map((m) => m.text)).toContain(texts.TERMS_UPDATED({ id, version: 2, client: 'notified' }));
 
     // Обе карточки — «Версия 2», у клиента снова три кнопки и cf с новой версией
-    for (const mid of [clientCard, sellerCard]) expect(h.max.byMid(mid)?.text).toContain('Версия 2 · условия изменены');
+    for (const mid of [clientCard, sellerCard]) expect(h.max.byMid(mid)?.text).toContain('Версия 2, условия изменены');
     const clientButtons = h.max.byMid(clientCard)!.buttons;
     expect(clientButtons.map((b) => b.text)).toEqual([texts.BTN.confirm, texts.BTN.requestChanges, texts.BTN.decline]);
     expect(clientButtons[0].payload).toBe(`cf:${id}:2`);
@@ -314,7 +314,7 @@ describe.skipIf(!DB)('правка условий: API и сквозной сц�
     expect(res.status, JSON.stringify(res.json)).toBe(200);
     expect(res.json.client_notified).toBe(true);
     const texts_ = h.max.inChat(SELLER_CHAT).map((m) => m.text);
-    expect(texts_.some((t) => t.startsWith(`${texts.demoNotifyPrefix('client')}✏️ Исполнитель изменил условия #${id} (версия 2)`))).toBe(true);
+    expect(texts_.some((t) => t.startsWith(`${texts.demoNotifyPrefix('client')}✏️ Исполнитель изменил условия #${id}, версия 2`))).toBe(true);
     expect(h.max.byMid(await cardMid(h, id, 'client_demo'))?.buttons[0].payload).toBe(`cf:${id}:2`);
   }, 60_000);
 });

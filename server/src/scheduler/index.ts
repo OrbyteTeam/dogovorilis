@@ -15,8 +15,9 @@ import { remaining, type DealBundle, type Reminder } from '../types.js';
 import * as dealService from '../domain/deal/service.js';
 import * as digest from '../domain/reminder/digest.js';
 import { isDemoAccelerated, isSystemAction } from '../domain/reminder/plan.js';
+import { receiptDeadline } from '../domain/time.js';
 import { displayName, syncCards } from '../transport/bot/cards.js';
-import { digestKeyboard, openKeyboard } from '../transport/bot/keyboards.js';
+import { digestKeyboard, reminderKeyboard } from '../transport/bot/keyboards.js';
 import { clientName, deliver, notifyForEvents } from '../transport/bot/notify.js';
 import type { SubscriptionKeeper } from '../transport/bot/webhook.js';
 import { pollLinkPayments } from './jobs/payments-poll.js';
@@ -135,12 +136,13 @@ async function handleReminder(reminder: Reminder, opts: SchedulerOptions, now: D
   }
 
   if (!opts.max) throw new Error('нет шлюза MAX для отправки напоминания');
-  // «Открыть» присылает свежую карточку: в ней ровно те кнопки, что нужны сейчас (оплатить, принять, приложить чек).
-  // Ошибка отправки пробрасывается — runDueReminders повторит на следующем тике (3 попытки, SPEC §10.1).
+  // «Открыть сделку» присылает свежую карточку: в ней ровно те кнопки, что нужны сейчас; у напоминаний о чеке
+  // сразу «Приложить чек», у «через 30 минут» кнопки нет (DESIGN_BRIEF §4).
+  // Ошибка отправки пробрасывается: runDueReminders повторит на следующем тике (3 попытки, SPEC §10.1).
   const sent = await deliver(
     opts.max,
     bundle,
-    { to: reminder.recipientRole, text, keyboard: openKeyboard(bundle.deal.publicId) },
+    { to: reminder.recipientRole, text, keyboard: reminderKeyboard(reminder.kind, bundle.deal.publicId) },
     { rethrow: true },
   );
   if (sent) await inTx((c) => remindersRepo.markSent(c, reminder.id));
@@ -168,7 +170,8 @@ function reminderMessage(reminder: Reminder, bundle: DealBundle): string {
     title: version.title,
     sumKopecks: kind === 'payment_due' || kind === 'payment_overdue' ? remaining(version) : version.prepaymentKopecks,
     scheduledAt: version.scheduledAt,
-    deadline: deal.paidAt,
+    // Срок чека: 9-е число следующего месяца (ст. 14 422-ФЗ), а не дата оплаты: в тексте «срок до 9 ноя».
+    deadline: deal.paidAt ? receiptDeadline(deal.paidAt, timezone()) : null,
     accelerated: deal.demo && isDemoAccelerated(kind),
   });
 }

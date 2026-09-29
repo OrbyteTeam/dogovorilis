@@ -323,14 +323,14 @@ describe.skipIf(!DB)('планировщик и ожидание ввода', ()
       await tick({ max: h.gateway, sendReminders: true }, new Date(paidAt.getTime() + MINUTE));
       expect(h.max.sent).toHaveLength(0);
 
-      // Через 2,5 минуты — пришло, с пометкой и кнопкой «Открыть»
+      // Через 2,5 минуты пришло, с пометкой и кнопкой «Приложить чек» (DESIGN_BRIEF §4)
       await tick({ max: h.gateway, sendReminders: true }, new Date(paidAt.getTime() + 2.5 * MINUTE));
       const got = h.max.inChat(SELLER_CHAT);
       expect(got).toHaveLength(1);
       expect(got[0].text.startsWith(texts.demoNotifyPrefix('seller'))).toBe(true);
-      expect(got[0].text).toContain(`Не забудьте чек по #${id}`);
-      expect(got[0].text).toContain('🧪 в демо — ускорено');
-      expect(got[0].buttons.map((b) => b.text)).toEqual([texts.BTN.open]);
+      expect(got[0].text).toContain(`Чек по #${id} ещё не приложен`);
+      expect(got[0].text).toContain('🧪 В демо ускорено');
+      expect(got[0].buttons.map((b) => b.text)).toEqual([texts.BTN.attachReceipt]);
       expect((await reminder(id, 'receipt_due')).status).toBe('sent');
     });
 

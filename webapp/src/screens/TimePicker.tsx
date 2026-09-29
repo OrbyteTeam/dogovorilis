@@ -8,6 +8,7 @@ import { Button, Panel, Spinner, Typography } from '@maxhub/max-ui';
 
 import { api, ApiError, errorText } from '../api';
 import { haptic } from '../bridge';
+import { AppHeader } from '../components/AppHeader';
 import { DayStrip } from '../components/DayStrip';
 import { ErrorScreen, LoadingScreen, NoticeScreen } from '../components/StateScreen';
 import { useToast } from '../components/Toast';
@@ -39,7 +40,7 @@ const DENIED_TEXT: Record<DeniedReason, { title: string; text: string }> = {
   // /busy открыт любому участнику, а предлагать время может только клиент (SPEC §7.10).
   seller: {
     title: 'Время выбирает клиент',
-    text: 'Чтобы сдвинуть визит, измените условия на экране сделки.',
+    text: 'Чтобы сдвинуть время, измените условия на экране сделки',
   },
 };
 
@@ -267,20 +268,18 @@ export function TimePickerScreen({ publicId, onOpenChat, onDeal, onDeals }: Time
   return (
     <Panel mode="secondary" className="dg-root">
       <div className="dg-screen dg-screen_plain">
-        <header className="dg-head">
-          <Typography.Text variant="subheader" asChild>
-            <h1>Другое время</h1>
-          </Typography.Text>
-          <Typography.Text variant="body" color="secondary">
-            {title}
-          </Typography.Text>
-          <Typography.Text variant="description" color="tertiary">
-            {`Сейчас в условиях: ${formatDateTime(grid.current)}`}
-          </Typography.Text>
-          <Typography.Text variant="description" color="tertiary">
-            {`Длительность визита ${visitText(grid.duration_min > 0 ? grid.duration_min : 60)}`}
-          </Typography.Text>
-        </header>
+        <AppHeader
+          title="Другое время"
+          subtitle={
+            <>
+              {title}
+              <br />
+              {`Сейчас в условиях: ${formatDateTime(grid.current)}`}
+              <br />
+              {`Длительность ${visitText(grid.duration_min > 0 ? grid.duration_min : 60)}`}
+            </>
+          }
+        />
 
         <DayStrip
           days={days}
@@ -300,7 +299,7 @@ export function TimePickerScreen({ publicId, onOpenChat, onDeal, onDeals }: Time
               {reloading ? <Spinner size={16} appearance="themed" aria-label="Обновляем" /> : null}
             </div>
             <Typography.Text variant="description" color="tertiary">
-              время — МСК
+              Время МСК
             </Typography.Text>
           </div>
           {free === 0 ? (
