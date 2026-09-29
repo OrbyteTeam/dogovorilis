@@ -122,7 +122,7 @@ export async function createHttpServer(deps: HttpDeps): Promise<FastifyInstance>
     const publicId = typeof q.d === 'string' && PUBLIC_ID_RE.test(q.d) ? q.d : null;
     const bot = encodeURIComponent(deps.config.MAX_BOT_USERNAME || 'bot');
     const link = escapeHtml(`https://max.ru/${bot}${publicId ? `?start=d_${publicId}` : ''}`);
-    const title = escapeHtml(q.fail ? 'Оплата не прошла' : 'Спасибо! Оплата обрабатывается');
+    const title = escapeHtml(q.fail ? 'Оплата не прошла' : 'Оплата обрабатывается');
     reply.type('text/html; charset=utf-8');
     // Страница статическая: скриптов в ней нет и быть не должно — даже если что-то проскочит мимо экранирования.
     reply.header('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'");
@@ -134,7 +134,7 @@ main{max-width:420px;margin:10vh auto;background:#fff;border-radius:16px;padding
 a{display:inline-block;margin-top:16px;padding:12px 16px;background:#007aff;color:#fff;border-radius:12px;text-decoration:none}
 @media(prefers-color-scheme:dark){body{background:#0f0f12;color:#fff}main{background:#17181c}}</style></head>
 <body><main><h1>${title}</h1>
-<p>Вернитесь в MAX — карточка сделки обновится сама.</p>
+<p>Вернитесь в MAX, карточка сделки обновится сама.</p>
 <a href="${link}">Открыть бота в MAX</a></main></body></html>`;
   });
 

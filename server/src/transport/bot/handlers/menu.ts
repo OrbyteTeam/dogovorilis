@@ -178,7 +178,7 @@ async function ensureDemoProfile(userId: number, firstName: string): Promise<voi
       userId,
       displayName: firstName || 'Исполнитель',
       taxMode: 'npd',
-      payoutDetails: 'СБП +7 900 000-00-00, Т-Банк, получатель Демо Д. (данные-пример)',
+      payoutDetails: '+7 900 000-00-00, Т-Банк, получатель Демо Д. (данные-пример)',
       transferEnabled: true,
       linkEnabled: true,
       defaultCancelRule: 'free_24h',

@@ -16,9 +16,10 @@ export type ReceiptHistory = { entries: HistoryEntry[]; pastVersions: PastVersio
 const KIND: Record<'prepayment' | 'final', string> = { prepayment: 'Предоплата', final: 'Остаток' };
 const BY: Record<string, string> = { seller: 'исполнителем', client: 'клиентом', system: 'автоматически' };
 
+// После «правило отмены:» слово «отмена» не повторяем (DESIGN_BRIEF §3.1).
 const CANCEL_RULE: Record<CancelRule, string> = {
-  free_24h: 'отмена без потери предоплаты за 24 ч и более до срока',
-  free_48h: 'отмена без потери предоплаты за 48 ч и более до срока',
+  free_24h: 'без потери предоплаты за 24 ч и более до срока',
+  free_48h: 'без потери предоплаты за 48 ч и более до срока',
   nonrefundable: 'предоплата не возвращается при отмене клиентом',
   full_refund: 'предоплата возвращается при любой отмене',
 };

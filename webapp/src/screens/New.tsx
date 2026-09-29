@@ -556,7 +556,7 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
             label="Реквизиты для перевода"
             htmlFor="payout-details"
             anchorId={anchor('payout_details')}
-            hint="Например: СБП +7 900 000-00-00, Т-Банк, получатель Анна А."
+            hint="Например: +7 900 000-00-00, Т-Банк, получатель Анна А."
             error={shown('payout_details')}
           >
             <Textarea

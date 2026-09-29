@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import { loadConfig, setConfig } from '../src/config.js';
 import * as texts from '../src/texts.js';
-import { reminderKeyboard, transferCheckKeyboard, transferKeyboard } from '../src/transport/bot/keyboards.js';
+import { digestKeyboard, reminderKeyboard, transferCheckKeyboard, transferDisputeKeyboard, transferKeyboard } from '../src/transport/bot/keyboards.js';
 import { noticesFor } from '../src/transport/bot/notify.js';
 import type { ReminderKind } from '../src/types.js';
 import { FIXED_NOW, noticeCases, PUBLIC_ID, SCHEDULED } from './helpers/render-fixtures.js';
@@ -56,6 +56,33 @@ function all(): Rendered[] {
   });
   out.push({ id: 'P2', title: 'P2 клиент сообщил о переводе', to: 'seller', text: texts.P2({ client: 'Саша', sumKopecks: 90_000, id }), keyboard: transferCheckKeyboard(id, 1) });
   out.push({ id: 'P3', title: 'P3 исполнитель не видит перевод', to: 'client', text: texts.P3({ id, sumKopecks: 90_000 }), keyboard: transferKeyboard(id, 1) });
+  out.push({
+    id: 'P3_DISPUTE',
+    title: 'P3 второй раз подряд, оплата по ссылке доступна',
+    to: 'client',
+    text: texts.P3_DISPUTE({ id, sumKopecks: 90_000, linkAvailable: true }),
+    keyboard: transferDisputeKeyboard(id, 1, true),
+  });
+  out.push({
+    id: 'P3_DISPUTE-nolink',
+    title: 'P3 второй раз подряд, оплаты по ссылке нет',
+    to: 'client',
+    text: texts.P3_DISPUTE({ id, sumKopecks: 90_000, linkAvailable: false }),
+    keyboard: transferDisputeKeyboard(id, 1, false),
+  });
+  const at = (hhmm: string) => new Date(`2026-09-20T${hhmm}:00+03:00`);
+  const digestLines: texts.DigestLine[] = [
+    { scheduledAt: at('10:00'), title: 'Маникюр с покрытием', clientName: 'Саша', status: 'scheduled', prepaymentKopecks: 90_000, demo: false },
+    { scheduledAt: at('13:30'), title: 'Стрижка', clientName: null, status: 'awaiting_confirmation', prepaymentKopecks: 0, demo: false },
+    { scheduledAt: at('17:00'), title: 'Педикюр', clientName: 'Ира', status: 'awaiting_prepayment', prepaymentKopecks: 60_000, demo: false },
+  ];
+  out.push({
+    id: 'digest',
+    title: 'Утренняя сводка исполнителю',
+    to: 'seller',
+    text: texts.dailyDigest({ day: at('00:00'), lines: digestLines, now: FIXED_NOW }),
+    keyboard: digestKeyboard('dogovorilis_bot'),
+  });
   for (const kind of REMINDERS) {
     const text =
       kind === 'event_soon'
@@ -73,14 +100,15 @@ describe('уведомления по шаблону DESIGN_BRIEF §4', () => {
     const lines = r.text.replace(/^🧪 \((клиенту|исполнителю)\) /, '').split('\n');
     // Факт: эмодзи типа события первым, номер сделки (кроме «через 30 минут», где сделка названа по имени).
     expect(lines[0], r.text).toMatch(/^\p{Extended_Pictographic}/u);
-    if (r.id !== 'reminder:event_soon') expect(lines[0]).toContain(`#${PUBLIC_ID}`);
+    // Сделка названа номером; исключения: «через 30 минут» (по имени) и сводка (по времени и имени, сделок несколько).
+    if (r.id !== 'reminder:event_soon' && r.id !== 'digest') expect(lines[0]).toContain(`#${PUBLIC_ID}`);
     // Эмодзи только в первой строке; исключение: строки 🧪.
     for (const line of lines.slice(1)) {
       if (!line.startsWith('🧪')) expect(/\p{Extended_Pictographic}/u.test(line), line).toBe(false);
     }
     // Одна кнопка, кроме ответов на вопрос с двумя-тремя вариантами (N3, N11, N13, P2, P3 по таблице §4).
     const flat = buttons(r.keyboard).flat();
-    const multi = ['N3', 'N11', 'N13', 'P2', 'P3'].includes(r.id);
+    const multi = ['N3', 'N11', 'N13', 'P2', 'P3', 'P3_DISPUTE'].includes(r.id);
     expect(flat.length).toBeLessThanOrEqual(multi ? 3 : 1);
     // Пояс не больше одного раза; суммы и разделители по §2.
     expect(r.text.split('(МСК)').length - 1).toBeLessThanOrEqual(1);

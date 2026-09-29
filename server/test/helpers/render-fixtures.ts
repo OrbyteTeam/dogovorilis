@@ -52,7 +52,7 @@ function profile(taxMode: TaxMode = 'npd'): SellerProfile {
     userId: SELLER.maxUserId,
     displayName: 'Анна Аксёнова',
     taxMode,
-    payoutDetails: 'СБП +7 900 000-00-00, Т-Банк, получатель Анна А.',
+    payoutDetails: '+7 900 000-00-00, Т-Банк, получатель Анна А.',
     transferEnabled: true,
     linkEnabled: true,
     defaultCancelRule: 'free_24h',

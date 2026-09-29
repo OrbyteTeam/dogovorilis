@@ -53,7 +53,8 @@ describe('HTTP-периметр', () => {
       const a = await server();
       const ok = await a.inject({ method: 'GET', url: '/pay/return?d=AbC123xyZ0' });
       expect(ok.body).toContain(`href="https://max.ru/${BOT}?start=d_AbC123xyZ0"`);
-      expect(ok.body).toContain('Спасибо! Оплата обрабатывается');
+      expect(ok.body).toContain('<h1>Оплата обрабатывается</h1>');
+      expect(ok.body).toContain('Вернитесь в MAX, карточка сделки обновится сама');
 
       const failed = await a.inject({ method: 'GET', url: '/pay/return?d=AbC123xyZ0&fail=1' });
       expect(failed.body).toContain('Оплата не прошла');

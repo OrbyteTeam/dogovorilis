@@ -169,10 +169,17 @@ export function SettingsScreen({ me, onSaved, onServices }: SettingsScreenProps)
           label="Реквизиты для перевода"
           htmlFor="settings-payout"
           anchorId="settings-field-payout"
-          hint="Например: СБП +7 900 000-00-00, Т-Банк, получатель Анна А."
+          hint="Например: +7 900 000-00-00, Т-Банк, получатель Анна А."
           error={shown('payout_details')}
         >
-          <Textarea id="settings-payout" value={payoutDetails} maxLength={PAYOUT_MAX} onChange={(event) => setPayoutDetails(event.currentTarget.value)} />
+          <Textarea
+            id="settings-payout"
+            mode="secondary"
+            rows={2}
+            value={payoutDetails}
+            maxLength={PAYOUT_MAX}
+            onChange={(event) => setPayoutDetails(event.currentTarget.value)}
+          />
         </Field>
       </Island>
 

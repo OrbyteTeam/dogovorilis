@@ -36,7 +36,7 @@ export function buildReceiptData(bundle: DealBundle, now = new Date(), transferL
       maxUserId: seller.maxUserId,
       phoneMasked: seller.phoneVerifiedAt ? maskPhone(seller.phone) : null,
     },
-    client: client ? { name: deal.demo ? 'демо-клиент (тот же пользователь)' : displayName(client.firstName, client.lastName), maxUserId: client.maxUserId } : null,
+    client: client ? { name: deal.demo ? 'демо-клиент (это вы)' : displayName(client.firstName, client.lastName), maxUserId: client.maxUserId } : null,
     version: {
       version: version.version,
       title: version.title,
