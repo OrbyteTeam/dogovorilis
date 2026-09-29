@@ -968,6 +968,9 @@ export const API_CHEQUE_ACCEPTED = 'Чек приложен, квитанция 
 export const API_TEXT_LENGTH = 'Текст от 1 до 500 символов';
 export const API_REASON_LENGTH = 'Причина до 300 символов';
 export const API_ACTION_DONE = 'Готово';
+export const API_SLOT_BUSY = 'Это время уже заняли. Выберите другое';
+export const API_TIME_STALE = 'Предложение устарело: условия уже изменились или время прошло';
+
 export const API_SERVICES_LIMIT = 'Услуг уже 50. Скройте ненужные или измените существующую';
 export const API_SERVICE_NOT_FOUND = 'Услуга не найдена';
 export const API_ALREADY_DONE = 'Это уже сделано';
@@ -1046,7 +1049,13 @@ export function timelineText(
         ? `Клиент подтвердил условия версии ${payload.version}`
         : 'Клиент подтвердил условия';
     case 'version.change_requested':
+      // Предложение времени показывается своей строкой (time.proposed), без дубля «предложил изменения».
+      if (payload.proposal_id !== undefined) return null;
       return `Клиент предложил изменения: «${text(payload.text)}»`;
+    case 'time.proposed':
+      return typeof payload.scheduled_at === 'string'
+        ? `Клиент предложил другое время: ${formatDateTime(new Date(payload.scheduled_at))}`
+        : 'Клиент предложил другое время';
     case 'deal.declined':
       return 'Клиент отказался от сделки';
     case 'deal.expired':
@@ -1097,6 +1106,34 @@ export function timelineText(
   }
 }
 
+// --- «Другое время» (ЗАДАЧА_08 D, SPEC §7.10) ---
+
+/** Выбор на месте карточки после «Предложить изменения»: время из календаря или текстом. */
+export const ASK_CHANGE_KIND = 'Что изменить? Выберите другое время в календаре исполнителя или напишите текстом.';
+
+/** Текст запроса изменений при предложении времени: попадёт в следующую версию как «клиент просил». */
+export function TIME_PROPOSAL_TEXT(at: Date): string {
+  return `Предлагаю другое время: ${formatDateTime(at)}`;
+}
+
+/** N3T — исполнителю: клиент выбрал время в календаре. */
+export function N3T(a: { client: string; id: string; at: Date }): string {
+  return `🗓 ${esc(a.client)} предлагает другое время по #${a.id}: ${formatDateTime(a.at)}.\n\nПримите одним нажатием или предложите другое.`;
+}
+
+/** Подпись кнопки «Принять»: короткая дата, чтобы не обрезалась (своим рядом). */
+export function acceptTimeLabel(at: Date): string {
+  const { day, time } = dayAndTime(at);
+  return `✅ Принять ${day}, ${time}`;
+}
+
+export const TIME_ACCEPTED_ACK = 'Время принято: клиент получил новую версию условий и подтвердит её.';
+export const TIME_TAKEN_SELLER = 'Это время уже занято другой записью. Предложение снято, предложите клиенту другое время.';
+export function TIME_TAKEN_CLIENT(a: { id: string; at: Date }): string {
+  return `🗓 Исполнитель не может ${formatDateTime(a.at)} по #${a.id}: это время уже занято. Выберите другое.`;
+}
+export const TIME_STALE = 'Это предложение уже неактуально: условия изменились или время прошло. Карточка обновлена.';
+
 // --- подписи кнопок. Ровно те, что в SPEC §5.5, §6.4, §6.5 и DESIGN §6 ---
 
 export const BTN = {
@@ -1146,4 +1183,7 @@ export const BTN = {
   schedule: '📅 Расписание',
   back: '↩️ Назад',
   keepDeal: '↩️ Не отменять',
+  otherTime: '🗓 Другое время',
+  writeText: '✍️ Написать текстом',
+  proposeOther: '✏️ Предложить другое',
 };

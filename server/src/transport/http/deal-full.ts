@@ -35,6 +35,8 @@ export const SERVER_ACTIONS = [
   'remind_client',
   'refund_confirmed',
   'receipt_pdf',
+  // исполнитель принимает время, предложенное клиентом из календаря (ЗАДАЧА_08 D)
+  'accept_time',
 ] as const;
 export const CLIENT_SIDE_ACTIONS = ['edit', 'repeat', 'attach_receipt', 'share', 'pay', 'confirm_transfer', 'open_as_client'] as const;
 
@@ -63,6 +65,7 @@ const CALLBACK_ACTION: Record<string, ActionCode | null> = {
   nl: 'pay',
   pc: 'pay',
   pe: 'pay',
+  tp: 'accept_time',
   op: null,
 };
 
@@ -246,6 +249,8 @@ export function dealFullView({ bundle, role, viewerId, versions, events }: DealF
     },
     actions,
     cancel_consequence: consequence,
+    // ожидающее предложение времени: подпись кнопки «Принять …» и строка «клиент предлагает» (ЗАДАЧА_08 D)
+    time_proposal: bundle.timeProposal ? { id: bundle.timeProposal.id, scheduled_at: bundle.timeProposal.scheduledAt.toISOString() } : null,
   };
 }
 

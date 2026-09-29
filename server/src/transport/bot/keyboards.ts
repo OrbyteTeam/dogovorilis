@@ -4,9 +4,9 @@
 import { Keyboard } from '@maxhub/max-bot-api';
 import type { Button } from '@maxhub/max-bot-api/types';
 import { botUsername } from '../../config.js';
-import { BTN, shareInvite } from '../../texts.js';
+import { acceptTimeLabel, BTN, shareInvite } from '../../texts.js';
 import type { AttachmentRequest } from '../../integrations/max/gateway.js';
-import type { CardRole, DealBundle, Payment, PaymentKind } from '../../types.js';
+import type { CardRole, DealBundle, Payment, PaymentKind, TimeProposal } from '../../types.js';
 import { livePayment, remaining } from '../../types.js';
 import { cb } from './callbacks.js';
 
@@ -140,6 +140,8 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
         }
         break;
       case 'changes_requested':
+        // Клиент выбрал время в календаре (ЗАДАЧА_08 D): принять его — первым действием, одной кнопкой.
+        if (bundle.timeProposal?.status === 'pending') rows.push([acceptTimeButton(id, bundle.timeProposal)]);
         rows.push([editTermsButton(o.botUsername, id)]);
         rows.push([callback(BTN.keepAsIs, cb('ka', id))]);
         break;
@@ -273,6 +275,33 @@ export function cancelReasonKeyboard(publicId: string): AttachmentRequest {
     [Keyboard.button.callback(BTN.noReason, cb('cn', publicId, 'y', 'none'))],
     [Keyboard.button.callback(BTN.keepDeal, cb('op', publicId))],
   ]);
+}
+
+/** «✅ Принять пн 5 окт, 14:00» — принять предложенное клиентом время (SPEC §7.10). Подпись длинная — своим рядом. */
+export function acceptTimeButton(publicId: string, proposal: Pick<TimeProposal, 'id' | 'scheduledAt'>): Button {
+  return callback(acceptTimeLabel(proposal.scheduledAt), cb('tp', publicId, undefined, proposal.id));
+}
+
+/**
+ * «Предложить изменения» (ЗАДАЧА_08 D): на месте карточки — выбор пути. «Другое время» открывает мини-приложение на
+ * календаре исполнителя (start_param `time_<id>`), «Написать текстом» — прежний ввод (T4), «Назад» — карточка.
+ */
+export function changeKindKeyboard(publicId: string): AttachmentRequest {
+  return keyboard([
+    [openApp(BTN.otherTime, botUsername(), `time_${publicId}`)],
+    [callback(BTN.writeText, cb('cr', publicId, 't'))],
+    [callback(BTN.back, cb('op', publicId))],
+  ]);
+}
+
+/** N3T — исполнителю: принять время одной кнопкой или предложить другое на форме правки (T5). */
+export function n3tKeyboard(publicId: string, proposal: Pick<TimeProposal, 'id' | 'scheduledAt'>): AttachmentRequest {
+  return keyboard([[acceptTimeButton(publicId, proposal)], [openApp(BTN.proposeOther, botUsername(), `edit_${publicId}`)]]);
+}
+
+/** Клиенту, когда предложенное время успели занять: сразу выбрать другое. */
+export function otherTimeKeyboard(publicId: string): AttachmentRequest {
+  return keyboard([[openApp(BTN.otherTime, botUsername(), `time_${publicId}`)], [callback(BTN.open, cb('op', publicId))]]);
 }
 
 /** Кнопки уведомлений N3 (предложены изменения: изменить условия, оставить как есть, отменить) и N11 (замечания). */

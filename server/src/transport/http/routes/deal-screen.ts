@@ -18,7 +18,11 @@ import { isTerminal, type DealBundle, type InputKind } from '../../../types.js';
 import * as dealService from '../../../domain/deal/service.js';
 import type { Actor, ServiceResult } from '../../../domain/deal/service.js';
 import { canTransition } from '../../../domain/deal/state-machine.js';
-import { publishOutcome } from '../../bot/outcome.js';
+import { cfg } from '../../../config.js';
+import { syncCards } from '../../bot/cards.js';
+import { otherTimeKeyboard } from '../../bot/keyboards.js';
+import { deliver } from '../../bot/notify.js';
+import { publishNewVersion, publishOutcome } from '../../bot/outcome.js';
 import { renderAndSendReceipt } from '../../bot/receipt.js';
 import { remindClientNow, remindNote } from '../../bot/remind.js';
 import { checkedPublicId, fail, firstIssue, me, sendError } from '../common.js';
@@ -38,6 +42,7 @@ const actionSchema = z.object({
   version: z.number().int().min(1).optional(),
   text: z.string().optional(),
   reason: z.string().optional(),
+  proposal_id: z.number().int().positive().optional(),
 });
 type ActionBody = z.infer<typeof actionSchema>;
 
@@ -53,6 +58,7 @@ const ACTION_ROLE: Partial<Record<ServerAction, 'seller' | 'client'>> = {
   fixed: 'seller',
   close_without_receipt: 'seller',
   remind_client: 'seller',
+  accept_time: 'seller',
 };
 
 /**
@@ -149,6 +155,28 @@ async function execute(max: MaxGateway | null, bundle: DealBundle, actor: Actor,
       }
       const outcome = max ? await remindClientNow(max, bundle) : 'no_chat';
       return { result: null, notice: remindNote(outcome) };
+    }
+    case 'accept_time': {
+      // Тот же путь, что кнопка «✅ Принять» в чате (handlers/deal.ts acceptTime), SPEC §7.10.
+      const proposalId = body.proposal_id ?? bundle.timeProposal?.id;
+      if (!proposalId) throw new InvalidTransition(bundle.deal.status, 'new_version', 'seller', 'forbidden');
+      const outcome = await dealService.acceptTimeProposal(id, actor, proposalId, cfg().APP_TIMEZONE);
+      if (outcome.kind === 'accepted') {
+        if (max) await publishNewVersion(max, outcome.result, { sellerNote: false });
+        return { result: outcome.result, notice: texts.TIME_ACCEPTED_ACK };
+      }
+      if (outcome.kind === 'taken') {
+        if (max) {
+          await syncCards(max, outcome.bundle);
+          await deliver(max, outcome.bundle, {
+            to: 'client',
+            text: texts.TIME_TAKEN_CLIENT({ id, at: outcome.proposal.scheduledAt }),
+            keyboard: otherTimeKeyboard(id),
+          });
+        }
+        return { result: null, notice: texts.TIME_TAKEN_SELLER };
+      }
+      return { result: null, notice: texts.TIME_STALE };
     }
     case 'receipt_pdf':
       if (!isTerminal(bundle.deal.status)) return { result: null, notice: null };

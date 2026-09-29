@@ -186,7 +186,7 @@ describe.skipIf(!DB)('ответ на кнопку карточки — карт
 
   it('запрос ввода с карточки не стирает её: подсказка сверху, условия и кнопки на месте', async () => {
     const { id, clientCard } = await realDeal();
-    await h.press(CLIENT, CLIENT_CHAT, `cr:${id}`, clientCard);
+    await h.press(CLIENT, CLIENT_CHAT, `cr:t:${id}`, clientCard);
     const shown = h.max.byMid(clientCard)!;
     expect(shown.text.startsWith(texts.ASK_CHANGE_REQUEST)).toBe(true);
     expect(shown.text).toContain('Маникюр с покрытием');

@@ -55,12 +55,18 @@ export async function notifyPaymentEvents(max: MaxGateway, applied: ApplyResult)
  * версией), клиенту N4 с перечнем изменений, исполнителю в чат — дошла ли версия до клиента (N4a).
  * Сбой доставки версию не отменяет: она уже записана, повтор запроса вернул бы 409 no_changes.
  */
-export async function publishNewVersion(max: MaxGateway, result: ServiceResult): Promise<{ clientNotified: boolean }> {
+export async function publishNewVersion(
+  max: MaxGateway,
+  result: ServiceResult,
+  /** Принятие времени кнопкой (ЗАДАЧА_08 D): нажатая карточка уже перерисована ответом, исполнитель уже знает итог. */
+  o: { skipMid?: string; sellerNote?: boolean } = {},
+): Promise<{ clientNotified: boolean }> {
   const { bundle } = result;
   try {
-    await syncCards(max, bundle);
+    await syncCards(max, bundle, o.skipMid);
     const delivered = await notifyForEvents(max, bundle, result.events);
     const clientNotified = delivered.some((d) => d.to === 'client' && d.delivered);
+    if (o.sellerNote === false) return { clientNotified };
     const client = clientNotified ? 'notified' : bundle.deal.clientUserId === null ? 'no_client' : 'not_delivered';
     const text = texts.TERMS_UPDATED({ id: bundle.deal.publicId, version: bundle.deal.currentVersion, client });
     await deliver(max, bundle, { to: 'seller', text, keyboard: openKeyboard(bundle.deal.publicId) });

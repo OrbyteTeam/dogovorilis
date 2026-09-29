@@ -150,7 +150,7 @@ describe.skipIf(!DB)('истечение срока подтверждения �
     const clientCard = await cardMid(h, id, 'client');
 
     // T4: «Предложить изменения» — всё ещё ждём подтверждения, срок на месте
-    await h.press(CLIENT, CLIENT_CHAT, `cr:${id}`, clientCard);
+    await h.press(CLIENT, CLIENT_CHAT, `cr:t:${id}`, clientCard);
     await h.say(CLIENT, CLIENT_CHAT, 'давайте на час позже');
     expect(await dealStatus(h, id)).toBe('changes_requested');
     expect((await deal(id)).expires_at).not.toBeNull();

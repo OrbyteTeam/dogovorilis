@@ -27,6 +27,7 @@ export type AppErrorCode =
   | 'no_changes'           // новая версия совпадает с текущей → 409 в API
   | 'version_mismatch'     // «Подтверждаю» старой версии после T5 → «Условия изменились»
   | 'services_limit'       // больше 50 услуг у исполнителя (ЗАДАЧА_08 C) → 409 в API
+  | 'slot_busy'            // предложенное время занято другой записью исполнителя (ЗАДАЧА_08 D) → 409 в API
   | 'internal';            // E10
 
 export class AppError extends Error {
@@ -159,5 +160,13 @@ export class VersionMismatchError extends AppError {
   constructor(readonly expected: number, readonly current: number) {
     super('version_mismatch', `подтверждается версия ${expected}, текущая — ${current}`, { expected, current });
     this.name = 'VersionMismatchError';
+  }
+}
+
+/** Предложенное или принимаемое время пересекается с другой записью исполнителя (ЗАДАЧА_08 D, SPEC §7.10). */
+export class SlotBusyError extends AppError {
+  constructor() {
+    super('slot_busy', 'время занято другой записью исполнителя');
+    this.name = 'SlotBusyError';
   }
 }

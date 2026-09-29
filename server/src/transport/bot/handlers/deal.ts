@@ -1,14 +1,14 @@
 // Кнопки карточки сделки: все коды §13, кроме платёжных (они в payment.ts).
 // Обработчик короткий: разобрать payload → определить роль по нажатой карточке → вызвать сервис → отрисовать.
 import type { Context } from '@maxhub/max-bot-api';
-import { cfg } from '../../../config.js';
+import { botUsername, cfg } from '../../../config.js';
 import { inTx } from '../../../db/pool.js';
 import * as inputsRepo from '../../../db/repos/inputs.js';
 import * as texts from '../../../texts.js';
 import { isTerminal, type CardRole, type DealBundle } from '../../../types.js';
 import { addMinutes } from '../../../domain/time.js';
 import * as dealService from '../../../domain/deal/service.js';
-import { INPUT_TTL_MINUTES } from '../../../domain/deal/service.js';
+import { acceptTimeProposal, INPUT_TTL_MINUTES } from '../../../domain/deal/service.js';
 import { renderAndSendReceipt } from '../receipt.js';
 import { log } from '../../../logger.js';
 import { showCardBelow } from '../cards.js';
@@ -25,14 +25,17 @@ import {
   touchUser,
   type Deps,
 } from './shared.js';
-import { cancelReasonKeyboard, confirmKeyboard } from '../keyboards.js';
+import { cancelReasonKeyboard, changeKindKeyboard, confirmKeyboard, editTermsButton, keyboard, otherTimeKeyboard } from '../keyboards.js';
+import { deliver } from '../notify.js';
+import { publishNewVersion } from '../outcome.js';
+import { syncCards } from '../cards.js';
 import { remindClientNow, remindNote } from '../remind.js';
 import type { ParsedCallback } from '../callbacks.js';
 
 /** Какой роли принадлежит кнопка, если нажатое сообщение — не карточка (уведомление или напоминание). */
 const CODE_ROLE: Record<string, 'seller' | 'client'> = {
   cf: 'client', cr: 'client', dc: 'client', ac: 'client', rm: 'client', pl: 'client', pt: 'client',
-  dn: 'seller', fx: 'seller', rc: 'seller', nc: 'seller', ka: 'seller', rs: 'seller',
+  dn: 'seller', fx: 'seller', rc: 'seller', nc: 'seller', ka: 'seller', rs: 'seller', tp: 'seller',
 };
 
 export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<ParsedCallback, { kind: 'deal' }>): Promise<void> {
@@ -59,7 +62,16 @@ export async function onDealCallback(ctx: Context, deps: Deps, parsed: Extract<P
       return;
 
     case 'cr':
-      await askInput(ctx, deps, bundle, viewRole, { userId, kind: 'change_request', prompt: texts.ASK_CHANGE_REQUEST });
+      // `cr:t` — «Написать текстом» (прежний ввод, T4); просто `cr` — выбор: календарь или текст (ЗАДАЧА_08 D).
+      if (parsed.sub === 't') {
+        await askInput(ctx, deps, bundle, viewRole, { userId, kind: 'change_request', prompt: texts.ASK_CHANGE_REQUEST });
+      } else {
+        await reply(ctx, deps, bundle, { role: viewRole, note: texts.ASK_CHANGE_KIND, keyboard: changeKindKeyboard(parsed.publicId) });
+      }
+      return;
+
+    case 'tp':
+      await acceptTime(ctx, deps, parsed.publicId, actor, viewRole, Number(parsed.arg));
       return;
 
     case 'dc':
@@ -198,6 +210,31 @@ async function openCard(ctx: Context, deps: Deps, bundle: DealBundle, viewRole: 
   await deps.max.answer(ctx.callback!.callback_id).catch((e: Error) => log.warn({ err: e.message }, 'max: пустой ответ на «Открыть» отклонён'));
   const roles: CardRole[] = bundle.deal.demo && bundle.deal.sellerUserId === userId ? ['seller', 'client_demo'] : [viewRole];
   for (const role of roles) await showCardBelow(deps.max, bundle, role, { userId, chatId });
+}
+
+/**
+ * «✅ Принять {время}» (ЗАДАЧА_08 D, SPEC §7.10): новая версия с этим временем (T5), клиенту N4. Время успели занять —
+ * предложение снято, исполнителю объяснение и «Изменить условия», клиенту — «выберите другое». Устарело — E1-ответ.
+ */
+async function acceptTime(ctx: Context, deps: Deps, publicId: string, actor: dealService.Actor, role: CardRole, proposalId: number): Promise<void> {
+  const outcome = await acceptTimeProposal(publicId, actor, proposalId, cfg().APP_TIMEZONE);
+  if (outcome.kind === 'accepted') {
+    const skipMid = await reply(ctx, deps, outcome.result.bundle, { role, note: texts.TIME_ACCEPTED_ACK });
+    await publishNewVersion(deps.max, outcome.result, { skipMid, sellerNote: false });
+    return;
+  }
+  if (outcome.kind === 'taken') {
+    const b = outcome.bundle;
+    const skipMid = await reply(ctx, deps, b, { role, note: texts.TIME_TAKEN_SELLER, keyboard: keyboard([[editTermsButton(botUsername(), publicId)]]) });
+    await syncCards(deps.max, b, skipMid);
+    await deliver(deps.max, b, {
+      to: 'client',
+      text: texts.TIME_TAKEN_CLIENT({ id: publicId, at: outcome.proposal.scheduledAt }),
+      keyboard: otherTimeKeyboard(publicId),
+    });
+    return;
+  }
+  await reply(ctx, deps, outcome.bundle, { role, note: texts.TIME_STALE });
 }
 
 /** Ручное напоминание клиенту: не чаще раза в 4 часа на сделку, счётчик общий с мини-приложением (SPEC §5.5). */

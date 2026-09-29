@@ -385,7 +385,7 @@ describe.skipIf(!DB)('планировщик и ожидание ввода', ()
   it('просроченное ожидание ввода → E8, ввод сбрасывается', async () => {
     const id = await demoDeal();
     const clientCard = await cardMid(h, id, 'client_demo');
-    await h.press(SELLER, SELLER_CHAT, `cr:${id}`, clientCard); // ждём текст изменений
+    await h.press(SELLER, SELLER_CHAT, `cr:t:${id}`, clientCard); // ждём текст изменений
 
     // 30 минут прошли
     await h.query(`UPDATE user_inputs SET expires_at = now() - interval '1 minute' WHERE user_id = $1`, [SELLER]);
@@ -402,7 +402,7 @@ describe.skipIf(!DB)('планировщик и ожидание ввода', ()
   it('тик чистит ожидания ввода, истёкшие больше суток назад, а недавно истёкшие оставляет ради E8', async () => {
     const id = await demoDeal();
     const clientCard = await cardMid(h, id, 'client_demo');
-    await h.press(SELLER, SELLER_CHAT, `cr:${id}`, clientCard);
+    await h.press(SELLER, SELLER_CHAT, `cr:t:${id}`, clientCard);
 
     // Истекло час назад: запись остаётся — вернувшийся человек получит E8, а не S3 (найдено прогоном 23.09)
     await h.query(`UPDATE user_inputs SET expires_at = now() - interval '1 hour' WHERE user_id = $1`, [SELLER]);
@@ -413,7 +413,7 @@ describe.skipIf(!DB)('планировщик и ожидание ввода', ()
     expect(h.max.texts().join('\n')).toContain(texts.E8);
 
     // Истекло больше суток назад — тик удаляет
-    await h.press(SELLER, SELLER_CHAT, `cr:${id}`, clientCard);
+    await h.press(SELLER, SELLER_CHAT, `cr:t:${id}`, clientCard);
     await h.query(`UPDATE user_inputs SET expires_at = now() - interval '25 hours' WHERE user_id = $1`, [SELLER]);
     await tick({ max: null, sendReminders: false });
     expect((await h.query<{ n: number }>('SELECT count(*)::int AS n FROM user_inputs'))[0].n).toBe(0);
@@ -422,7 +422,7 @@ describe.skipIf(!DB)('планировщик и ожидание ввода', ()
   it('/cancel сбрасывает ожидание ввода', async () => {
     const id = await demoDeal();
     const clientCard = await cardMid(h, id, 'client_demo');
-    await h.press(SELLER, SELLER_CHAT, `cr:${id}`, clientCard);
+    await h.press(SELLER, SELLER_CHAT, `cr:t:${id}`, clientCard);
     h.max.reset();
 
     await h.say(SELLER, SELLER_CHAT, '/cancel');

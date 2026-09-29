@@ -83,7 +83,9 @@ export type DealEventType =
   | 'reminder.sent'
   | 'reminder.skipped'
   | 'demo.opened'
-  | 'refund.confirmed';
+  | 'refund.confirmed'
+  /** Клиент предложил другое время из календаря (ЗАДАЧА_08 D, SPEC §7.10). */
+  | 'time.proposed';
 
 /** Поля условий, которые исполнитель меняет новой версией (T5); по ним N4 перечисляет, что изменилось. */
 export type TermsField = 'title' | 'description' | 'scheduled_at' | 'total' | 'prepayment' | 'cancel_rule';
@@ -318,6 +320,25 @@ export type DealBundle = {
   sellerProfile: SellerProfile | null;
   client: User | null;
   receipt: Receipt | null;
+  /** Ожидающее предложение времени от клиента (ЗАДАЧА_08 D): кнопка «Принять» в карточке исполнителя. */
+  timeProposal?: TimeProposal | null;
+};
+
+export type TimeProposalStatus = 'pending' | 'accepted' | 'taken' | 'superseded';
+
+/** «Другое время» от клиента (SPEC §7.10): принимается исполнителем одной кнопкой как новая версия условий (T5). */
+export type TimeProposal = {
+  id: number;
+  dealId: number;
+  proposedByUserId: number;
+  scheduledAt: Date;
+  /** версия условий на момент предложения: сменилась — предложение устарело */
+  baseVersion: number;
+  status: TimeProposalStatus;
+  /** версия, созданная принятием: пока клиент её не подтвердил, время удерживается за ним */
+  acceptedVersion: number | null;
+  createdAt: Date;
+  resolvedAt: Date | null;
 };
 
 /** Вычисляемые величины (SPEC §5.1). */

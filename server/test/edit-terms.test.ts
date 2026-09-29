@@ -246,7 +246,7 @@ describe.skipIf(!DB)('правка условий: API и сквозной сц�
     const sellerCard = await cardMid(h, id, 'seller');
 
     // Клиент: «Предложить изменения» + текст (T4) → исполнителю N3 с «Изменить условия»
-    await h.press(CLIENT, CLIENT_CHAT, `cr:${id}`, clientCard);
+    await h.press(CLIENT, CLIENT_CHAT, `cr:t:${id}`, clientCard);
     await h.say(CLIENT, CLIENT_CHAT, 'давайте на день позже и 3000 с предоплатой 600');
     expect(await dealStatus(h, id)).toBe('changes_requested');
     const n3 = h.max.inChat(SELLER_CHAT).find((m) => m.text.includes('предлагает изменения'));

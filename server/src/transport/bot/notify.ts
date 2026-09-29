@@ -12,7 +12,7 @@ import { livePayment, remaining, TERMS_FIELDS, type DealBundle, type DealEvent, 
 import { receiptDeadline } from '../../domain/time.js';
 import { taxModeOf } from '../../domain/deal/service.js';
 import { displayName, refundLinesFor } from './cards.js';
-import { n11Keyboard, n13Keyboard, n3Keyboard, openKeyboard } from './keyboards.js';
+import { n11Keyboard, n13Keyboard, n3Keyboard, n3tKeyboard, openKeyboard } from './keyboards.js';
 
 type Side = 'seller' | 'client';
 
@@ -48,6 +48,8 @@ export function noticesFor(bundle: DealBundle, event: DealEvent): Notice[] {
       ];
 
     case 'version.change_requested':
+      // Время из календаря (ЗАДАЧА_08 D) уведомляется своим N3T по событию time.proposed — без дубля N3.
+      if (event.payload.proposal_id !== undefined) return [];
       return [
         {
           to: 'seller',
@@ -64,6 +66,13 @@ export function noticesFor(bundle: DealBundle, event: DealEvent): Notice[] {
         : [];
       const text = texts.N4({ id, version: Number(event.payload.version ?? bundle.deal.currentVersion), changed, terms: bundle.version });
       return [{ to: 'client', text, keyboard: openKeyboard(id) }];
+    }
+
+    case 'time.proposed': {
+      const proposalId = Number(event.payload.proposal_id);
+      const at = new Date(String(event.payload.scheduled_at));
+      if (!Number.isFinite(proposalId) || Number.isNaN(at.getTime())) return [];
+      return [{ to: 'seller', text: texts.N3T({ client, id, at }), keyboard: n3tKeyboard(id, { id: proposalId, scheduledAt: at }) }];
     }
 
     case 'deal.declined':

@@ -69,6 +69,8 @@ describe.skipIf(!DB)('безопасность: чужая сделка и ве�
         `pdf:${id}`,
         `pc:${id}:${pid}`,
         `cr:${id}`,
+        `cr:t:${id}`,
+        `tp:${id}:1`,
         `rm:${id}`,
         `rc:${id}`,
         `cn:${id}`,

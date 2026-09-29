@@ -10,6 +10,7 @@ import {
   NoChangesError,
   NotFoundError,
   NotYourDealError,
+  SlotBusyError,
   TrialLimitError,
   ValidationError,
   VersionMismatchError,
@@ -19,6 +20,7 @@ import * as cardsRepo from '../../db/repos/cards.js';
 import * as dealsRepo from '../../db/repos/deals.js';
 import * as eventsRepo from '../../db/repos/events.js';
 import * as paymentsRepo from '../../db/repos/payments.js';
+import * as proposalsRepo from '../../db/repos/proposals.js';
 import * as receiptsRepo from '../../db/repos/receipts.js';
 import * as remindersRepo from '../../db/repos/reminders.js';
 import * as usersRepo from '../../db/repos/users.js';
@@ -40,14 +42,16 @@ import {
   type TaxMode,
   type TemplateKey,
   type TermsField,
+  type TimeProposal,
   type User,
 } from '../../types.js';
+import { checkSlot } from '../schedule/availability.js';
 import { assertAmounts } from '../money.js';
 import { addHours, addMinutes } from '../time.js';
 import { newPublicId } from '../ids.js';
 import { planReminders } from '../reminder/plan.js';
 import { refundExpected } from './rules.js';
-import { canTransition } from './state-machine.js';
+import { canTransition, EDITABLE_STATUSES } from './state-machine.js';
 
 /** Кто совершает действие. Роль приходит от транспорта (кнопка принадлежит роли), а не угадывается по id:
  *  в демо-режиме исполнитель и клиент — один и тот же пользователь (SPEC §12). */
@@ -82,7 +86,8 @@ export async function loadBundle(c: DbClient, deal: Deal): Promise<DealBundle> {
   const receipt = await receiptsRepo.byDeal(c, deal.id);
   if (!seller) throw new Error(`у сделки ${deal.publicId} нет исполнителя ${deal.sellerUserId}`);
   const client = deal.clientUserId ? await usersRepo.byId(c, deal.clientUserId) : null;
-  return { deal, version, payments, seller, sellerProfile, client, receipt };
+  const timeProposal = await proposalsRepo.pendingForDeal(c, deal.id);
+  return { deal, version, payments, seller, sellerProfile, client, receipt, timeProposal };
 }
 
 /** Прочитать сделку по публичному id без блокировки — для рендера карточки и для API. */
@@ -558,11 +563,15 @@ export function keepAsIs(publicId: string, actor: Actor, now = new Date()): Prom
       publicId,
       action: 'keep_as_is',
       actor,
-      mutate: async ({ version, now: at }) => ({
-        patch: { expiresAt: addHours(at, CONFIRMATION_TTL_HOURS) },
-        // Отдельного типа события в SPEC §5.4 для T6 нет; помечаем флагом, чтобы транспорт выбрал N5, а не N4.
-        events: [{ type: 'version.created', payload: { version: version.version, kept_as_is: true } }],
-      }),
+      mutate: async ({ c, deal, version, now: at }) => {
+        // «Оставить как есть» отклоняет и предложенное время (ЗАДАЧА_08 D): кнопка «Принять» больше не нужна.
+        await proposalsRepo.supersedePending(c, deal.id, at);
+        return {
+          patch: { expiresAt: addHours(at, CONFIRMATION_TTL_HOURS) },
+          // Отдельного типа события в SPEC §5.4 для T6 нет; помечаем флагом, чтобы транспорт выбрал N5, а не N4.
+          events: [{ type: 'version.created', payload: { version: version.version, kept_as_is: true } }],
+        };
+      },
     },
     now,
   );
@@ -582,6 +591,8 @@ export type NewVersionInput = {
    * В «что изменилось» не входит: клиент услугу не видит, для него это те же условия.
    */
   service?: { id: number; durationMin: number } | null;
+  /** Версия создаётся принятием предложения времени (ЗАДАЧА_08 D): предложение становится `accepted`. */
+  acceptProposalId?: number;
 };
 
 /** Пустые «Уточнения» — это null: форма шлёт и null, и '', и пробелы (как при создании — с обрезкой). */
@@ -650,6 +661,10 @@ export async function newVersion(publicId: string, actor: Actor, input: NewVersi
             changeRequestText: deal.status === 'changes_requested' ? ((lastChangeRequest?.payload?.text as string | undefined) ?? null) : null,
             createdByUserId: a.userId,
           });
+          // Предложение времени: принятое — `accepted` (время удерживается, пока клиент подтверждает версию, §7.10),
+          // остальные ожидающие устарели — новая версия их перекрывает.
+          if (input.acceptProposalId) await proposalsRepo.resolve(c, input.acceptProposalId, 'accepted', at, nextVersion);
+          await proposalsRepo.supersedePending(c, deal.id, at);
           const servicePatch =
             input.service === undefined ? {} : { serviceId: input.service?.id ?? null, durationMin: input.service?.durationMin ?? null };
           return {
@@ -665,6 +680,135 @@ export async function newVersion(publicId: string, actor: Actor, input: NewVersi
     if (e instanceof InvalidTransition) throw new DealNotEditableError(e.status);
     throw e;
   }
+}
+
+// ─────────────────────── «Другое время» (ЗАДАЧА_08 D, SPEC §7.10) ───────────────────────
+
+const OFF_GRID_MESSAGE = 'Выберите время из сетки: с 08:00 до 21:30, не раньше чем через 30 минут и не дальше 30 дней';
+
+/**
+ * Клиент предлагает другое время. Машина состояний не меняется: из `awaiting_confirmation` это T4 «Предложить
+ * изменения» (текст запроса — `text`, его готовит транспорт), из `changes_requested` — только событие. В обоих
+ * случаях — строка `time_proposals` (прежнее ожидающее предложение вытесняется) и событие `time.proposed`.
+ * Время проверяется на сетке и по занятости; окончательно — ещё раз при принятии, под блокировкой исполнителя.
+ */
+export async function proposeTime(
+  publicId: string,
+  actor: Actor,
+  scheduledAt: Date,
+  a: { tz: string; text: string },
+  now = new Date(),
+): Promise<{ result: ServiceResult; proposal: TimeProposal }> {
+  if (actor.role !== 'client') throw new ForbiddenError('время предлагает клиент');
+  const current = await getBundle(publicId);
+  if (current.version.scheduledAt?.getTime() === scheduledAt.getTime()) {
+    throw new ValidationError('Это и так текущее время. Выберите другое', 'scheduled_at');
+  }
+
+  /** Проверка и запись предложения — внутри транзакции перехода или своей. */
+  const record = async (c: DbClient, deal: Deal): Promise<TimeProposal> => {
+    const slot = await checkSlot(c, { sellerUserId: deal.sellerUserId, dealId: deal.id, start: scheduledAt, durationMin: deal.durationMin, now, tz: a.tz });
+    if (slot === 'off_grid') throw new ValidationError(OFF_GRID_MESSAGE, 'scheduled_at');
+    if (slot === 'busy') throw new SlotBusyError();
+    await proposalsRepo.supersedePending(c, deal.id, now);
+    return proposalsRepo.create(c, { dealId: deal.id, proposedByUserId: actor.userId, scheduledAt, baseVersion: deal.currentVersion });
+  };
+  const proposedEvent = (p: TimeProposal) => ({
+    type: 'time.proposed' as const,
+    payload: { proposal_id: p.id, scheduled_at: p.scheduledAt.toISOString() },
+  });
+
+  if (current.deal.status === 'awaiting_confirmation') {
+    let proposal: TimeProposal | null = null;
+    const result = await runTransition(
+      {
+        publicId,
+        action: 'request_changes',
+        actor,
+        mutate: async ({ c, deal }) => {
+          proposal = await record(c, deal);
+          return {
+            events: [{ type: 'version.change_requested', payload: { text: a.text, proposal_id: proposal.id } }, proposedEvent(proposal)],
+          };
+        },
+      },
+      now,
+    );
+    return { result, proposal: proposal! };
+  }
+
+  return inTx(async (c) => {
+    const deal = await dealsRepo.lockByPublicId(c, publicId);
+    if (!deal) throw new NotFoundError(`сделка ${publicId}`);
+    assertParticipant(deal, actor);
+    if (deal.status !== 'changes_requested') throw new InvalidTransition(deal.status, 'request_changes', 'client', 'forbidden');
+    const proposal = await record(c, deal);
+    const event = await eventsRepo.append(c, { dealId: deal.id, actorUserId: actor.userId, actorRole: actorRoleFor(deal, actor), ...proposedEvent(proposal) });
+    const bundle = await loadBundle(c, deal);
+    return { result: { bundle, previousStatus: deal.status, statusChanged: false, events: [event], alreadyDone: false }, proposal };
+  });
+}
+
+export type AcceptTimeOutcome =
+  | { kind: 'accepted'; result: ServiceResult }
+  /** время уже занято другой записью: предложение снято */
+  | { kind: 'taken'; bundle: DealBundle; proposal: TimeProposal }
+  /** предложение устарело: другое предложение, новая версия, сделка ушла дальше или время уже прошло */
+  | { kind: 'stale'; bundle: DealBundle };
+
+/**
+ * Исполнитель принимает предложенное время одной кнопкой: новая версия условий тем же T5, остальные условия прежние.
+ * Принятия одного исполнителя идут строго по очереди (блокировка его строки `users`): второе видит удержание первого
+ * и получает «время уже занято» — так закрыта гонка «два клиента на одно время».
+ */
+export async function acceptTimeProposal(
+  publicId: string,
+  actor: Actor,
+  proposalId: number,
+  tz: string,
+  now = new Date(),
+): Promise<AcceptTimeOutcome> {
+  return inTx(async (c) => {
+    const found = await dealsRepo.byPublicId(c, publicId);
+    if (!found) throw new NotFoundError(`сделка ${publicId}`);
+    assertParticipant(found, actor);
+    if (actor.role !== 'seller') throw new ForbiddenError('время принимает исполнитель');
+    // FOR NO KEY UPDATE, а не FOR UPDATE: версия пишется своей транзакцией, и её проверка внешнего ключа на users
+    // (FOR KEY SHARE) не должна ждать эту блокировку — иначе взаимная блокировка. Принятия между собой всё равно по очереди.
+    await c.query('SELECT 1 FROM users WHERE max_user_id = $1 FOR NO KEY UPDATE', [found.sellerUserId]);
+
+    const deal = (await dealsRepo.byId(c, found.id))!;
+    const proposal = await proposalsRepo.byId(c, proposalId);
+    if (!proposal || proposal.dealId !== deal.id) throw new NotFoundError(`предложение ${proposalId}`);
+    const stale = proposal.status !== 'pending' || deal.currentVersion !== proposal.baseVersion || !EDITABLE_STATUSES.includes(deal.status);
+    if (stale) return { kind: 'stale', bundle: await loadBundle(c, deal) };
+
+    const slot = await checkSlot(c, { sellerUserId: deal.sellerUserId, dealId: deal.id, start: proposal.scheduledAt, durationMin: deal.durationMin, now, tz });
+    if (slot === 'off_grid') return { kind: 'stale', bundle: await loadBundle(c, deal) };
+    if (slot === 'busy') {
+      await proposalsRepo.resolve(c, proposal.id, 'taken', now);
+      return { kind: 'taken', bundle: await loadBundle(c, deal), proposal };
+    }
+
+    const version = await versionsRepo.byVersion(c, deal.id, deal.currentVersion);
+    if (!version) throw new Error(`у сделки ${deal.publicId} нет версии ${deal.currentVersion}`);
+    // Версия пишется своей транзакцией (тот же T5, что из формы); блокировка исполнителя держится до её конца.
+    const result = await newVersion(
+      publicId,
+      actor,
+      {
+        title: version.title,
+        description: version.description,
+        scheduledAt: proposal.scheduledAt,
+        totalKopecks: version.totalKopecks,
+        prepaymentKopecks: version.prepaymentKopecks,
+        cancelRule: version.cancelRule,
+        acceptProposalId: proposal.id,
+      },
+      now,
+    );
+    return { kind: 'accepted', result };
+  });
 }
 
 export function decline(publicId: string, actor: Actor, now = new Date()): Promise<ServiceResult> {

@@ -353,7 +353,7 @@ describe.skipIf(!DB)('сквозной сценарий', () => {
       await h.press(SELLER, SELLER_CHAT, 'dm:new', null);
       const id = await onlyDealPublicId(h);
       const clientCard = await cardMid(h, id, 'client_demo');
-      await h.press(SELLER, SELLER_CHAT, `cr:${id}`, clientCard);
+      await h.press(SELLER, SELLER_CHAT, `cr:t:${id}`, clientCard);
       h.max.reset();
       await h.say(SELLER, SELLER_CHAT, 'я'.repeat(501));
       expect(h.max.texts().join('\n')).toContain(texts.E5);
@@ -492,7 +492,7 @@ describe.skipIf(!DB)('ожидание ввода переживает пере�
       await before.press(SELLER, SELLER_CHAT, 'dm:new');
       id = await onlyDealPublicId(before);
       const clientCard = await cardMid(before, id, 'client_demo');
-      await before.press(SELLER, SELLER_CHAT, `cr:${id}`, clientCard);
+      await before.press(SELLER, SELLER_CHAT, `cr:t:${id}`, clientCard);
 
       const pending = await before.query<{ kind: string }>('SELECT kind FROM user_inputs WHERE user_id = $1', [SELLER]);
       expect(pending[0]?.kind).toBe('change_request'); // состояние в БД, а не в памяти процесса
