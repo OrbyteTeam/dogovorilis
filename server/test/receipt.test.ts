@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { loadConfig, setConfig } from '../src/config.js';
 import { buildHistory } from '../src/domain/receipt/history.js';
-import { renderReceiptPdf, statusLine } from '../src/domain/receipt/pdf.js';
+import { logoPath, renderReceiptPdf, statusLine } from '../src/domain/receipt/pdf.js';
 import { buildReceiptData } from '../src/transport/bot/receipt.js';
 import type { DealEvent, DealVersion } from '../src/types.js';
 import { bundle, event, finalByLink, prepaidByLink, prepaidByTransfer } from './helpers/render-fixtures.js';
@@ -94,11 +94,15 @@ describe('строка статуса (§8 п. 2)', () => {
 });
 
 describe('файл квитанции (§8, п. 14 чек-листа)', () => {
+  it('логотип для шапки лежит в server/assets', () => {
+    expect(logoPath()).not.toBeNull();
+  });
+
   it.each([
     ['закрытая', bundle({ status: 'closed', payments: [prepaidByLink(), finalByLink()], receipt: true, version: 2 })],
     ['отменённая', bundle({ status: 'cancelled', payments: [prepaidByTransfer()], cancel: { by: 'client', reason: 'Заболела', refundExpected: true } })],
     ['демо', bundle({ status: 'closed', demo: true, payments: [prepaidByLink(), finalByLink()], receipt: true })],
-  ] as const)('%s: валидный PDF', async (_, b) => {
+  ] as const)('%s: валидный PDF с логотипом в шапке', async (_, b) => {
     const dir = await mkdtemp(path.join(tmpdir(), 'receipt-test-'));
     try {
       const out = path.join(dir, 'k.pdf');
@@ -107,6 +111,7 @@ describe('файл квитанции (§8, п. 14 чек-листа)', () => {
       const bytes = await readFile(out);
       expect(bytes.subarray(0, 5).toString('latin1')).toBe('%PDF-');
       expect(bytes.toString('latin1')).toContain('%%EOF');
+      expect(bytes.toString('latin1')).toContain('/Subtype /Image'); // логотип в шапке
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
