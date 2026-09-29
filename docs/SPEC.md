@@ -557,6 +557,24 @@ React 19.2.8 + MAX UI 0.5.0 (`docs/DESIGN.md`), hash-роутинг (`/app/#/new
 | `freelance` | «Работа под ключ» | 50 % | full_refund | дата = срок сдачи |
 | `free` | «» | 0 | free_24h | — |
 
+### 7.6a. «Мои услуги» исполнителя (`#/settings/services`) — ЗАДАЧА_08 C
+Услуга — сохранённые условия, из которых исполнитель быстро собирает карточку: название (2–80), уточнения (≤ 1000), цена
+(1 … 1 000 000 ₽), длительность (15 … 720 мин, шаг 15, по умолчанию 60 — нужна части D: занятость), предоплата
+(нет / процент 1–100 / сумма ≤ цены), правило отмены, порядок, «показывать» (скрытая в форме не предлагается). Это **не
+витрина**: клиент список услуг не видит нигде, услуга только заполняет форму исполнителя. До 50 услуг у исполнителя.
+- Экран «Мои услуги» (из «Настроек»): список по порядку, стрелки «выше / ниже», «Добавить услугу»; скрытые — отдельным
+  блоком «Скрытые». Пусто — «Сохраните то, что делаете чаще всего: карточка соберётся в одно нажатие» и чипы-примеры
+  ниш (§7.6): пример открывает форму услуги с его названием, предоплатой и правилом (цену вводит исполнитель).
+- Форма услуги (`#/settings/services/new`, `#/settings/services/:id`): поля выше, «Сохранить», у существующей —
+  «Скрыть» / «Показывать снова». Удаления нет: на услугу ссылаются сделки.
+- «Новая сделка» (§7.2): если у исполнителя есть показываемые услуги, над полями блок «Выбрать услугу» (чипы: название
+  и цена). Выбор подставляет всё, кроме даты: название, уточнения, сумму, предоплату (процент — сегментом, сумма —
+  «Своя»), правило отмены; поля остаются редактируемыми; сделка запоминает услугу (`service_id`) и её длительность.
+  Повторное нажатие выбранного чипа снимает выбор. Шаблоны ниш остаются ниже («Или начните с примера»); у заполненной
+  формы без выбранной услуги — ссылка-кнопка «Сохранить как услугу» (`POST /api/services` из полей формы).
+- «Повторить» (§7.5) берёт услугу прежней сделки (`service_id` из `GET /api/deals/:id`), даже если её потом скрыли.
+  Правка условий (T5) показывает тот же блок; смена услуги меняет `service_id` и длительность сделки.
+
 ### 7.7. Настройки (`#/settings`)
 Поля профиля §7.2 + переключатели «Принимать оплату по ссылке» (недоступен, если `PAYMENT_PROVIDER=none`, с пояснением
 «не подключено на сервере») и «Принимать переводы по реквизитам». Блок «Утренняя сводка»: выпадающий список «Выключено» /
@@ -575,10 +593,14 @@ React 19.2.8 + MAX UI 0.5.0 (`docs/DESIGN.md`), hash-роутинг (`/app/#/new
 | `PUT /api/me/profile` | `{ display_name, tax_mode, payout_details?, transfer_enabled, link_enabled, default_cancel_rule, digest_time? }` (`digest_time`: 360…720 шаг 30 или `null` — выключить; нет поля — не менять) | `SellerProfile` |
 | `POST /api/me/phone` | `{ phone, authDate, hash }` | `{ phone_verified: true }` / 400 `phone_hash_invalid` |
 | `GET /api/templates` | — | `Template[]` (§7.6) |
-| `POST /api/deals` | `{ template, title, description?, scheduled_at? (ISO), total_rub (int), prepayment_rub (int), cancel_rule, photo_max_token?, profile? (если профиля нет — те же поля, что PUT /api/me/profile), repeat_of? (public_id), same_client? (bool) }` | `{ deal: DealView, link: string, share_text: string, card_sent: boolean, client_card_sent: boolean, client: {name} \| null, client_no_dialog: boolean }`. «Повторить» (§5.5): `repeat_of` — только своя сделка (иначе, и если её нет, 403 `forbidden`), демо — 400 `validation`; `same_client: true` — только если у прежней сделки настоящий клиент (иначе 403): есть у него диалог с ботом — сделка создаётся сразу с ним, карточка уходит ему (`client_card_sent`), нет — обычная сделка со ссылкой и `client_no_dialog: true`; `client` — его имя, если `same_client` просили |
+| `GET /api/services?all=1` | — | `{ items: Service[] }` — свои услуги по порядку; без `all` — только показываемые. `Service`: `{ id, title, description \| null, price_rub, duration_min, prepayment: { kind: 'none'\|'percent'\|'amount', value } (процент или рубли), cancel_rule, template, active, sort_order }` (§7.6a) |
+| `POST /api/services` | `{ title, description?, price_rub, duration_min?, prepayment: {kind, value}, cancel_rule, template? }` | `{ service }`; 400 `validation`; 409 `services_limit` (больше 50) |
+| `PUT /api/services/:id` | как POST (+ `active?: boolean`) | `{ service }`; чужая или несуществующая — 404 `not_found` (чужие id не подтверждаем) |
+| `PUT /api/services/order` | `{ ids: number[] }` — все свои услуги в новом порядке | `{ items: Service[] }`; чужой id или неполный список — 400 |
+| `POST /api/deals` | `{ template, title, description?, scheduled_at? (ISO), total_rub (int), prepayment_rub (int), cancel_rule, photo_max_token?, profile? (если профиля нет — те же поля, что PUT /api/me/profile), repeat_of? (public_id), same_client? (bool), service_id? (своя услуга, в т. ч. скрытая; чужая — 404) }` | `{ deal: DealView, link: string, share_text: string, card_sent: boolean, client_card_sent: boolean, client: {name} \| null, client_no_dialog: boolean }`. «Повторить» (§5.5): `repeat_of` — только своя сделка (иначе, и если её нет, 403 `forbidden`), демо — 400 `validation`; `same_client: true` — только если у прежней сделки настоящий клиент (иначе 403): есть у него диалог с ботом — сделка создаётся сразу с ним, карточка уходит ему (`client_card_sent`), нет — обычная сделка со ссылкой и `client_no_dialog: true`; `client` — его имя, если `same_client` просили |
 | `GET /api/deals?role=seller\|client\|all&filter=active\|awaiting_payment\|done\|all` | — | `{ items: DealListItem[] }` — до 200 строк; в строке `scheduled_at`, `status_short` (статус словом), `client_name` (\| null) |
-| `GET /api/deals/:publicId` | — | только участнику (иначе 403 `forbidden`; нет сделки — 404 `not_found`): `{ public_id, status, version, role: 'seller'\|'client', demo, template, title, description \| null, scheduled_at: ISO \| null, total_rub, prepayment_rub, cancel_rule, client: {name} \| null, can_edit, can_repeat, same_client_available }` — предзаполнение форм правки (T5) и повтора; суммы — целые рубли текущей версии; `can_edit` — исполнитель и статус `awaiting_confirmation`/`changes_requested`; `can_repeat` — исполнитель, статус терминальный, не демо; `same_client_available` — `can_repeat` и у сделки настоящий клиент (не демо) |
-| `PUT /api/deals/:publicId` | как POST (`template`, `profile`, `repeat_of`, `same_client` игнорируются и необязательны) | T5, только исполнитель (иначе 403 `forbidden`): `{ deal: DealView, version, client_notified }`; статус не `awaiting_confirmation`/`changes_requested` — 409 `{ error: { code: 'deal_not_editable', message, status } }`; ни одно поле условий не изменилось (название, уточнения — пустые и `null` равны, дата, сумма, предоплата, правило отмены) — 409 `no_changes` |
+| `GET /api/deals/:publicId` | — | только участнику (иначе 403 `forbidden`; нет сделки — 404 `not_found`): `{ public_id, status, version, role: 'seller'\|'client', demo, template, title, description \| null, scheduled_at: ISO \| null, total_rub, prepayment_rub, cancel_rule, client: {name} \| null, can_edit, can_repeat, same_client_available, service_id: number \| null, duration_min: number \| null }` — предзаполнение форм правки (T5) и повтора; суммы — целые рубли текущей версии; `can_edit` — исполнитель и статус `awaiting_confirmation`/`changes_requested`; `can_repeat` — исполнитель, статус терминальный, не демо; `same_client_available` — `can_repeat` и у сделки настоящий клиент (не демо) |
+| `PUT /api/deals/:publicId` | как POST (`template`, `profile`, `repeat_of`, `same_client` игнорируются и необязательны; `service_id` — сменить услугу, `null` — отвязать, нет поля — не менять) | T5, только исполнитель (иначе 403 `forbidden`): `{ deal: DealView, version, client_notified }`; статус не `awaiting_confirmation`/`changes_requested` — 409 `{ error: { code: 'deal_not_editable', message, status } }`; ни одно поле условий не изменилось (название, уточнения — пустые и `null` равны, дата, сумма, предоплата, правило отмены) — 409 `no_changes` |
 | `GET /api/deals/:publicId/full?as=seller\|client` | — | экран сделки (§7.9): `DealFull`; только участнику (иначе 403 `forbidden`), нет сделки — 404. `as` — чьими глазами смотреть: без него — исполнитель, если смотрящий исполнитель, иначе клиент; `as=client` — только клиенту сделки (в демо это сам исполнитель), иначе 403 |
 | `POST /api/deals/:publicId/actions` | `{ action, as?: 'seller'\|'client', version?: int, text?: string, reason?: string }` — коды действий §7.9 | те же доменные функции, что у кнопок карточки, и та же доставка (`publishOutcome`: карточки обеих сторон, уведомления N1–N16, квитанция): `{ deal: DealFull, result: 'done'\|'already_done', notice: string \| null }`. Ошибки: 400 `validation` (`text` 1–500 для `request_changes`/`remarks`, `reason` ≤ 300, `version` для `confirm`); 403 `forbidden` (не участник или действие чужой роли); 404; 409 `invalid_transition` (текст E1, сделка ушла дальше), `client_cancel_locked` (E7), `version_mismatch` («Условия изменились — посмотрите новую версию»), `receipt_not_ready` (квитанция до завершения) |
 | `POST /api/deals/:publicId/receipt` | тело — сам файл (`Content-Type: application/pdf \| image/jpeg \| image/png`, ≤ 20 МБ), имя — заголовок `X-File-Name` (URL-encoded, необязательно) | T15 «чек приложен», только исполнитель в `paid`: сервер загружает файл в MAX (`uploadFile`, путь `Chek-<id>.<ext>` — только латиница, CONTRACTS §1.14; исходное имя — в `receipts.file_name`), дальше как чек из чата — `attachReceipt`, чек клиенту, квитанция обеим. `{ deal: DealFull }`; 400 `validation` (тип/пусто), 413 `file_too_large`, 403, 409 `invalid_transition` |
@@ -645,6 +667,9 @@ DDL — `server/migrations/0001_init.sql` (первичен). Ключевые �
   `sendMessageToUser` для «чужой» стороны и `ctx.reply` для отвечающей.
 - Удаление данных не предусмотрено в MVP (Won't); `dialog_removed`/`bot_stopped` → помечаем `users.dialog_chat_id = NULL`
   (уведомления перестают уходить до следующего `/start`).
+- `seller_services` (`0006_seller_services.sql`, ЗАДАЧА_08 C): услуги исполнителя (§7.6a). У сделки — `deals.service_id`
+  (`ON DELETE SET NULL`) и `deals.duration_min` — длительность **на момент создания** (или правки T5 со сменой услуги):
+  правка услуги потом не сдвигает занятость уже договорённых визитов. `NULL` — считать 60 минут (§7.10).
 
 ## 9. Интеграции
 
