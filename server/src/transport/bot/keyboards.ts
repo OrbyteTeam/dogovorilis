@@ -6,7 +6,7 @@ import type { Button } from '@maxhub/max-bot-api/types';
 import { botUsername } from '../../config.js';
 import { BTN, payButtonLabel, shareInvite } from '../../texts.js';
 import type { AttachmentRequest } from '../../integrations/max/gateway.js';
-import type { CardRole, DealBundle, Payment, PaymentKind } from '../../types.js';
+import type { CardRole, DealBundle, Payment, PaymentKind, ReminderKind } from '../../types.js';
 import { livePayment, remaining } from '../../types.js';
 import { cb } from './callbacks.js';
 
@@ -304,9 +304,24 @@ export function digestKeyboard(botUsername: string): AttachmentRequest {
   return keyboard([[openApp(BTN.schedule, botUsername, 'deals')]]);
 }
 
-/** Одна кнопка «Открыть» — для коротких уведомлений и напоминаний. */
+/** Одна кнопка «Открыть сделку»: для уведомлений и напоминаний, где действие живёт в карточке (DESIGN_BRIEF §4). */
 export function openKeyboard(publicId: string): AttachmentRequest {
   return keyboard([[Keyboard.button.callback(BTN.open, cb('op', publicId))]]);
+}
+
+/** «Новая сделка» под N6 и N7: сделка закрыта, следующий шаг исполнителя это новая (DESIGN_BRIEF §4). */
+export function newDealKeyboard(): AttachmentRequest {
+  return keyboard([[openApp(BTN.newDeal, botUsername(), 'new')]]);
+}
+
+/**
+ * Кнопка напоминания по его виду (DESIGN_BRIEF §4): о чеке сразу «Приложить чек» (тот же код `rc`, что в N13),
+ * «через 30 минут» без кнопки, остальные открывают сделку свежей карточкой с нужными кнопками.
+ */
+export function reminderKeyboard(kind: ReminderKind, publicId: string): AttachmentRequest | undefined {
+  if (kind === 'event_soon') return undefined;
+  if (kind === 'receipt_due' || kind === 'receipt_deadline') return keyboard([[Keyboard.button.callback(BTN.attachReceipt, cb('rc', publicId))]]);
+  return openKeyboard(publicId);
 }
 
 /** Какой платёж ждёт оплаты — нужно и карточке, и клавиатуре. */

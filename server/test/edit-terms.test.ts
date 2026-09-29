@@ -266,7 +266,7 @@ describe.skipIf(!DB)('правка условий: API и сквозной сц�
     // N4 клиенту — только изменившиеся поля
     const n4 = h.max.inChat(CLIENT_CHAT).find((m) => m.text.startsWith('✏️ Исполнитель изменил условия'));
     expect(n4?.text).toBe(
-      `✏️ Исполнитель изменил условия #${id}, версия 2: когда: ${formatDateTime(later)}; сумма: ${formatMoney(300_000)}, предоплата ${formatMoney(60_000)}. Проверьте и подтвердите.`,
+      `✏️ Исполнитель изменил условия #${id}, версия 2: когда: ${formatDateTime(later)}; сумма: ${formatMoney(300_000)}, предоплата ${formatMoney(60_000)}.\nПроверьте и подтвердите.`,
     );
     expect(n4?.text).not.toContain('что делаем');
     expect(n4?.text).not.toContain('уточнения');

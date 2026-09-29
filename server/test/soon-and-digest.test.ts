@@ -179,12 +179,10 @@ describe.skipIf(!DB)('event_soon и утренняя сводка: планир�
       const toClient = h.max.inChat(CLIENT_CHAT);
       expect(toSeller).toHaveLength(1);
       expect(toClient).toHaveLength(1);
-      expect(toSeller[0].text).toBe(`⏰ Через 30 минут: Пользователь${CLIENT}, Маникюр с покрытием. Предоплата ${formatMoney(50_000)} ещё не внесена.`);
+      expect(toSeller[0].text).toBe(`⏰ Через 30 минут: Пользователь${CLIENT}, Маникюр с покрытием.\nПредоплата ${formatMoney(50_000)} ещё не внесена.`);
       expect(toClient[0].text).toBe('⏰ Через 30 минут: Маникюр с покрытием, исполнитель Анна Мастер.');
-      for (const m of [toSeller[0], toClient[0]]) {
-        expect(m.buttons.map((b) => b.text)).toEqual([texts.BTN.open]);
-        expect(m.buttons[0].payload).toBe(`op:${id}`);
-      }
+      // «Через 30 минут» без кнопки: действие уже не в чате, а на месте (DESIGN_BRIEF §4).
+      for (const m of [toSeller[0], toClient[0]]) expect(m.buttons).toEqual([]);
       expect((await reminders('event_soon', id)).every((r) => r.status === 'sent')).toBe(true);
 
       h.max.reset();
@@ -198,7 +196,7 @@ describe.skipIf(!DB)('event_soon и утренняя сводка: планир�
       await makeDue(id, 'event_soon');
       h.max.reset();
       await tick({ max: h.gateway, sendReminders: true });
-      expect(h.max.inChat(SELLER_CHAT)[0].text).toContain('Маникюр с покрытием. Без предоплаты.');
+      expect(h.max.inChat(SELLER_CHAT)[0].text).toContain('Маникюр с покрытием.\nБез предоплаты.');
     });
 
     it('срок уже наступил (сервер лежал) — гасится too_late и не отправляется', async () => {

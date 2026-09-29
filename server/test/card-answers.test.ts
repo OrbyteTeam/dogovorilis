@@ -178,7 +178,7 @@ describe.skipIf(!DB)('ответ на кнопку карточки — карт
     expect(await dealStatus(h, id)).toBe('closed');
 
     for (const chat of [SELLER_CHAT, CLIENT_CHAT]) {
-      const n14 = h.max.inChat(chat).filter((m) => m.kind === 'send' && m.text.includes('закрыта. Квитанция'));
+      const n14 = h.max.inChat(chat).filter((m) => m.kind === 'send' && m.text.includes('закрыта.\nКвитанция'));
       expect(n14, `чат ${chat}`).toHaveLength(1);
       expect(n14[0].attachmentTypes).toContain('file');
     }

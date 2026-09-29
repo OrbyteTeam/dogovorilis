@@ -479,34 +479,36 @@ describe('строки карточки', () => {
 describe('уведомления (SPEC §6.5, DESIGN_BRIEF §4)', () => {
   it('N2 подставляет сумму предоплаты или дату', () => {
     expect(N2({ client: 'Иван И.', id: ID, prepaymentKopecks: 50_000, scheduledAt: SCHEDULED })).toBe(
-      `✅ Иван И. подтвердил(а) условия #${ID}. Ждём предоплату ${formatMoney(50_000)}.`,
+      `✅ Иван И. подтвердил(а) условия #${ID}.\nЖдём предоплату ${formatMoney(50_000)}.`,
     );
     expect(N2({ client: 'Иван И.', id: ID, prepaymentKopecks: 0, scheduledAt: SCHEDULED })).toBe(
-      `✅ Иван И. подтвердил(а) условия #${ID}. Всё согласовано на ${formatDateTime(SCHEDULED)}. Отметьте «Выполнено», когда закончите.`,
+      `✅ Иван И. подтвердил(а) условия #${ID}.\nВсё согласовано на ${formatDateTime(SCHEDULED)}. Отметьте «Выполнено», когда закончите.`,
     );
     expect(N2({ client: 'Иван И.', id: ID, prepaymentKopecks: 0, scheduledAt: null })).toBe(
-      `✅ Иван И. подтвердил(а) условия #${ID}. Всё согласовано. Отметьте «Выполнено», когда закончите.`,
+      `✅ Иван И. подтвердил(а) условия #${ID}.\nВсё согласовано. Отметьте «Выполнено», когда закончите.`,
     );
   });
 
   it('N8 подставляет сумму, способ и отдельную пометку теста', () => {
-    expect(N8({ id: ID, sumKopecks: 50_000, rail: 'link', provider: 'yookassa' })).toBe(
-      `💸 Предоплата ${formatMoney(50_000)} по #${ID} получена по ссылке ЮKassa. 🧪 Тестовый магазин, деньги не списывались. Всё согласовано, ждём выполнения.`,
+    expect(N8({ id: ID, sumKopecks: 50_000, rail: 'link', provider: 'yookassa', to: 'client' })).toBe(
+      `💸 Предоплата ${formatMoney(50_000)} по #${ID} получена по ссылке ЮKassa.\n🧪 Тестовый магазин, деньги не списывались.\nВсё согласовано, ждём выполнения.`,
     );
-    expect(N8({ id: ID, sumKopecks: 50_000, rail: 'transfer', provider: 'manual' })).toContain('получена переводом по реквизитам.');
+    expect(N8({ id: ID, sumKopecks: 50_000, rail: 'transfer', provider: 'manual', to: 'seller' })).toBe(
+      `💸 Предоплата ${formatMoney(50_000)} по #${ID} получена переводом по реквизитам.\nВсё согласовано. Отметьте «Выполнено», когда закончите.`,
+    );
   });
 
   it('N13 подставляет срок чека', () => {
     const deadline = new Date('2026-10-09T20:59:00Z');
     expect(N13({ id: ID, deadline })).toBe(
-      `🧾 Сделка #${ID} оплачена полностью. Сформируйте чек в «Мой налог» и приложите его сюда, срок до 9 окт.`,
+      `🧾 Сделка #${ID} оплачена полностью.\nСформируйте чек в «Мой налог» и приложите его сюда, срок до 9 окт.`,
     );
   });
 
   it('N15: кто отменил, экранированная причина и строка про предоплату', () => {
     const refund = refundLine({ prepaymentKopecks: 50_000, expected: true });
     expect(N15({ id: ID, by: 'client', reason: 'Заболел*а*', refundLine: refund })).toBe(
-      `🚫 Сделка #${ID} отменена клиентом: Заболел\\*а\\*. Предоплата ${formatMoney(50_000)}: ожидается возврат.`,
+      `🚫 Сделка #${ID} отменена клиентом: Заболел\\*а\\*.\nПредоплата ${formatMoney(50_000)}: ожидается возврат.`,
     );
     expect(N15({ id: ID, by: 'seller', reason: null, refundLine: null })).toBe(`🚫 Сделка #${ID} отменена исполнителем.`);
     expect(N15({ id: ID, by: 'system', reason: null, refundLine: null })).toContain('отменена автоматически');
@@ -526,21 +528,21 @@ describe('уведомления (SPEC §6.5, DESIGN_BRIEF §4)', () => {
   it('N4 перечисляет только изменившиеся поля, в порядке формы', () => {
     const terms = { title: 'Маникюр *люкс*', scheduledAt: SCHEDULED, totalKopecks: 300_000, prepaymentKopecks: 60_000, cancelRule: 'free_48h' as const };
     expect(N4({ id: ID, version: 2, changed: ['total', 'scheduled_at', 'prepayment'], terms })).toBe(
-      `✏️ Исполнитель изменил условия #${ID}, версия 2: когда: ${formatDateTime(SCHEDULED)}; сумма: ${formatMoney(300_000)}, предоплата ${formatMoney(60_000)}. Проверьте и подтвердите.`,
+      `✏️ Исполнитель изменил условия #${ID}, версия 2: когда: ${formatDateTime(SCHEDULED)}; сумма: ${formatMoney(300_000)}, предоплата ${formatMoney(60_000)}.\nПроверьте и подтвердите.`,
     );
     const all = N4({ id: ID, version: 3, changed: ['title', 'description', 'scheduled_at', 'total', 'prepayment', 'cancel_rule'], terms: { ...terms, scheduledAt: null, prepaymentKopecks: 0 } });
     expect(all).toContain('что делаем: «Маникюр \\*люкс\\*»; уточнения изменены; когда: без даты; ');
     expect(all).toContain(`сумма: ${formatMoney(300_000)}, без предоплаты; правило отмены: отмена без потери предоплаты за 48 ч`);
     expect(N4({ id: ID, version: 2, changed: ['prepayment'], terms })).toContain(`предоплата: ${formatMoney(60_000)}`);
     expect(N4({ id: ID, version: 2, changed: ['description'], terms })).toBe(
-      `✏️ Исполнитель изменил условия #${ID}, версия 2: уточнения изменены. Проверьте и подтвердите.`,
+      `✏️ Исполнитель изменил условия #${ID}, версия 2: уточнения изменены.\nПроверьте и подтвердите.`,
     );
     // старое событие без перечня: общий текст
-    expect(N4({ id: ID, version: 2 })).toBe(`✏️ Исполнитель изменил условия #${ID}, версия 2. Проверьте и подтвердите.`);
+    expect(N4({ id: ID, version: 2 })).toBe(`✏️ Исполнитель изменил условия #${ID}, версия 2.\nПроверьте и подтвердите.`);
   });
 
   it('ответ исполнителю после правки условий: по тому, дошла ли версия до клиента', () => {
-    expect(TERMS_UPDATED({ id: ID, version: 2, client: 'notified' })).toBe(`✏️ Условия #${ID} обновлены, клиент получил версию 2. Ждём подтверждения.`);
+    expect(TERMS_UPDATED({ id: ID, version: 2, client: 'notified' })).toBe(`✏️ Условия #${ID} обновлены, клиент получил версию 2.\nЖдём подтверждения.`);
     expect(TERMS_UPDATED({ id: ID, version: 2, client: 'no_client' })).toContain('когда откроет ссылку');
     expect(TERMS_UPDATED({ id: ID, version: 2, client: 'not_delivered' })).toContain('когда вернётся в чат с ботом');
   });
@@ -555,8 +557,8 @@ describe('уведомления (SPEC §6.5, DESIGN_BRIEF §4)', () => {
   });
 
   it('N14 упоминает чек только когда он есть', () => {
-    expect(N14({ id: ID, withReceipt: true })).toBe(`✅ Сделка #${ID} закрыта. Квитанция во вложении, чек выше.`);
-    expect(N14({ id: ID, withReceipt: false })).toBe(`✅ Сделка #${ID} закрыта. Квитанция во вложении.`);
+    expect(N14({ id: ID, withReceipt: true })).toBe(`✅ Сделка #${ID} закрыта.\nКвитанция во вложении, чек выше.`);
+    expect(N14({ id: ID, withReceipt: false })).toBe(`✅ Сделка #${ID} закрыта.\nКвитанция во вложении.`);
   });
 });
 
@@ -599,8 +601,8 @@ describe('напоминания (SPEC §10.2)', () => {
 
   it('подставляет суммы, дату, срок чека и экранированное название', () => {
     const base = { id: ID, title: 'Маникюр *люкс*', sumKopecks: 50_000, scheduledAt: SCHEDULED, deadline: new Date('2026-10-09T20:59:00Z') };
-    expect(reminderText('prepayment_due', base)).toBe(`🔔 Предоплата ${formatMoney(50_000)} по #${ID} ещё не внесена. Внесите её, чтобы сделка состоялась.`);
-    expect(reminderText('payment_due', base)).toBe(`🔔 Остаток ${formatMoney(50_000)} по #${ID} ждёт оплаты. Оплатите его в карточке сделки.`);
+    expect(reminderText('prepayment_due', base)).toBe(`🔔 Предоплата ${formatMoney(50_000)} по #${ID} ещё не внесена.\nВнесите её, чтобы сделка состоялась.`);
+    expect(reminderText('payment_due', base)).toBe(`🔔 Остаток ${formatMoney(50_000)} по #${ID} ждёт оплаты.\nОплатите его в карточке сделки.`);
     expect(reminderText('event_tomorrow', base)).toBe(`📅 Завтра, ${formatDateTime(SCHEDULED)}: Маникюр \\*люкс\\*, #${ID}.`);
     expect(reminderText('event_tomorrow', { ...base, scheduledAt: null })).toContain('Завтра по плану');
     expect(reminderText('receipt_due', base)).toContain('срок до 9 окт');
@@ -621,7 +623,7 @@ describe('«через 30 минут» и утренняя сводка (ЗАД�
 
   it('исполнителю: кто и что с предоплатой; пользовательский текст экранирован', () => {
     expect(eventSoon({ ...base, to: 'seller', prepayment: 'received' })).toBe(
-      '⏰ Через 30 минут: Саша \\[VIP\\], Маникюр \\*люкс\\*. Предоплата получена.',
+      '⏰ Через 30 минут: Саша \\[VIP\\], Маникюр \\*люкс\\*.\nПредоплата получена.',
     );
     expect(eventSoon({ ...base, to: 'seller', prepayment: 'awaiting' })).toContain(`Предоплата ${formatMoney(60_000)} ещё не внесена.`);
     expect(eventSoon({ ...base, to: 'seller', prepayment: 'none' })).toContain('Без предоплаты.');

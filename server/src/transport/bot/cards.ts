@@ -136,9 +136,9 @@ function receiptLineFor(bundle: DealBundle): string | null {
  * Если клиент сообщил о переводе, а подтверждения не было, строка «Предоплата …: ожидается возврат»
  * говорила бы о деньгах, получение которых никто не подтвердил, — вместо неё строка «сверьте поступление».
  */
-export function refundLinesFor(bundle: DealBundle): { refund: string | null; claim: string | null } {
+export function refundLinesFor(bundle: DealBundle, viewer: 'seller' | 'client'): { refund: string | null; claim: string | null } {
   const claimed = claimedTransferAtCancel(bundle.payments);
-  const claim = claimed ? texts.claimedTransferOnCancel({ sumKopecks: claimed.amountKopecks, at: claimed.claimedAt }) : null;
+  const claim = claimed ? texts.claimedTransferOnCancel({ sumKopecks: claimed.amountKopecks, at: claimed.claimedAt, viewer }) : null;
   const prepaymentReceived = bundle.payments.some((p) => p.kind === 'prepayment' && p.status === 'succeeded');
   const { refundSentAt: sentAt, refundReceivedAt: receivedAt } = bundle.deal;
   const marked = Boolean(sentAt || receivedAt);
@@ -159,7 +159,7 @@ export function buildCardView(bundle: DealBundle, role: CardRole): texts.CardVie
   const { deal, version, seller, client } = bundle;
   // Ссылка нужна, только пока клиента ждут: у отменённой или истёкшей сделки звать по ней некого (прогон 1, S5).
   const showLink = role === 'seller' && deal.clientUserId === null && deal.status === 'awaiting_confirmation';
-  const { refund, claim } = refundLinesFor(bundle);
+  const { refund, claim } = refundLinesFor(bundle, role === 'seller' ? 'seller' : 'client');
   return {
     publicId: deal.publicId,
     status: deal.status,

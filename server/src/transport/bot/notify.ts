@@ -8,11 +8,11 @@ import * as usersRepo from '../../db/repos/users.js';
 import type { AttachmentRequest, MaxGateway } from '../../integrations/max/gateway.js';
 import { log } from '../../logger.js';
 import * as texts from '../../texts.js';
-import { livePayment, remaining, TERMS_FIELDS, type DealBundle, type DealEvent, type TermsField } from '../../types.js';
+import { claimedTransferAtCancel, livePayment, remaining, TERMS_FIELDS, type DealBundle, type DealEvent, type TermsField } from '../../types.js';
 import { receiptDeadline } from '../../domain/time.js';
 import { taxModeOf } from '../../domain/deal/service.js';
 import { displayName, refundLinesFor } from './cards.js';
-import { n11Keyboard, n13Keyboard, n3Keyboard, openKeyboard } from './keyboards.js';
+import { n11Keyboard, n13Keyboard, n3Keyboard, newDealKeyboard, openKeyboard } from './keyboards.js';
 
 type Side = 'seller' | 'client';
 
@@ -67,27 +67,30 @@ export function noticesFor(bundle: DealBundle, event: DealEvent): Notice[] {
     }
 
     case 'deal.declined':
-      return [{ to: 'seller', text: texts.N6({ client, id }) }];
+      return [{ to: 'seller', text: texts.N6({ client, id }), keyboard: newDealKeyboard() }];
 
+    // Новую сделку создаёт исполнитель; клиенту кнопка «Новая сделка» ни к чему, ему подсказка в тексте.
     case 'deal.expired':
       return [
-        { to: 'seller', text: texts.N7({ id }) },
-        { to: 'client', text: texts.N7({ id }) },
+        { to: 'seller', text: texts.N7({ id, to: 'seller' }), keyboard: newDealKeyboard() },
+        { to: 'client', text: texts.N7({ id, to: 'client' }) },
       ];
 
     case 'payment.succeeded': {
       const kind = event.payload.kind === 'final' ? 'final' : 'prepayment';
       if (kind === 'prepayment') {
         const p = livePayment(bundle.payments, 'prepayment');
-        const text = texts.N8({
-          id,
-          sumKopecks: p?.amountKopecks ?? bundle.version.prepaymentKopecks,
-          rail: p?.rail ?? 'transfer',
-          provider: p?.provider ?? 'manual',
-        });
+        const n8 = (to: Side) =>
+          texts.N8({
+            id,
+            sumKopecks: p?.amountKopecks ?? bundle.version.prepaymentKopecks,
+            rail: p?.rail ?? 'transfer',
+            provider: p?.provider ?? 'manual',
+            to,
+          });
         return [
-          { to: 'seller', text, keyboard: openKeyboard(id) },
-          { to: 'client', text, keyboard: openKeyboard(id) },
+          { to: 'seller', text: n8('seller'), keyboard: openKeyboard(id) },
+          { to: 'client', text: n8('client'), keyboard: openKeyboard(id) },
         ];
       }
       // Остаток пришёл: чек нужен только при npd/ip_kkt; при tax_mode=none сделка закроется сама (T15).
@@ -100,14 +103,16 @@ export function noticesFor(bundle: DealBundle, event: DealEvent): Notice[] {
       // Поздняя оплата, которую сделка приняла, уведомляется обычным N8/N13 по переходу. Здесь — только
       // оплата, которую сделка принять уже не может: вернуть её может только исполнитель (ЗАДАЧА_03 F1).
       if (!event.payload.refund_required) return [];
-      const text = texts.LATE_PAYMENT_REFUND({
-        id,
-        sumKopecks: Number(event.payload.amount ?? 0),
-        dealCancelled: event.payload.reason === 'deal_cancelled',
-      });
+      const late = (to: Side) =>
+        texts.LATE_PAYMENT_REFUND({
+          id,
+          sumKopecks: Number(event.payload.amount ?? 0),
+          dealCancelled: event.payload.reason === 'deal_cancelled',
+          to,
+        });
       return [
-        { to: 'seller', text, keyboard: openKeyboard(id) },
-        { to: 'client', text, keyboard: openKeyboard(id) },
+        { to: 'seller', text: late('seller'), keyboard: openKeyboard(id) },
+        { to: 'client', text: late('client'), keyboard: openKeyboard(id) },
       ];
     }
 
@@ -144,7 +149,9 @@ export function noticesFor(bundle: DealBundle, event: DealEvent): Notice[] {
 
     case 'deal.cancelled': {
       const by = (event.payload.by as 'seller' | 'client' | 'system') ?? 'system';
-      const { refund, claim } = refundLinesFor(bundle);
+      // Уведомляем другую сторону. В демо обе «стороны» один чат, поэтому отправим оба варианта с префиксами.
+      const other: Side = by === 'seller' ? 'client' : 'seller';
+      const { refund, claim } = refundLinesFor(bundle, other);
       const text = texts.N15({
         id,
         by,
@@ -152,11 +159,15 @@ export function noticesFor(bundle: DealBundle, event: DealEvent): Notice[] {
         refundLine: refund,
         claimLine: claim,
       });
-      // Уведомляем другую сторону. В демо обе «стороны» — один чат, поэтому отправим оба варианта с префиксами.
-      const other: Side = by === 'seller' ? 'client' : 'seller';
-      const out: Notice[] = [{ to: other, text }];
+      // «Открыть сделку»: в карточке отменённой сделки отметки возврата и квитанция (DESIGN_BRIEF §4, N15).
+      const out: Notice[] = [{ to: other, text, keyboard: openKeyboard(id) }];
       // Клиент сообщал о переводе: сверить поступление должны обе стороны, в том числе отменившая (ЗАДАЧА_03 F7).
-      if (claim) out.push({ to: other === 'client' ? 'seller' : 'client', text: `${claim}.` });
+      const claimed = claim ? claimedTransferAtCancel(bundle.payments) : null;
+      if (claimed) {
+        const self: Side = other === 'client' ? 'seller' : 'client';
+        const text = texts.CLAIM_AFTER_CANCEL({ id, sumKopecks: claimed.amountKopecks, at: claimed.claimedAt, to: self });
+        out.push({ to: self, text, keyboard: openKeyboard(id) });
+      }
       return out;
     }
 
