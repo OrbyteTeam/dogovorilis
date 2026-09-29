@@ -112,7 +112,10 @@ export async function reorder(q: Queryable, sellerUserId: number, ids: number[])
   );
 }
 
-/** Сериализация изменений списка услуг одного исполнителя (лимит 50, порядок): блокировка его профиля пользователя. */
+/**
+ * Сериализация изменений списка услуг одного исполнителя (лимит 50, порядок): блокировка его строки users.
+ * FOR NO KEY UPDATE: не мешает проверкам внешних ключей других транзакций (создание сделки, FOR KEY SHARE).
+ */
 export async function lockSeller(q: Queryable, sellerUserId: number): Promise<void> {
-  await q.query('SELECT 1 FROM users WHERE max_user_id = $1 FOR UPDATE', [sellerUserId]);
+  await q.query('SELECT 1 FROM users WHERE max_user_id = $1 FOR NO KEY UPDATE', [sellerUserId]);
 }
