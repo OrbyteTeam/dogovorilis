@@ -38,6 +38,7 @@ import { clientName, deliver } from '../notify.js';
 import { rateDeal } from '../../../domain/ratings.js';
 import { publishNewVersion } from '../outcome.js';
 import { syncCards } from '../cards.js';
+import { rememberThanks, takeThanks } from '../rating-thanks.js';
 import { remindClientNow, remindNote } from '../remind.js';
 import type { ParsedCallback } from '../callbacks.js';
 
@@ -257,6 +258,7 @@ async function acceptTime(ctx: Context, deps: Deps, publicId: string, actor: dea
 async function rate(ctx: Context, deps: Deps, bundle: DealBundle, role: CardRole, userId: number, score: number | null): Promise<void> {
   if (score === null) {
     await inTx((c) => inputsRepo.clearIf(c, { userId, kind: 'rating_comment', dealId: bundle.deal.id }));
+    takeThanks(userId, bundle.deal.id);
     await reply(ctx, deps, bundle, { role, note: texts.RATING_DONE });
     return;
   }
@@ -268,7 +270,10 @@ async function rate(ctx: Context, deps: Deps, bundle: DealBundle, role: CardRole
   await inTx((c) =>
     inputsRepo.set(c, { userId, kind: 'rating_comment', dealId: bundle.deal.id, expiresAt: addMinutes(new Date(), INPUT_TTL_MINUTES) }),
   );
-  await reply(ctx, deps, bundle, { role, note: texts.RATING_THANKS(score), keyboard: noCommentKeyboard(bundle.deal.publicId) });
+  const thanksMid = pressedMid(ctx);
+  const cardMid = await reply(ctx, deps, bundle, { role, note: texts.RATING_THANKS(score), keyboard: noCommentKeyboard(bundle.deal.publicId) });
+  // Благодарность заменила просьбу оценить (не карточку): запомним её, чтобы после комментария убрать «Без комментария».
+  if (thanksMid && !cardMid) rememberThanks(userId, bundle.deal.id, thanksMid, score);
   await deliver(deps.max, bundle, { to: 'seller', text: texts.R2({ client: clientName(bundle), id: bundle.deal.publicId, score }) });
 }
 

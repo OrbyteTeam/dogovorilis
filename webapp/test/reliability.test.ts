@@ -12,9 +12,9 @@ describe('надёжность исполнителя', () => {
 
   it('проценты и средняя оценка с запятой и склонением', () => {
     const rows = reliabilityRows({ closed: 120, no_dispute_percent: 98, cheque_on_time_percent: 91, seller_cancel_percent: 2, rating: { average: 4.8, count: 12 } });
-    expect(rows.map((r) => r.value)).toEqual(['120', '98 %', '91 %', '2 %', '4,8 из 5, 12 оценок']);
-    expect(ratingText({ average: 5, count: 1 })).toBe('5,0 из 5, 1 оценка');
-    expect(ratingText({ average: 4.5, count: 3 })).toBe('4,5 из 5, 3 оценки');
+    expect(rows.map((r) => r.value)).toEqual(['120', '98\u00a0%', '91\u00a0%', '2\u00a0%', '4,8\u00a0из\u00a05, 12\u00a0оценок']);
+    expect(ratingText({ average: 5, count: 1 })).toBe('5,0\u00a0из\u00a05, 1\u00a0оценка');
+    expect(ratingText({ average: 4.5, count: 3 })).toBe('4,5\u00a0из\u00a05, 3\u00a0оценки');
   });
 
   it('оценка на экране сделки: исполнителю — клиента, клиенту — своя; комментарий в кавычках', () => {

@@ -208,7 +208,10 @@ export function ServicesScreen({ templates, onOpen, onNew, onSettings }: Service
   );
 }
 
-/** Строка услуги — кнопка, открывающая форму: название, цена, длительность и предоплата. */
+/**
+ * Строка услуги — кнопка, открывающая форму: название, под ним сумма, длительность и предоплата. Сумма в подписи,
+ * а не колонкой справа: рядом стоят стрелки порядка, и на узком экране название иначе ломалось посреди слова.
+ */
 function ServiceRow({ service, onOpen }: { service: Service; onOpen: (id: number) => void }) {
   return (
     <CellSimple
@@ -216,12 +219,7 @@ function ServiceRow({ service, onOpen }: { service: Service; onOpen: (id: number
       className="dg-deal__open dg-service__open"
       onClick={() => onOpen(service.id)}
       title={service.title}
-      subtitle={serviceSubtitle(service)}
-      after={
-        <Typography.Text variant="body-strong" color="secondary" className="dg-deal__sum">
-          {formatRub(service.price_rub)}
-        </Typography.Text>
-      }
+      subtitle={`${formatRub(service.price_rub)}, ${serviceSubtitle(service)}`}
     />
   );
 }

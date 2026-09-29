@@ -3,7 +3,7 @@
 // card_sent, «карточка ушла клиенту» только при client_card_sent. Открыт по прямой ссылке без результата создания:
 // условия подгружаются из GET /api/deals/:id, о доставке экран ничего не утверждает.
 import { useCallback, useEffect, useState } from 'react';
-import { Button, CellSimple, Typography } from '@maxhub/max-ui';
+import { Button, Typography } from '@maxhub/max-ui';
 
 import { api, ApiError, errorText } from '../api';
 import { botLink, copyToClipboard, haptic, openBot, shareDeal } from '../bridge';
@@ -185,16 +185,20 @@ export function DoneScreen({ publicId, me, result, onDeals, onOpenDeal }: DoneSc
       ) : null}
 
       {sentToClient ? null : (
-        <CellSimple
-          surface="island"
-          overline="Ссылка для клиента"
-          title={<span className="dg-link">{link}</span>}
-          after={
+        // Подпись своей строкой, а не overline ячейки: на узком экране overline обрезался до «Ссылка для клие…».
+        <Island>
+          <Typography.Label variant="small" className="dg-note">
+            Ссылка для клиента
+          </Typography.Label>
+          <div className="dg-row">
+            <Typography.Body variant="medium" className="dg-link dg-link_grow">
+              {link}
+            </Typography.Body>
             <Button type="button" variant="secondary" size="small" onClick={() => void onCopy()}>
               Скопировать
             </Button>
-          }
-        />
+          </div>
+        </Island>
       )}
 
       {needStartBot ? (

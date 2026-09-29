@@ -1267,6 +1267,10 @@ export function R1(a: { id: string; title: string }): string {
 export function RATING_THANKS(score: number): string {
   return `Спасибо, ваша оценка ${score} из 5. Можно добавить комментарий одним сообщением или нажать «${BTN.noComment}»`;
 }
+/** Та же благодарность без приглашения к комментарию: после того как комментарий пришёл. */
+export function RATING_THANKS_DONE(score: number): string {
+  return `Спасибо, ваша оценка ${score} из 5`;
+}
 export const RATING_ALREADY = 'Оценка по этой сделке уже сохранена';
 export const RATING_DONE = 'Спасибо, оценка сохранена';
 export const RATING_COMMENT_SAVED = 'Спасибо, комментарий передан исполнителю';

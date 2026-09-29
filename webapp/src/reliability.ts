@@ -9,13 +9,17 @@ export interface ReliabilityRow {
 
 const NO_DATA = 'пока нет данных';
 
-const percent = (value: number | null) => (value === null ? NO_DATA : `${value} %`);
+/** Число и «%» через неразрывный пробел: в узкой колонке «40 %» не должно разрываться на две строки. */
+const percent = (value: number | null) => (value === null ? NO_DATA : `${value}\u00a0%`);
 
-/** «4,8 из 5, 12 оценок» — средняя с запятой, как принято в русском тексте. */
+/**
+ * «4,8 из 5, 12 оценок» — средняя с запятой, как принято в русском тексте. Внутри «4,8 из 5» и «12 оценок» пробелы
+ * неразрывные: в узкой колонке строка переносится только после запятой, число не отрывается от слова.
+ */
 export function ratingText(rating: Reliability['rating']): string {
   if (!rating) return 'оценок пока нет';
   const average = rating.average.toFixed(1).replace('.', ',');
-  return `${average} из 5, ${rating.count} ${pluralRatings(rating.count)}`;
+  return `${average}\u00a0из\u00a05, ${rating.count}\u00a0${pluralRatings(rating.count)}`;
 }
 
 function pluralRatings(n: number): string {

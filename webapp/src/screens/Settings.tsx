@@ -231,7 +231,7 @@ export function SettingsScreen({ me, onSaved, onServices }: SettingsScreenProps)
           <ControlRow
             control={<Switch checked={showReliability} onChange={(event) => setShowReliability(event.currentTarget.checked)} />}
             title="Показывать надёжность клиентам"
-            subtitle="Клиент увидит в карточке строку вроде «12 сделок, 98 % без споров», когда закрытых сделок 3 и больше"
+            subtitle={"Клиент увидит в карточке строку вроде «12\u00a0сделок, 98\u00a0% без споров», когда закрытых сделок 3 и больше"}
           />
         </Island>
       ) : null}

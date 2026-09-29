@@ -101,7 +101,8 @@ async function clearPendingInput(userId: number, dealId: number, kinds: InputKin
   });
 }
 
-type Executed = { result: ServiceResult | null; notice: string | null };
+/** `already` — ничего не изменилось без доменного перехода (пауза «Напомнить клиенту»): экран покажет это без галочки. */
+type Executed = { result: ServiceResult | null; notice: string | null; already?: boolean };
 
 /** Одно действие: доменный вызов + доставка сторонам. Никакой своей логики переходов — только маршрутизация. */
 async function execute(max: MaxGateway | null, bundle: DealBundle, actor: Actor, body: ActionBody): Promise<Executed> {
@@ -159,7 +160,7 @@ async function execute(max: MaxGateway | null, bundle: DealBundle, actor: Actor,
         throw new InvalidTransition(bundle.deal.status, 'done', 'seller', 'forbidden');
       }
       const outcome = max ? await remindClientNow(max, bundle) : 'no_chat';
-      return { result: null, notice: remindNote(outcome) };
+      return { result: null, notice: remindNote(outcome), already: outcome !== 'sent' };
     }
     case 'accept_time': {
       // Тот же путь, что кнопка «✅ Принять» в чате (handlers/deal.ts acceptTime), SPEC §7.10.
@@ -242,11 +243,11 @@ export function registerDealScreenApi(app: FastifyInstance, deps: DealScreenDeps
       if (body.action === 'receipt_pdf' && !isTerminal(bundle.deal.status)) {
         return fail(reply, 409, 'receipt_not_ready', texts.API_RECEIPT_NOT_READY);
       }
-      const { result, notice } = await execute(deps.max, bundle, { userId: user.maxUserId, role }, body);
+      const { result, notice, already } = await execute(deps.max, bundle, { userId: user.maxUserId, role }, body);
       const fresh = result?.bundle ?? (await dealService.getBundle(bundle.deal.publicId));
       return {
         deal: await fullOf(fresh, role, user.maxUserId),
-        result: result?.alreadyDone ? 'already_done' : 'done',
+        result: result?.alreadyDone || already ? 'already_done' : 'done',
         notice,
       };
     } catch (e) {

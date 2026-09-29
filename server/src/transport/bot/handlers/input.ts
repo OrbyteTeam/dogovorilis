@@ -11,6 +11,7 @@ import type { CardRole } from '../../../types.js';
 import * as dealService from '../../../domain/deal/service.js';
 import { publishOutcome } from '../outcome.js';
 import { clientName, deliver } from '../notify.js';
+import { takeThanks } from '../rating-thanks.js';
 import { commentRating, RATING_COMMENT_MAX } from '../../../domain/ratings.js';
 import { actingRole, actorOf, answerError, chatIdOf, menu, touchUser, type Deps } from './shared.js';
 
@@ -127,6 +128,9 @@ async function handleMessage(ctx: Context, deps: Deps): Promise<void> {
       }
       await inTx((c) => inputsRepo.clear(c, userId));
       const saved = await commentRating(deal.id, userId, text);
+      // Кнопка «Без комментария» под благодарностью больше не нужна: убираем её правкой того же сообщения.
+      const thanks = takeThanks(userId, deal.id);
+      if (thanks) await deps.max.edit(thanks.mid, texts.RATING_THANKS_DONE(thanks.score), []).catch(() => false);
       await deps.max.send({ chatId }, saved ? texts.RATING_COMMENT_SAVED : texts.RATING_ALREADY);
       if (saved) {
         const bundle = await dealService.getBundleById(deal.id);

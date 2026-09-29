@@ -89,14 +89,17 @@ describe.skipIf(!DB)('оценка клиента и надёжность исп
       const id = await closedDeal();
       const r1 = h.max.inChat(CLIENT_CHAT).find((m) => m.text.includes('Оцените работу'));
       expect(r1).toBeDefined();
+      const r1Mid = r1!.mid as string;
       expect(r1!.buttons.map((b) => b.payload)).toEqual([1, 2, 3, 4, 5].map((n) => `rt:${id}:${n}`));
       // R1 — после квитанции: сначала документ, потом просьба оценить
       const clientMsgs = h.max.inChat(CLIENT_CHAT).map((m) => m.text);
       expect(clientMsgs.findIndex((t) => t.includes('Оцените работу'))).toBeGreaterThan(clientMsgs.findIndex((t) => t.includes('Квитанц')));
 
       h.max.reset();
-      await h.press(CLIENT, CLIENT_CHAT, `rt:${id}:5`, null);
-      expect(h.max.texts().some((t) => t.includes(texts.RATING_THANKS(5)))).toBe(true);
+      // нажатие на саму просьбу оценить: она превращается в благодарность с «Без комментария»
+      await h.press(CLIENT, CLIENT_CHAT, `rt:${id}:5`, r1Mid);
+      expect(h.max.byMid(r1Mid)).toMatchObject({ text: texts.RATING_THANKS(5) });
+      expect(h.max.byMid(r1Mid)!.buttons.map((b) => b.text)).toEqual([texts.BTN.noComment]);
       expect(h.max.inChat(SELLER_CHAT).some((m) => m.text.includes('оценил(а) работу') && m.text.includes('5 из 5'))).toBe(true);
       await h.press(CLIENT, CLIENT_CHAT, `rt:${id}:1`, null);
       expect(h.max.texts().some((t) => t.includes(texts.RATING_ALREADY))).toBe(true);
@@ -113,6 +116,11 @@ describe.skipIf(!DB)('оценка клиента и надёжность исп
         [id],
       );
       expect(after.comment).toBe('Всё отлично, приду ещё');
+      // после комментария кнопка «Без комментария» под благодарностью убрана
+      expect(h.max.byMid(r1Mid)).toMatchObject({ text: texts.RATING_THANKS_DONE(5), buttons: [] });
+      // закрытая без чека карточка пишет «Сделка закрыта без чека», а не срок чека
+      expect(h.max.byMid(await cardMid(h, id, 'seller'))!.text).toContain('Сделка закрыта без чека');
+      expect(h.max.byMid(await cardMid(h, id, 'seller'))!.text).not.toContain('Чек: до');
 
       // экран сделки: исполнитель видит оценку и комментарий, клиент — свою оценку
       expect((await h.api('GET', `/api/deals/${id}/full`, SELLER)).json.rating).toEqual({ score: 5, comment: 'Всё отлично, приду ещё' });

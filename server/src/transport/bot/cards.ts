@@ -121,14 +121,13 @@ function paymentLinesFor(bundle: DealBundle, role: CardRole): string[] {
   });
 }
 
+/** Строка чека — та же, что на экране сделки (chequeText): у закрытой без чека «Сделка закрыта без чека», а не срок. */
 function receiptLineFor(bundle: DealBundle): string | null {
-  const status = bundle.deal.status;
-  if (status !== 'paid' && status !== 'closed') return null;
-  const taxMode = taxModeOf(bundle);
-  return texts.receiptLine({
+  return texts.chequeText({
+    status: bundle.deal.status,
     attachedAt: bundle.receipt?.createdAt ?? null,
     deadline: bundle.deal.paidAt ? receiptDeadline(bundle.deal.paidAt, cfg().APP_TIMEZONE) : null,
-    taxModeNone: taxMode === 'none',
+    taxModeNone: taxModeOf(bundle) === 'none',
   });
 }
 

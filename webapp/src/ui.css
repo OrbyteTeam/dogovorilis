@@ -154,6 +154,12 @@
   overflow-wrap: anywhere;
 }
 
+/* Ссылка рядом с кнопкой в строке .dg-row: занимает остаток ширины, кнопка уходит вниз, только если места нет */
+.dg-link_grow {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
 /* Поле: подпись сверху, подсказка или ошибка снизу */
 .dg-field {
   display: flex;
@@ -1577,10 +1583,14 @@
 }
 
 .dg-facts__row dt {
+  flex: 1 1 auto;
+  min-width: 0;
   color: var(--text-secondary);
 }
 
 .dg-facts__row dd {
+  flex: 0 1 auto;
+  max-width: 60%;
   margin: 0;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;

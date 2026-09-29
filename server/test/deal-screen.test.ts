@@ -308,7 +308,8 @@ describe.skipIf(!DB)('экран сделки: API', () => {
       // напоминание: первое уходит, второе — пауза 4 часа (общий счётчик с кнопкой в чате)
       const r1 = await act(id, SELLER, { action: 'remind_client' });
       expect(r1.json.notice).toBe(texts.REMIND_SENT);
-      expect((await act(id, SELLER, { action: 'remind_client' })).json.notice).toBe(texts.REMIND_COOLDOWN);
+      const r2 = await act(id, SELLER, { action: 'remind_client' });
+      expect(r2.json).toMatchObject({ notice: texts.REMIND_COOLDOWN, result: 'already_done' });
       // подтверждение версии 2 без предоплаты → запланировано; квитанция до завершения — 409
       expect((await act(id, CLIENT, { action: 'confirm', version: 2 })).json.deal.status).toBe('scheduled');
       expect((await act(id, CLIENT, { action: 'receipt_pdf' })).json.error.code).toBe('receipt_not_ready');

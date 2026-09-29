@@ -203,7 +203,8 @@ export function DealScreen({ publicId, me, onEdit, onRepeat, onDeals, onTime }: 
       setSheet(null);
       setText('');
       haptic('success');
-      showToast(response.notice ?? (response.result === 'already_done' ? 'Уже сделано, экран обновлён' : doneText(code)));
+      // «Уже сделано» и пауза напоминания — без галочки успеха: ничего нового не произошло.
+      showToast(response.notice ?? (response.result === 'already_done' ? 'Уже сделано, экран обновлён' : doneText(code)), response.result === 'already_done' ? 'info' : 'success');
     } catch (error) {
       handleActionError(error, hasField);
     } finally {
@@ -263,7 +264,7 @@ export function DealScreen({ publicId, me, onEdit, onRepeat, onDeals, onTime }: 
   async function copyLink(deal: DealFull) {
     const ok = await copyToClipboard(deal.link);
     haptic(ok ? 'success' : 'error');
-    showToast(ok ? 'Ссылка скопирована' : 'Не удалось скопировать. Ссылка есть в блоке «Стороны»', ok ? 'info' : 'error');
+    showToast(ok ? 'Ссылка скопирована' : 'Не удалось скопировать. Ссылка есть в блоке «Стороны»', ok ? 'success' : 'error');
   }
 
   function pickFile() {
@@ -530,13 +531,15 @@ export function DealScreen({ publicId, me, onEdit, onRepeat, onDeals, onTime }: 
           }}
         />
 
-        <footer className="dg-card dg-card_flat dg-card_row">
-          <Typography.Text variant="description" color="secondary">
-            Карточка сделки в чате с ботом
-          </Typography.Text>
-          <Button type="button" variant="secondary" size="small" onClick={openChat}>
-            Открыть чат
-          </Button>
+        <footer className="dg-card dg-card_flat">
+          <div className="dg-row">
+            <Typography.Label variant="small" className="dg-note">
+              Карточка сделки в чате с ботом
+            </Typography.Label>
+            <Button type="button" variant="secondary" size="small" onClick={openChat}>
+              Открыть чат
+            </Button>
+          </div>
         </footer>
       </div>
 
@@ -651,18 +654,20 @@ function PartiesSection({ deal }: { deal: DealFull }) {
 
 function ChatHint({ text, sub, onOpenChat }: { text: string; sub?: string; onOpenChat: () => void }) {
   return (
-    <div className="dg-card dg-card_flat dg-card_row">
-      <div className="dg-hint-text">
-        <Typography.Text variant="body-strong">{text}</Typography.Text>
-        {sub ? (
-          <Typography.Text variant="description" color="secondary">
-            {sub}
-          </Typography.Text>
-        ) : null}
+    <div className="dg-card dg-card_flat">
+      <div className="dg-row">
+        <div className="dg-hint-text">
+          <Typography.Text variant="body-strong">{text}</Typography.Text>
+          {sub ? (
+            <Typography.Text variant="description" color="secondary">
+              {sub}
+            </Typography.Text>
+          ) : null}
+        </div>
+        <Button type="button" variant="primary" size="small" onClick={onOpenChat}>
+          Открыть чат
+        </Button>
       </div>
-      <Button type="button" variant="primary" size="small" onClick={onOpenChat}>
-        Открыть чат
-      </Button>
     </div>
   );
 }
