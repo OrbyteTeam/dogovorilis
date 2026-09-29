@@ -27,6 +27,7 @@ describe('стартовый экран', () => {
     expect(initialRoute('', `edit_${ID}`)).toEqual({ name: 'edit', id: ID });
     expect(initialRoute('', `repeat_${ID}`)).toEqual({ name: 'new', from: ID });
     expect(initialRoute('', `deal_${ID}`)).toEqual({ name: 'deal', id: ID });
+    expect(initialRoute('', `time_${ID}`)).toEqual({ name: 'time', id: ID });
   });
 
   it('неизвестный или испорченный start_param — форма новой сделки', () => {
@@ -36,6 +37,8 @@ describe('стартовый экран', () => {
     expect(initialRoute('', 'deal_short')).toEqual({ name: 'new' });
     expect(initialRoute('', `deal_${ID}X`)).toEqual({ name: 'new' });
     expect(initialRoute('', `deal_${ID.slice(0, 9)}-`)).toEqual({ name: 'new' });
+    expect(initialRoute('', 'time_short')).toEqual({ name: 'new' });
+    expect(initialRoute('', `time_${ID}X`)).toEqual({ name: 'new' });
   });
 
   it('«Мои услуги» и форма услуги: id — положительное целое или new, пример — только известная ниша', () => {
@@ -59,6 +62,17 @@ describe('стартовый экран', () => {
     expect(routeToHash({ name: 'deal', id: ID })).toBe(`#/deals/${ID}`);
   });
 
+  it('«Другое время» — свой экран, не экран сделки и не правка', () => {
+    expect(parseHash(`#/deals/${ID}/time`)).toEqual({ name: 'time', id: ID });
+    expect(routeToHash({ name: 'time', id: ID })).toBe(`#/deals/${ID}/time`);
+    expect(parseHash(`#/deals/${ID}`)).toEqual({ name: 'deal', id: ID });
+    expect(parseHash(`#/deals/${ID}/edit`)).toEqual({ name: 'edit', id: ID });
+    expect(parseHash(`#/deals/${ID}/time/`)).toBeNull();
+    expect(parseHash(`#/deals/${ID}/times`)).toBeNull();
+    expect(parseHash(`#/deals/${ID}X/time`)).toBeNull();
+    expect(parseHash('#/deals/short/time')).toBeNull();
+  });
+
   it('hash после перезагрузки главнее start_param', () => {
     expect(initialRoute('#/settings', 'deals')).toEqual({ name: 'settings' });
   });
@@ -71,6 +85,7 @@ describe('стартовый экран', () => {
       { name: 'deals' },
       { name: 'edit', id: ID },
       { name: 'deal', id: ID },
+      { name: 'time', id: ID },
       { name: 'settings' },
       { name: 'services' },
       { name: 'service', id: 'new' },
@@ -88,6 +103,7 @@ describe('вкладки', () => {
     expect(tabOf({ name: 'deals' })).toBe('deals');
     expect(tabOf({ name: 'edit', id: ID })).toBe('deals');
     expect(tabOf({ name: 'deal', id: ID })).toBe('deals');
+    expect(tabOf({ name: 'time', id: ID })).toBe('deals');
     expect(tabOf({ name: 'new', from: ID })).toBe('deals');
     expect(tabOf({ name: 'settings' })).toBe('settings');
     expect(tabOf({ name: 'services' })).toBe('settings');
@@ -135,6 +151,24 @@ describe('история «назад»', () => {
     h = push(h, { name: 'edit', id: ID });
     expect(current(back(h))).toEqual({ name: 'deal', id: ID });
     expect(current(back(back(h)))).toEqual({ name: 'deals' });
+  });
+
+  it('сделка → «Другое время» → после отправки «К сделке» возвращает к той же сделке, без экрана времени в стеке', () => {
+    let h = startHistory({ name: 'deals' });
+    h = push(h, { name: 'deal', id: ID });
+    h = push(h, { name: 'time', id: ID });
+    expect(current(back(h))).toEqual({ name: 'deal', id: ID });
+    h = push(h, { name: 'deal', id: ID }, { replace: true });
+    expect(h).toEqual([{ name: 'deals' }, { name: 'deal', id: ID }]);
+  });
+
+  it('«Другое время», открытое из чата (time_<id>), — корень; «К сделке» занимает его место', () => {
+    let h = startHistory(initialRoute('', `time_${ID}`));
+    expect(current(h)).toEqual({ name: 'time', id: ID });
+    expect(canGoBack(h)).toBe(false);
+    h = push(h, { name: 'deal', id: ID }, { replace: true });
+    expect(h).toEqual([{ name: 'deal', id: ID }]);
+    expect(canGoBack(h)).toBe(false);
   });
 
   it('экран сделки, открытый из чата (deal_<id>), — корень: «назад» закрывает приложение', () => {

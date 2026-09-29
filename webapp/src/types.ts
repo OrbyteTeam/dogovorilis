@@ -222,6 +222,7 @@ export type DealRole = 'seller' | 'client';
 /**
  * Коды действий — ровно кнопки карточки этой роли в этом статусе (SPEC §7.9, таблица). Последние семь мини-приложение
  * выполняет само, а не через `POST …/actions`: переход на форму, выбор файла, шеринг, «оплата — в чате».
+ * `accept_time` — исполнитель принимает время, выбранное клиентом в календаре (§7.10, ЗАДАЧА_08 D).
  */
 export type ActionCode =
   | 'confirm'
@@ -237,6 +238,7 @@ export type ActionCode =
   | 'remind_client'
   | 'refund_confirmed'
   | 'receipt_pdf'
+  | 'accept_time'
   | 'edit'
   | 'repeat'
   | 'attach_receipt'
@@ -303,6 +305,13 @@ export interface DealTimelineItem {
   text: string;
 }
 
+/** Ожидающее предложение времени от клиента (SPEC §7.10): подпись «Принять …» и строка «Клиент предлагает …». */
+export interface DealTimeProposal {
+  id: number;
+  /** ISO UTC. */
+  scheduled_at: string;
+}
+
 /** `GET /api/deals/:id/full[?as=client]` — всё для экрана сделки одним ответом. */
 export interface DealFull {
   public_id: string;
@@ -343,6 +352,8 @@ export interface DealFull {
   actions: ActionCode[];
   /** Для диалога отмены: что станет с предоплатой. */
   cancel_consequence: string | null;
+  /** Клиент выбрал время и ждёт ответа исполнителя; нет поля — сервер старше ЗАДАЧА_08 D. */
+  time_proposal?: DealTimeProposal | null;
 }
 
 /** `POST /api/deals/:id/actions`. */
@@ -356,6 +367,8 @@ export interface DealActionRequest {
   text?: string;
   /** `cancel` исполнителем — необязательно, ≤ 300. */
   reason?: string;
+  /** `accept_time` — какое предложение времени принять (`time_proposal.id`). */
+  proposal_id?: number;
 }
 
 export interface DealActionResponse {
@@ -370,6 +383,46 @@ export interface ReceiptUploadResponse {
   deal: DealFull;
   /** Сервер B-srv отдаёт готовый текст «Чек приложен, квитанция ушла обеим сторонам»; в контракте его нет — необязателен. */
   notice?: string | null;
+}
+
+// ─────────────── «Другое время» (`#/deals/:id/time`) — SPEC §7.10, §7.8 (`/busy`, `/time-proposals`), ЗАДАЧА_08 D ───────────────
+
+/** Занятый интервал исполнителя `[start, end)`, ISO UTC; интервалы уже слиты, без названий и клиентов. */
+export interface BusyInterval {
+  start: string;
+  end: string;
+}
+
+/** `GET /api/deals/:id/busy` — сетка выбора времени и занятость исполнителя (без этой сделки). */
+export interface BusyResponse {
+  /** Длительность визита этой сделки, минуты (по умолчанию 60). */
+  duration_min: number;
+  /** Шаг сетки, минуты (30). */
+  step_min: number;
+  /** Первый слот дня по МСК, «08:00». */
+  first_slot: string;
+  /** Последний слот дня по МСК — начинается в это время, «21:30». */
+  last_slot: string;
+  /** Сколько дней вперёд можно выбрать (30). */
+  horizon_days: number;
+  /** Слот не раньше чем через столько минут от `now` (30). */
+  min_lead_min: number;
+  /** Время сервера, ISO. */
+  now: string;
+  /** Текущее время сделки — отметка «сейчас»; null — без даты. */
+  current: string | null;
+  busy: BusyInterval[];
+}
+
+/** `POST /api/deals/:id/time-proposals`. `as: 'client'` — демо: исполнитель смотрит как клиент. */
+export interface TimeProposalRequest {
+  scheduled_at: string;
+  as?: 'client';
+}
+
+export interface TimeProposalResponse {
+  proposal: { id: number; scheduled_at: string; status: 'pending' };
+  deal: DealFull;
 }
 
 // ─────────────── «Мои услуги» исполнителя — SPEC §7.6a, §7.8 (`/api/services`), ЗАДАЧА_08 C ───────────────

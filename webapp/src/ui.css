@@ -1053,3 +1053,117 @@
   align-items: flex-start;
   gap: var(--spacing-size2xs);
 }
+
+/* ───────── «Другое время» (ЗАДАЧА_08 D, SPEC §7.10): сетка слотов и закреплённая кнопка ───────── */
+.dg-day_muted:not(.dg-day_active) {
+  opacity: 0.45;
+}
+
+.dg-slots {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--spacing-size-m);
+}
+
+@media (max-width: 359px) {
+  .dg-slots {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.dg-slot {
+  box-sizing: border-box;
+  min-height: 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-size2xs);
+  padding: var(--spacing-size-s) var(--spacing-size-xs);
+  border: 2px solid transparent;
+  border-radius: var(--size-border-radius-action-medium);
+  background-color: var(--background-card);
+  color: var(--text-primary);
+  font-family: var(--family-base);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.dg-slot__time {
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  font-weight: var(--font-weight-body-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.dg-slot__note {
+  font-size: var(--font-size-label);
+  line-height: var(--line-height-label);
+  color: var(--text-tertiary);
+}
+
+/* Занято и «сейчас» — недоступны: фон тише, время зачёркнуто у занятых (цвет — не единственный признак, есть подпись). */
+.dg-slot:disabled {
+  cursor: default;
+  background-color: var(--background-tertiary);
+  color: var(--text-tertiary);
+}
+
+.dg-slot_busy .dg-slot__time {
+  text-decoration: line-through;
+}
+
+.dg-slot_current {
+  border-color: var(--divider-primary);
+}
+
+.dg-slot_active {
+  background-color: var(--button-primary);
+  border-color: var(--button-primary);
+  color: var(--text-primary-inverse-static);
+}
+
+.dg-slot:focus-visible {
+  outline: 2px solid var(--icon-themed);
+  outline-offset: 2px;
+}
+
+.dg-slots-empty {
+  margin: 0;
+  padding: var(--spacing-size2xl);
+  border-radius: var(--size-border-radius-semantic-border-radius-card);
+  background-color: var(--background-card);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  text-align: center;
+}
+
+/* Кнопка «Предложить …» — над панелью разделов; экрану добавляем место снизу, чтобы последние слоты не прятались. */
+.dg-pick-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(56px + env(safe-area-inset-bottom));
+  z-index: 80;
+  padding: var(--spacing-size-xl) var(--spacing-size2xl);
+  background-color: var(--background-surface);
+  border-top: 1px solid var(--divider-secondary);
+}
+
+.dg-pick-bar__inner {
+  max-width: 448px;
+  margin: 0 auto;
+}
+
+.dg-app:has(.dg-pick-bar) .dg-screen {
+  padding-bottom: calc(var(--spacing-size4xl) + 56px + 88px + env(safe-area-inset-bottom));
+}
+
+/* Строка о предложении времени над действиями экрана сделки (§7.10): крупнее и основным цветом — это новость */
+.dg-warning_info {
+  margin: 0;
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  color: var(--text-primary);
+}

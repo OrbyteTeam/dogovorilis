@@ -157,7 +157,7 @@ pdfkit 0.20.2 + `dejavu-fonts-ttf`, zod 4.6.5, pino 10.3.1, vitest 5.0.1, vite 7
 ```bash
 npm ci
 npm run lint          # проверка типов: server (вместе с тестами) и webapp
-npm test              # сервер (658) и мини-приложение (61); сквозные пропускаются, если нет TEST_DATABASE_URL
+npm test              # сервер (675) и мини-приложение (86); сквозные пропускаются, если нет TEST_DATABASE_URL
 npm run check:secrets # поиск секретов в staged-изменениях (хук — .githooks-pre-commit.sample)
 ```
 Сквозные тесты требуют Postgres. Создайте базу и укажите её:

@@ -1,4 +1,5 @@
 // Лента дней расписания: горизонтальный скролл, сегодня подсвечено, под числом — сколько записей (ЗАДАЧА_04 C3).
+// Та же лента — в «Другом времени» (ЗАДАЧА_08 D): там день без свободного времени приглушён, но выбирается.
 // Своего компонента в MAX UI нет — собрано на токенах, как чипы (docs/DESIGN.md §4).
 import { useLayoutEffect, useRef } from 'react';
 
@@ -9,9 +10,13 @@ export interface DayStripProps {
   selected: string;
   counts: (key: string) => number;
   onSelect: (key: string) => void;
+  /** Приглушить день (цвет не единственный признак: `mutedLabel` дописывается в подпись для доступности). */
+  muted?: (key: string) => boolean;
+  /** «свободного времени нет» */
+  mutedLabel?: string;
 }
 
-export function DayStrip({ days, selected, counts, onSelect }: DayStripProps) {
+export function DayStrip({ days, selected, counts, onSelect, muted, mutedLabel }: DayStripProps) {
   const stripRef = useRef<HTMLDivElement>(null);
   const firstScroll = useRef(true);
 
@@ -35,7 +40,11 @@ export function DayStrip({ days, selected, counts, onSelect }: DayStripProps) {
       {days.map((day) => {
         const count = counts(day.key);
         const active = day.key === selected;
-        const className = ['dg-day', active ? 'dg-day_active' : '', day.isToday ? 'dg-day_today' : ''].filter(Boolean).join(' ');
+        const dim = muted?.(day.key) ?? false;
+        const className = ['dg-day', active ? 'dg-day_active' : '', day.isToday ? 'dg-day_today' : '', dim ? 'dg-day_muted' : '']
+          .filter(Boolean)
+          .join(' ');
+        const label = `${day.isToday ? 'Сегодня, ' : ''}${dayAriaLabel(day.key, count)}${dim && mutedLabel ? `, ${mutedLabel}` : ''}`;
         return (
           <button
             key={day.key}
@@ -43,7 +52,7 @@ export function DayStrip({ days, selected, counts, onSelect }: DayStripProps) {
             data-day={day.key}
             className={className}
             aria-pressed={active}
-            aria-label={`${day.isToday ? 'Сегодня, ' : ''}${dayAriaLabel(day.key, count)}`}
+            aria-label={label}
             onClick={() => onSelect(day.key)}
           >
             <span className={day.isWeekend ? 'dg-day__weekday dg-day__weekday_weekend' : 'dg-day__weekday'}>

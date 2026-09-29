@@ -15,6 +15,8 @@ export type Route =
   | { name: 'edit'; id: string }
   /** Экран сделки `#/deals/<id>` (SPEC §7.9, ЗАДАЧА_08 B). */
   | { name: 'deal'; id: string }
+  /** «Другое время»: клиент выбирает время по занятости исполнителя `#/deals/<id>/time` (SPEC §7.10, ЗАДАЧА_08 D). */
+  | { name: 'time'; id: string }
   | { name: 'settings' }
   /** «Мои услуги» исполнителя `#/settings/services` (SPEC §7.6a, ЗАДАЧА_08 C). */
   | { name: 'services' }
@@ -46,6 +48,9 @@ const DONE_HASH_RE = /^\/done\/([A-Za-z0-9]{1,32})$/;
 /** Экран сделки: `deal_<id>` → `#/deals/<id>` (ЗАДАЧА_08 B). Ровно 10 символов — `#/deals/<id>/edit` сюда не попадает. */
 const DEAL_PARAM_RE = new RegExp(`^deal_${ID}$`);
 const DEAL_HASH_RE = new RegExp(`^/deals/${ID}$`);
+/** «Другое время» из карточки бота: `time_<id>` → `#/deals/<id>/time` (ЗАДАЧА_08 D). */
+const TIME_PARAM_RE = new RegExp(`^time_${ID}$`);
+const TIME_HASH_RE = new RegExp(`^/deals/${ID}/time$`);
 /** Услуга: положительный целый id или `new` (+ необязательный пример ниши). */
 const SERVICE_HASH_RE = /^\/settings\/services\/(?:([1-9]\d{0,9})|new(?:\?template=([a-z_]+))?)$/;
 const TEMPLATE_KEYS: readonly TemplateKey[] = ['beauty', 'lesson', 'repair', 'custom_order', 'freelance', 'free'];
@@ -66,6 +71,8 @@ export function parseHash(hash: string): Route | null {
   if (repeat) return { name: 'new', from: repeat[1] };
   const edit = EDIT_HASH_RE.exec(path);
   if (edit) return { name: 'edit', id: edit[1] };
+  const time = TIME_HASH_RE.exec(path);
+  if (time) return { name: 'time', id: time[1] };
   const deal = DEAL_HASH_RE.exec(path);
   if (deal) return { name: 'deal', id: deal[1] };
   const done = DONE_HASH_RE.exec(path);
@@ -90,6 +97,8 @@ export function routeToHash(route: Route): string {
       return `#/deals/${route.id}/edit`;
     case 'deal':
       return `#/deals/${route.id}`;
+    case 'time':
+      return `#/deals/${route.id}/time`;
     case 'new':
       return route.from ? `#/new?from=${route.from}` : '#/new';
   }
@@ -102,7 +111,7 @@ export function sameRoute(a: Route, b: Route): boolean {
 /**
  * Стартовый экран по `start_param` (SPEC §7.1, §13): `new` → форма, `d_<id>` → «Готово» с ссылкой,
  * `deals` → «Мои сделки», `settings` → настройки, `edit_<id>` → правка условий, `repeat_<id>` → повтор,
- * `deal_<id>` → экран сделки (§7.9).
+ * `deal_<id>` → экран сделки (§7.9), `time_<id>` → «Другое время» (§7.10).
  * Непустой hash (перезагрузка WebView) главнее start_param; неизвестное — форма новой сделки.
  */
 export function initialRoute(hash: string, startParam: string | null): Route {
@@ -117,13 +126,15 @@ export function initialRoute(hash: string, startParam: string | null): Route {
   if (repeat) return { name: 'new', from: repeat[1] };
   const deal = DEAL_PARAM_RE.exec(param);
   if (deal) return { name: 'deal', id: deal[1] };
+  const time = TIME_PARAM_RE.exec(param);
+  if (time) return { name: 'time', id: time[1] };
   if (param === 'deals') return { name: 'deals' };
   if (param === 'settings') return { name: 'settings' };
   return { name: 'new' };
 }
 
 /**
- * Какая вкладка подсвечена на экране: всё про сделки (экран сделки, правка, повтор) — «Сделки», «Готово» — «Новая»,
+ * Какая вкладка подсвечена на экране: всё про сделки (экран сделки, правка, повтор, другое время) — «Сделки», «Готово» — «Новая»,
  * «Мои услуги» и форма услуги — «Настройки» (туда ведёт вход в них).
  */
 export function tabOf(route: Route): Tab {
@@ -135,6 +146,7 @@ export function tabOf(route: Route): Tab {
     case 'deals':
     case 'deal':
     case 'edit':
+    case 'time':
       return 'deals';
     case 'settings':
     case 'services':

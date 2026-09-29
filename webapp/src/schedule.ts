@@ -82,9 +82,10 @@ export interface Day {
   isWeekend: boolean;
 }
 
-export function buildDays(todayKey: string): Day[] {
+/** Дни ленты от `todayKey − back` до `todayKey + ahead`; по умолчанию — лента «Моих сделок». */
+export function buildDays(todayKey: string, back: number = DAYS_BACK, ahead: number = DAYS_AHEAD): Day[] {
   const days: Day[] = [];
-  for (let i = -DAYS_BACK; i <= DAYS_AHEAD; i += 1) {
+  for (let i = -back; i <= ahead; i += 1) {
     const key = addDays(todayKey, i);
     const date = keyToUtcNoon(key);
     const wd = date.getUTCDay();
@@ -108,6 +109,12 @@ export function dayAriaLabel(key: string, count: number): string {
   const date = keyToUtcNoon(key);
   const base = `${WEEKDAY_LONG[date.getUTCDay()]}, ${date.getUTCDate()} ${MONTH_GENITIVE[date.getUTCMonth()]}`;
   return count > 0 ? `${base}, ${pluralRecords(count)}` : base;
+}
+
+/** Короткий день: «чт, 1 окт» — подпись кнопки «Предложить чт, 1 окт, 19:00» (ЗАДАЧА_08 D). */
+export function dayShort(key: string): string {
+  const date = keyToUtcNoon(key);
+  return `${WEEKDAY_SHORT[date.getUTCDay()]}, ${date.getUTCDate()} ${MONTH_SHORT[date.getUTCMonth()]}`;
 }
 
 /** Дата и время строки списка: «Пн 28 сен, 14:00». */

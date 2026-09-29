@@ -19,9 +19,11 @@ import {
   avatarGradient,
   buttonBehavior,
   checkReceiptFile,
+  CHANGE_SHEET,
   confirmSheet,
   initials,
   layoutActions,
+  proposalNote,
   RECEIPT_ACCEPT,
   RECEIPT_PDF_LABEL,
   REASON_MAX,
@@ -45,7 +47,8 @@ type LoadState =
   | { kind: 'denied'; reason: 'forbidden' | 'not_found' }
   | { kind: 'ready'; deal: DealFull };
 
-type SheetState = { kind: 'confirm'; code: ConfirmCode } | { kind: 'text'; code: TextCode };
+/** `change` — «Предложить изменения» клиента: выбор между календарём и текстом (SPEC §7.10). */
+type SheetState = { kind: 'confirm'; code: ConfirmCode } | { kind: 'text'; code: TextCode } | { kind: 'change' };
 
 /** Что сейчас выполняется: кнопка «Действий» или «Квитанция PDF в чат» из «Документов». */
 type BusyKey = ButtonKey | 'receipt_pdf';
@@ -84,9 +87,11 @@ export interface DealScreenProps {
   /** «Повторить» → `#/new?from=:id` (§7.5). */
   onRepeat: (publicId: string) => void;
   onDeals: () => void;
+  /** «Другое время» — экран выбора времени клиентом `#/deals/:id/time` (§7.10). */
+  onTime: (id: string) => void;
 }
 
-export function DealScreen({ publicId, me, onEdit, onRepeat, onDeals }: DealScreenProps) {
+export function DealScreen({ publicId, me, onEdit, onRepeat, onDeals, onTime }: DealScreenProps) {
   const showToast = useToast();
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   /** Демо: чьими глазами смотреть. undefined — как решит сервер (роль смотрящего); 'client' — `?as=client`. */
@@ -186,7 +191,8 @@ export function DealScreen({ publicId, me, onEdit, onRepeat, onDeals }: DealScre
     extra: Omit<DealActionRequest, 'action' | 'as'> = {},
   ): Promise<void> {
     if (!startBusy(code)) return;
-    const hasField = sheet !== null && (sheet.kind === 'text' || confirmSheet(sheet.code, deal.role).reasonField);
+    const hasField =
+      sheet !== null && sheet.kind !== 'change' && (sheet.kind === 'text' || confirmSheet(sheet.code, deal.role).reasonField);
     try {
       // `as` — роль, под которой открыт экран: в демо клиентские действия идут от роли клиента, как в чате.
       const response = await api.dealAction(publicId, { action: code, as: deal.role, ...extra });
@@ -215,7 +221,7 @@ export function DealScreen({ publicId, me, onEdit, onRepeat, onDeals }: DealScre
   }
 
   function submitSheet(deal: DealFull) {
-    if (!sheet || busyRef.current) return;
+    if (!sheet || sheet.kind === 'change' || busyRef.current) return;
     if (sheet.kind === 'text') {
       const error = validateText(text, { max: TEXT_MAX, emptyError: textSheet(sheet.code).emptyError });
       if (error) {
@@ -297,10 +303,14 @@ export function DealScreen({ publicId, me, onEdit, onRepeat, onDeals }: DealScre
     switch (behavior.kind) {
       case 'post':
         // «Подтверждаю» — с номером версии, которую клиент видит: сменились условия — 409 version_mismatch.
-        void runAction(deal, behavior.code, behavior.code === 'confirm' ? { version: deal.terms.version } : {});
+        // «Принять {время}» — с номером предложения, которое исполнитель видит на кнопке (§7.10).
+        if (behavior.code === 'confirm') void runAction(deal, 'confirm', { version: deal.terms.version });
+        else if (behavior.code === 'accept_time') void runAction(deal, 'accept_time', deal.time_proposal ? { proposal_id: deal.time_proposal.id } : {});
+        else void runAction(deal, behavior.code);
         return;
       case 'confirm':
       case 'text':
+      case 'change':
         openSheet(behavior);
         return;
       case 'edit':
@@ -324,6 +334,32 @@ export function DealScreen({ publicId, me, onEdit, onRepeat, onDeals }: DealScre
   /** Лист подтверждения или ввода текста; пока идёт запрос — не закрывается. */
   function renderSheet(current: DealFull, open: SheetState) {
     const sending = busy !== null;
+    if (open.kind === 'change') {
+      return (
+        <Sheet title={CHANGE_SHEET.title} onClose={closeSheet} locked={sending}>
+          <Typography.Text variant="body" color="secondary">
+            {CHANGE_SHEET.text}
+          </Typography.Text>
+          <div className="dg-actions">
+            <Button
+              type="button"
+              variant="primary"
+              size="large"
+              stretched
+              onClick={() => {
+                setSheet(null);
+                onTime(publicId);
+              }}
+            >
+              {CHANGE_SHEET.timeLabel}
+            </Button>
+            <Button type="button" variant="secondary" size="large" stretched onClick={() => openSheet({ kind: 'text', code: 'request_changes' })}>
+              {CHANGE_SHEET.textLabel}
+            </Button>
+          </div>
+        </Sheet>
+      );
+    }
     if (open.kind === 'text') {
       const copy = textSheet(open.code);
       return (
@@ -413,7 +449,7 @@ export function DealScreen({ publicId, me, onEdit, onRepeat, onDeals }: DealScre
   }
 
   const deal = state.deal;
-  const layout = layoutActions(deal.actions, deal.role);
+  const layout = layoutActions(deal.actions, deal.role, deal.time_proposal ?? null);
   const tone = statusTone(deal.status, layout);
   const locked = busy !== null || refreshing;
   const hasAttach = layout.buttons.some((b) => b.key === 'attach_receipt');
@@ -452,6 +488,7 @@ export function DealScreen({ publicId, me, onEdit, onRepeat, onDeals }: DealScre
             Главное — первым, «Отменить сделку» — последней (DESIGN §4, §6); оплата — подсказкой «в чате» над кнопками. */}
         {layout.buttons.length > 0 || layout.payInChat || layout.transferClaimed ? (
           <Section id="deal-actions" title="Действия">
+            {deal.time_proposal ? <p className="dg-warning dg-warning_info">{proposalNote(deal.role, deal.time_proposal)}</p> : null}
             {layout.payInChat ? (
               <ChatHint text="Оплата — в чате с ботом" sub="Ссылка на оплату и реквизиты — на карточке сделки" onOpenChat={openChat} />
             ) : null}

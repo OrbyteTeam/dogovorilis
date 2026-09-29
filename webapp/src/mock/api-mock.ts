@@ -526,6 +526,8 @@ interface MockFull {
   pendingRequest: string | null;
   /** Двойное нажатие: то же действие той же роли при том же статусе — `already_done`, как на сервере. */
   last: { key: string; status: DealStatus } | null;
+  /** Ожидающее предложение времени от клиента (§7.10). */
+  proposal?: { id: number; scheduled_at: string } | null;
 }
 
 const FULL = new Map<string, MockFull>();
@@ -677,6 +679,11 @@ function seedFull(row: MockDeal): MockFull {
     remindedAt: null,
     pendingRequest: row.status === 'changes_requested' ? (row.request ?? null) : null,
     last: null,
+    // Сделка «изменения запрошены» на стенде ждёт ответа и на предложенное время: видна кнопка «Принять …» (§7.10).
+    proposal:
+      row.id === 'Cr3Chng120'
+        ? { id: 499, scheduled_at: moscowInputToIso(`${addDays(dayKey(new Date()), 4)}T17:00`) ?? '' }
+        : null,
   };
 }
 
@@ -768,7 +775,7 @@ function mockActions(row: MockDeal, st: MockFull, role: DealRole): ActionCode[] 
       case 'awaiting_confirmation':
         return clientNameOf(row) ? ['edit', 'remind_client', 'cancel'] : ['share', 'edit', 'open_as_client', 'cancel'];
       case 'changes_requested':
-        return ['edit', 'keep_as_is', 'cancel'];
+        return [...(st.proposal ? (['accept_time'] as const) : []), 'edit', 'keep_as_is', 'cancel'];
       case 'awaiting_prepayment':
       case 'awaiting_payment':
         return [...(st.payments.some((p) => p.status === 'claimed') ? (['confirm_transfer'] as const) : []), 'remind_client', 'cancel'];
@@ -845,6 +852,7 @@ function dealFull(row: MockDeal, role: DealRole): DealFull {
     documents: { receipt_pdf: TERMINAL.includes(row.status), cheque_text: chequeTextOf(row, st) },
     actions: mockActions(row, st, role),
     cancel_consequence: cancelConsequenceOf(row, st, role),
+    time_proposal: st.proposal ? { ...st.proposal } : null,
   };
 }
 
@@ -927,9 +935,23 @@ function applyAction(publicId: string, body: DealActionRequest): DealActionRespo
       row.status = 'declined';
       log('client', 'Клиент отказался от сделки');
       break;
+    case 'accept_time': {
+      // Как на сервере: новая версия с предложенным временем (T5), клиент подтверждает её заново (§7.10).
+      if (!st.proposal) throw new ApiError(409, 'invalid_transition', E1);
+      const prev = st.versions[st.versions.length - 1];
+      row.iso = st.proposal.scheduled_at;
+      st.versions.push({ ...prev, version: prev.version + 1, created_at: now, confirmed_at: null, scheduled_at: st.proposal.scheduled_at, change_request_text: `Предлагаю другое время: ${formatDateTime(st.proposal.scheduled_at)}` });
+      row.version = prev.version + 1;
+      row.status = 'awaiting_confirmation';
+      st.proposal = null;
+      log('seller', `Исполнитель изменил условия (версия ${prev.version + 1}): срок`);
+      notice = 'Время принято: клиент получил новую версию условий и подтвердит её.';
+      break;
+    }
     case 'keep_as_is':
       row.status = 'awaiting_confirmation';
       st.pendingRequest = null;
+      st.proposal = null;
       log('seller', 'Исполнитель оставил условия как есть');
       break;
     case 'done':
@@ -1013,6 +1035,59 @@ export async function mockUploadReceipt(publicId: string, file: File, contentTyp
 }
 
 
+// ───────────── «Другое время» (§7.10): GET …/busy, POST …/time-proposals ─────────────
+
+const BUSY_STATUSES: readonly DealStatus[] = ['scheduled', 'awaiting_prepayment', 'awaiting_acceptance'];
+let nextProposalId = 500;
+
+/** Слот, который «успели занять», пока клиент выбирал: завтра 16:00 по МСК — показать 409 slot_busy на стенде. */
+function takenSlotIso(): string {
+  return moscowInputToIso(`${addDays(dayKey(new Date()), 1)}T16:00`) ?? '';
+}
+
+function busyOf(publicId: string) {
+  if (publicId === FORBIDDEN_ID) throw new ApiError(403, 'forbidden', 'Это не ваша сделка');
+  const row = findRow(publicId);
+  const at = (days: number, time: string, minutes: number) => {
+    const start = moscowInputToIso(`${addDays(dayKey(new Date()), days)}T${time}`) ?? '';
+    return { start, end: new Date(Date.parse(start) + minutes * 60_000).toISOString() };
+  };
+  // У исполнителя этих сделок — занятость из его же «договорились»; у клиентских — выдуманный чужой график.
+  const own =
+    row.role === 'seller'
+      ? MOCK_DEAL_ROWS.filter((r) => r.role === 'seller' && r.id !== row.id && !r.demo && BUSY_STATUSES.includes(r.status))
+          .map((r) => ({ iso: mockIso(r), minutes: r.durationMin ?? 60 }))
+          .filter((x): x is { iso: string; minutes: number } => Boolean(x.iso))
+          .map((x) => ({ start: x.iso, end: new Date(Date.parse(x.iso) + x.minutes * 60_000).toISOString() }))
+      : [at(1, '10:00', 90), at(1, '14:00', 60), at(2, '12:00', 60), at(2, '18:00', 120)];
+  return {
+    duration_min: row.durationMin ?? 60,
+    step_min: 30,
+    first_slot: '08:00',
+    last_slot: '21:30',
+    horizon_days: 30,
+    min_lead_min: 30,
+    now: new Date().toISOString(),
+    current: mockIso(row),
+    busy: own.sort((a, b) => a.start.localeCompare(b.start)),
+  };
+}
+
+function proposeTime(publicId: string, body: { scheduled_at: string; as?: DealRole }) {
+  const row = findRow(publicId);
+  const role = roleFor(row, body.as);
+  if (role !== 'client') throw new ApiError(403, 'forbidden', 'Время предлагает клиент');
+  if (!['awaiting_confirmation', 'changes_requested'].includes(row.status)) throw new ApiError(409, 'invalid_transition', E1);
+  maybeFailWrite();
+  if (body.scheduled_at === mockIso(row)) throw new ApiError(400, 'validation', 'Это и так текущее время. Выберите другое');
+  if (body.scheduled_at === takenSlotIso()) throw new ApiError(409, 'slot_busy', 'Это время уже заняли. Выберите другое');
+  const st = fullOf(row);
+  st.proposal = { id: nextProposalId++, scheduled_at: body.scheduled_at };
+  row.status = 'changes_requested';
+  st.timeline.push({ at: new Date().toISOString(), actor: 'client', text: `Клиент предложил другое время: ${formatDateTime(body.scheduled_at)}` });
+  return { proposal: { ...st.proposal, status: 'pending' as const }, deal: dealFull(row, role) };
+}
+
 export async function mockRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
   await delay(300);
   if (AUTH_FAIL) throw new ApiError(401, 'init_data_invalid', 'Откройте мини-приложение внутри MAX');
@@ -1024,6 +1099,10 @@ export async function mockRequest<T>(method: string, path: string, body?: unknow
   if (dealPath && method === 'PUT') return updateDeal(dealPath[1], body as UpdateDealRequest) as unknown as T;
   const fullPath = /^\/deals\/([A-Za-z0-9]+)\/full(?:\?as=(seller|client))?$/.exec(path);
   if (fullPath && method === 'GET') return fullDeal(fullPath[1], fullPath[2] as DealRole | undefined) as unknown as T;
+  const busyPath = /^\/deals\/([A-Za-z0-9]+)\/busy$/.exec(path);
+  if (busyPath && method === 'GET') return busyOf(busyPath[1]) as unknown as T;
+  const proposalPath = /^\/deals\/([A-Za-z0-9]+)\/time-proposals$/.exec(path);
+  if (proposalPath && method === 'POST') return proposeTime(proposalPath[1], body as { scheduled_at: string; as?: DealRole }) as unknown as T;
   const actionPath = /^\/deals\/([A-Za-z0-9]+)\/actions$/.exec(path);
   if (actionPath && method === 'POST') return applyAction(actionPath[1], body as DealActionRequest) as unknown as T;
   if (method === 'PUT' && path === '/me/profile') return { profile: saveProfile(body as SellerProfile) } as unknown as T;

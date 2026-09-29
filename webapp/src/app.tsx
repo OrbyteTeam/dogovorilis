@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { api, ApiError, errorText } from './api';
-import { backButton, DEV_NO_BRIDGE, haptic, insideMax, isAvailable, startParam } from './bridge';
+import { backButton, DEV_NO_BRIDGE, haptic, insideMax, isAvailable, openBot, startParam } from './bridge';
 import { AuthFailedScreen, BridgeMissingScreen, ErrorScreen, LoadingScreen } from './components/StateScreen';
 import { TabBar } from './components/TabBar';
 import { ToastProvider } from './components/Toast';
@@ -30,6 +30,7 @@ import { NewScreen } from './screens/New';
 import { ServiceFormScreen } from './screens/ServiceForm';
 import { ServicesScreen } from './screens/Services';
 import { SettingsScreen } from './screens/Settings';
+import { TimePickerScreen } from './screens/TimePicker';
 import type { CreateDealRequest, CreateDealResponse, MeResponse, SellerProfile, Template } from './types';
 
 const DONE_STORAGE_PREFIX = 'dogovorilis:done:';
@@ -199,6 +200,17 @@ function Router() {
             me={data.me}
             onEdit={(id) => navigate({ name: 'edit', id })}
             onRepeat={(id) => navigate({ name: 'new', from: id })}
+            onDeals={() => navigate({ name: 'deals' })}
+            onTime={(id) => navigate({ name: 'time', id })}
+          />
+        );
+      case 'time':
+        return (
+          <TimePickerScreen
+            key={route.id}
+            publicId={route.id}
+            onOpenChat={() => openBot(data.me.config.bot_username, `d_${route.id}`)}
+            onDeal={() => navigate({ name: 'deal', id: route.id })}
             onDeals={() => navigate({ name: 'deals' })}
           />
         );

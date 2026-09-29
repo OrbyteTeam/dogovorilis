@@ -1,7 +1,10 @@
 // Экран сделки `#/deals/:id` — чистая логика: раскладка кодов действий в кнопки, тексты листов подтверждения и ввода,
-// проверка файла чека и разбор ошибок действий — docs/SPEC.md §7.9, §7.8 (`/actions`, `/receipt`), ЗАДАЧА_08 B.
+// проверка файла чека и разбор ошибок действий — docs/SPEC.md §7.9, §7.8 (`/actions`, `/receipt`), ЗАДАЧА_08 B;
+// «Другое время» и «Принять {время}» — §7.10, ЗАДАЧА_08 D.
 // Модуль без React и без window: его покрывают unit-тесты webapp/test/deal-screen.test.ts.
-import type { ActionCode, DealRole, DealStatus, DealTimelineItem, PostActionCode } from './types';
+import { formatDateTime } from './format';
+import { shortDateTime } from './schedule';
+import type { ActionCode, DealRole, DealStatus, DealTimelineItem, DealTimeProposal, PostActionCode } from './types';
 
 // ─────────────────────────────────────────── кнопки ───────────────────────────────────────────
 
@@ -44,6 +47,8 @@ const LABEL: Record<Exclude<ButtonKey, 'refund_confirmed'>, string> = {
   fixed: 'Исправлено, проверьте',
   close_without_receipt: 'Закрыть без чека',
   remind_client: 'Напомнить клиенту',
+  // Подпись с временем — acceptTimeLabel; эта — если сервер прислал действие без предложения.
+  accept_time: 'Принять время',
   edit: 'Изменить условия',
   repeat: 'Повторить',
   attach_receipt: 'Приложить чек',
@@ -58,12 +63,35 @@ export function buttonLabel(key: ButtonKey, role: DealRole): string {
   return LABEL[key];
 }
 
-/** Кандидаты в главное действие — то, чего ждёт от этой стороны следующий шаг сделки. */
-const PRIMARY: readonly ActionCode[] = ['confirm', 'accept', 'done', 'fixed', 'attach_receipt', 'share'];
+/** «Принять Чт 1 окт, 19:00» — как кнопка «✅ Принять …» карточки в чате (server texts.ts acceptTimeLabel), без эмодзи. */
+export function acceptTimeLabel(iso: string): string {
+  const when = shortDateTime(iso);
+  return when ? `Принять ${when}` : LABEL.accept_time;
+}
+
+/**
+ * Строка над действиями, пока предложение времени ждёт ответа (§7.10): исполнителю — что предлагает клиент,
+ * клиенту — что он предложил. Время — по МСК с меткой, как в условиях.
+ */
+export function proposalNote(role: DealRole, proposal: DealTimeProposal): string {
+  const when = formatDateTime(proposal.scheduled_at);
+  return role === 'seller' ? `Клиент предлагает ${when}` : `Вы предложили ${when}. Ждём ответа исполнителя`;
+}
+
+/**
+ * Кандидаты в главное действие — то, чего ждёт от этой стороны следующий шаг сделки. «Принять {время}» — первым:
+ * клиент уже выбрал свободное время, исполнителю остаётся одно нажатие (§7.10).
+ */
+const PRIMARY: readonly ActionCode[] = ['accept_time', 'confirm', 'accept', 'done', 'fixed', 'attach_receipt', 'share'];
 /** Не кнопки блока «Действия» (см. ButtonKey). */
 const NOT_BUTTONS: readonly ActionCode[] = ['pay', 'confirm_transfer', 'open_as_client', 'receipt_pdf'];
 
-export function layoutActions(actions: readonly ActionCode[], role: DealRole): ActionLayout {
+/** `proposal` — ожидающее предложение времени (`DealFull.time_proposal`): из него подпись «Принять {время}». */
+export function layoutActions(
+  actions: readonly ActionCode[],
+  role: DealRole,
+  proposal: DealTimeProposal | null = null,
+): ActionLayout {
   const codes = actions.filter((code, index) => actions.indexOf(code) === index);
   const primary = codes.find((code) => PRIMARY.includes(code)) ?? null;
   const rest = codes.filter((code) => code !== primary && code !== 'cancel' && !NOT_BUTTONS.includes(code));
@@ -73,7 +101,8 @@ export function layoutActions(actions: readonly ActionCode[], role: DealRole): A
   for (const code of ordered) {
     const key = code as ButtonKey;
     const variant: ButtonVariant = code === primary ? 'primary' : code === 'cancel' ? 'destructive' : 'secondary';
-    buttons.push({ key, label: buttonLabel(key, role), variant });
+    const label = code === 'accept_time' && proposal ? acceptTimeLabel(proposal.scheduled_at) : buttonLabel(key, role);
+    buttons.push({ key, label, variant });
     // Ссылку для клиента — сразу за «Отправить клиенту»: в MAX шеринг бывает недоступен, тогда её копируют руками.
     if (code === 'share') buttons.push({ key: 'copy_link', label: buttonLabel('copy_link', role), variant: 'secondary' });
   }
@@ -97,6 +126,8 @@ export type ButtonBehavior =
   | { kind: 'confirm'; code: ConfirmCode }
   /** Нужен текст — лист с полем ввода. */
   | { kind: 'text'; code: TextCode }
+  /** «Предложить изменения» клиента — лист выбора: «Другое время» (экран времени) или «Написать текстом» (§7.10). */
+  | { kind: 'change' }
   | { kind: 'edit' }
   | { kind: 'repeat' }
   | { kind: 'file' }
@@ -110,6 +141,7 @@ export function buttonBehavior(key: ButtonKey): ButtonBehavior {
     case 'close_without_receipt':
       return { kind: 'confirm', code: key };
     case 'request_changes':
+      return { kind: 'change' };
     case 'remarks':
       return { kind: 'text', code: key };
     case 'edit':
@@ -174,6 +206,21 @@ export function confirmSheet(code: ConfirmCode, role: DealRole): ConfirmSheetTex
       };
   }
 }
+
+export interface ChangeSheetText {
+  title: string;
+  text: string;
+  timeLabel: string;
+  textLabel: string;
+}
+
+/** Лист выбора «Предложить изменения» — те же два пути, что у карточки в чате (§7.10): время или текст. */
+export const CHANGE_SHEET: ChangeSheetText = {
+  title: 'Предложить изменения',
+  text: 'Время выберите в календаре исполнителя, остальное напишите словами.',
+  timeLabel: 'Другое время',
+  textLabel: 'Написать текстом',
+};
 
 export interface TextSheetText {
   title: string;

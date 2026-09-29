@@ -2,13 +2,16 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  acceptTimeLabel,
   actionErrorOutcome,
   avatarGradient,
   buttonBehavior,
+  CHANGE_SHEET,
   checkReceiptFile,
   confirmSheet,
   initials,
   layoutActions,
+  proposalNote,
   RECEIPT_EMPTY_ERROR,
   RECEIPT_FILE_ERROR,
   RECEIPT_MAX_BYTES,
@@ -84,10 +87,49 @@ describe('раскладка действий', () => {
   it('подписи новых кнопок без длинных тире и точек-разделителей', () => {
     const all = layoutActions(
       ['confirm', 'request_changes', 'decline', 'accept', 'remarks', 'keep_as_is', 'done', 'fixed', 'close_without_receipt',
-        'remind_client', 'refund_confirmed', 'edit', 'repeat', 'attach_receipt', 'share', 'cancel'],
+        'remind_client', 'refund_confirmed', 'edit', 'repeat', 'attach_receipt', 'share', 'accept_time', 'cancel'],
       'seller',
+      { id: 7, scheduled_at: '2026-10-01T16:00:00.000Z' },
     );
     for (const b of all.buttons) expect(b.label).not.toMatch(/[—·]/);
+  });
+});
+
+describe('другое время (ЗАДАЧА_08 D)', () => {
+  const proposal = { id: 7, scheduled_at: '2026-10-01T16:00:00.000Z' };
+
+  it('«Принять {время}» — главной у исполнителя, первой; подпись — как кнопка в чате, время по МСК', () => {
+    const layout = layoutActions(['accept_time', 'edit', 'keep_as_is', 'cancel'], 'seller', proposal);
+    expect(layout.buttons.map((b) => `${b.key}:${b.variant}`)).toEqual([
+      'accept_time:primary',
+      'edit:secondary',
+      'keep_as_is:secondary',
+      'cancel:destructive',
+    ]);
+    expect(layout.buttons[0].label).toBe('Принять Чт 1 окт, 19:00');
+    expect(acceptTimeLabel(proposal.scheduled_at)).toBe('Принять Чт 1 окт, 19:00');
+  });
+
+  it('действие без предложения — нейтральная подпись', () => {
+    expect(layoutActions(['accept_time'], 'seller').buttons[0].label).toBe('Принять время');
+  });
+
+  it('«Принять» — сразу запрос действия; «Предложить изменения» — лист выбора времени или текста', () => {
+    expect(buttonBehavior('accept_time')).toEqual({ kind: 'post', code: 'accept_time' });
+    expect(buttonBehavior('request_changes')).toEqual({ kind: 'change' });
+    expect(CHANGE_SHEET.timeLabel).toBe('Другое время');
+    expect(CHANGE_SHEET.textLabel).toBe('Написать текстом');
+  });
+
+  it('строка над действиями: исполнителю — что предлагает клиент, клиенту — что он предложил', () => {
+    expect(proposalNote('seller', proposal)).toBe('Клиент предлагает 01.10.2026 19:00 (МСК)');
+    expect(proposalNote('client', proposal)).toBe('Вы предложили 01.10.2026 19:00 (МСК). Ждём ответа исполнителя');
+  });
+
+  it('новые подписи без длинных тире и точек-разделителей', () => {
+    for (const text of [...Object.values(CHANGE_SHEET), proposalNote('seller', proposal), proposalNote('client', proposal)]) {
+      expect(text).not.toMatch(/[—·]/);
+    }
   });
 });
 
@@ -96,7 +138,6 @@ describe('что делает кнопка', () => {
     expect(buttonBehavior('decline')).toEqual({ kind: 'confirm', code: 'decline' });
     expect(buttonBehavior('cancel')).toEqual({ kind: 'confirm', code: 'cancel' });
     expect(buttonBehavior('close_without_receipt')).toEqual({ kind: 'confirm', code: 'close_without_receipt' });
-    expect(buttonBehavior('request_changes')).toEqual({ kind: 'text', code: 'request_changes' });
     expect(buttonBehavior('remarks')).toEqual({ kind: 'text', code: 'remarks' });
   });
 

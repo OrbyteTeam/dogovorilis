@@ -1,6 +1,7 @@
 // Клиент внутреннего API мини-приложения — docs/SPEC.md §7.8 (контракт, коды ошибок) и §7.1 (авторизация по initData).
 import { DEV_NO_BRIDGE, initData, insideMax } from './bridge';
 import type {
+  BusyResponse,
   CreateDealRequest,
   CreateDealResponse,
   DealActionRequest,
@@ -19,6 +20,8 @@ import type {
   ServiceResponse,
   ServicesResponse,
   TemplatesResponse,
+  TimeProposalRequest,
+  TimeProposalResponse,
   UpdateDealRequest,
   UpdateDealResponse,
 } from './types';
@@ -50,6 +53,8 @@ export type ApiErrorCode =
   | 'unavailable'
   // 409 — у исполнителя уже 50 услуг (§7.6a).
   | 'services_limit'
+  // 409 — выбранное время успели занять, пока клиент выбирал (§7.10): перезапросить занятость.
+  | 'slot_busy'
   | 'rate_limited'
   | 'internal'
   | 'network'
@@ -191,6 +196,14 @@ export const api = {
   dealAction: (publicId: string, body: DealActionRequest) =>
     post<DealActionResponse>(`/deals/${encodeURIComponent(publicId)}/actions`, body),
   uploadReceipt,
+  /** «Другое время» (§7.10): занятость исполнителя для сетки слотов — любому участнику сделки. */
+  busy: (publicId: string) => get<BusyResponse>(`/deals/${encodeURIComponent(publicId)}/busy`),
+  /** Клиент предлагает время; `as: 'client'` — демо, исполнитель смотрит как клиент. */
+  proposeTime: (publicId: string, scheduledAt: string, as?: 'client') =>
+    post<TimeProposalResponse>(`/deals/${encodeURIComponent(publicId)}/time-proposals`, {
+      scheduled_at: scheduledAt,
+      ...(as ? { as } : {}),
+    } satisfies TimeProposalRequest),
   /** «Мои услуги» (§7.6a): без `all` — только показываемые, с `all` — все, со скрытыми. */
   services: (all = false) => get<ServicesResponse>(all ? '/services?all=1' : '/services'),
   createService: (body: ServiceBody) => post<ServiceResponse>('/services', body),
