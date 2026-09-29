@@ -955,6 +955,146 @@ export const API_FORBIDDEN_DEAL = 'Это не ваша сделка';
 export const API_NOT_EDITABLE = 'Условия можно изменить, только пока клиент их не подтвердил';
 export const API_NO_CHANGES = 'Условия не изменились — отправлять клиенту нечего';
 
+// --- экран сделки в мини-приложении (ЗАДАЧА_08 B, SPEC §7.9). Простой текст без markdown: его рисует React ---
+
+export const API_VERSION_MISMATCH = 'Условия изменились. Посмотрите новую версию';
+export const API_INVALID_TRANSITION = 'Это действие уже недоступно, данные сделки обновлены';
+export const API_UPLOAD_FAILED = 'Не удалось загрузить файл в MAX. Попробуйте ещё раз через минуту';
+export const API_RECEIPT_NOT_READY = 'Квитанция будет, когда сделка закроется или отменится';
+export const API_RECEIPT_SENT = 'Квитанция отправлена в чат с ботом';
+export const API_CHEQUE_TYPE = 'Нужен файл PDF, JPG или PNG';
+export const API_CHEQUE_TOO_LARGE = 'Файл больше 20 МБ. Сожмите фото или пришлите PDF';
+export const API_CHEQUE_ACCEPTED = 'Чек приложен, квитанция ушла обеим сторонам';
+export const API_TEXT_LENGTH = 'Текст от 1 до 500 символов';
+export const API_REASON_LENGTH = 'Причина до 300 символов';
+export const API_ACTION_DONE = 'Готово';
+export const API_ALREADY_DONE = 'Это уже сделано';
+
+const TERMS_FIELD_LABEL: Record<TermsField, string> = {
+  title: 'что делаем',
+  description: 'уточнения',
+  scheduled_at: 'срок',
+  total: 'сумма',
+  prepayment: 'предоплата',
+  cancel_rule: 'правило отмены',
+};
+
+function kindLabel(kind: 'prepayment' | 'final'): string {
+  return kind === 'prepayment' ? 'Предоплата' : 'Остаток';
+}
+
+const PAYMENT_STATUS_WORD: Record<PaymentStatus, string> = {
+  pending: 'ждём оплату',
+  claimed: 'клиент сообщил о переводе',
+  succeeded: 'оплачено',
+  canceled: 'отменено',
+  expired: 'ссылка истекла',
+};
+
+/** Строка платежа на экране сделки: «Предоплата 500 ₽, ссылка ЮKassa, тест: оплачено 21.09 14:03 (МСК)». */
+export function paymentLabel(a: {
+  kind: 'prepayment' | 'final';
+  rail: PaymentRail;
+  provider: PaymentProvider;
+  status: PaymentStatus;
+  amountKopecks: number;
+  at: Date | null;
+}): string {
+  const how = a.rail === 'transfer' ? 'перевод по реквизитам, подтверждают стороны' : railLabel(a.rail, a.provider);
+  const when = a.at && (a.status === 'succeeded' || a.status === 'claimed') ? ` ${formatDateTimeShort(a.at)}` : '';
+  return `${kindLabel(a.kind)} ${formatMoney(a.amountKopecks)}, ${how}: ${PAYMENT_STATUS_WORD[a.status]}${when}`;
+}
+
+/** Строка чека на экране сделки: та же логика, что в карточке (receiptLine), но только когда чек уместен. */
+export function chequeText(a: { status: DealStatus; attachedAt: Date | null; deadline: Date | null; taxModeNone: boolean }): string | null {
+  if (a.status !== 'paid' && a.status !== 'closed') return null;
+  if (a.status === 'closed' && !a.attachedAt && !a.taxModeNone) return 'Сделка закрыта без чека';
+  return receiptLine(a);
+}
+
+export type TimelinePayment = { kind: 'prepayment' | 'final'; rail: PaymentRail; provider: PaymentProvider; amountKopecks: number };
+
+/**
+ * Строка хронологии по событию сделки (SPEC §5.4). null — событие служебное и в хронологию не попадает
+ * (напоминания, смена ссылки при повторном нажатии). `payment` — платёж из payload.payment_id, если он есть.
+ */
+export function timelineText(
+  type: string,
+  payload: Record<string, unknown>,
+  a: { actor: 'seller' | 'client' | 'system'; payment: TimelinePayment | null },
+): string | null {
+  const text = (v: unknown) => (typeof v === 'string' ? v : '');
+  const sum = a.payment ? formatMoney(a.payment.amountKopecks) : '';
+  const what = a.payment ? `${kindLabel(a.payment.kind).toLowerCase()} ${sum}` : 'оплата';
+  switch (type) {
+    case 'deal.created':
+      return payload.source === 'repeat' ? 'Исполнитель повторил прежнюю сделку' : 'Исполнитель создал сделку';
+    case 'client.joined':
+      return payload.source === 'repeat' ? 'Карточка отправлена клиенту' : 'Клиент открыл карточку';
+    case 'demo.opened':
+      return 'Демо: исполнитель открыл сделку как клиент';
+    case 'version.created': {
+      if (payload.kept_as_is) return 'Исполнитель оставил условия без изменений';
+      const changed = Array.isArray(payload.changed) ? (payload.changed as TermsField[]).map((f) => TERMS_FIELD_LABEL[f]).filter(Boolean) : [];
+      const v = typeof payload.version === 'number' ? ` (версия ${payload.version})` : '';
+      return changed.length ? `Исполнитель изменил условия${v}: ${changed.join(', ')}` : `Исполнитель изменил условия${v}`;
+    }
+    case 'version.confirmed':
+      return typeof payload.version === 'number' && payload.version > 1
+        ? `Клиент подтвердил условия версии ${payload.version}`
+        : 'Клиент подтвердил условия';
+    case 'version.change_requested':
+      return `Клиент предложил изменения: «${text(payload.text)}»`;
+    case 'deal.declined':
+      return 'Клиент отказался от сделки';
+    case 'deal.expired':
+      return 'Срок подтверждения истёк';
+    case 'payment.created':
+      return a.payment?.rail === 'transfer' ? `Клиент выбрал перевод по реквизитам: ${what}` : `Клиент получил ссылку на оплату: ${what}`;
+    case 'payment.claimed':
+      return `Клиент сообщил о переводе: ${what}`;
+    case 'payment.not_received':
+      return `Исполнитель не видит перевод: ${what}`;
+    case 'payment.succeeded': {
+      if (payload.no_remainder) return 'Остатка к оплате нет';
+      if (!a.payment) return 'Оплата получена';
+      const how = a.payment.rail === 'transfer' ? 'перевод подтвердил исполнитель' : railLabel(a.payment.rail, a.payment.provider);
+      const verb = a.payment.kind === 'prepayment' ? 'получена' : 'получен';
+      return `${kindLabel(a.payment.kind)} ${sum} ${verb} (${how})`;
+    }
+    case 'payment.canceled':
+      if (payload.reason === 'rail_switch' || payload.reason === 'client_cancelled_rail') return 'Клиент сменил способ оплаты';
+      if (payload.reason === 'link_expired') return `Ссылка на оплату истекла: ${what}`;
+      if (payload.reason === 'link_renewed' || payload.reason === 'link_creation_stale' || payload.reason === 'superseded_by_late_success') return null;
+      return `Оплата отменена: ${what}`;
+    case 'payment.succeeded_late':
+      return payload.refund_required ? 'Оплата пришла, когда сделка её уже не ждала: её нужно вернуть клиенту' : 'Оплата пришла позже срока ссылки и учтена';
+    case 'deal.done':
+      return 'Исполнитель отметил работу выполненной';
+    case 'deal.accepted':
+      return 'Клиент принял работу';
+    case 'deal.remarks':
+      return `Клиент оставил замечания: «${text(payload.text)}»`;
+    case 'deal.fixed':
+      return 'Исполнитель исправил замечания';
+    case 'receipt.attached':
+      return 'Исполнитель приложил чек';
+    case 'deal.closed_without_receipt':
+      return 'Исполнитель закрыл сделку без чека';
+    case 'deal.closed':
+      return 'Сделка закрыта, квитанция отправлена обеим сторонам';
+    case 'deal.cancelled': {
+      const who = payload.by === 'client' ? 'Клиент' : payload.by === 'system' ? 'Система' : 'Исполнитель';
+      const reason = text(payload.reason);
+      return reason ? `${who} отменил(а) сделку: «${reason}»` : `${who} отменил(а) сделку`;
+    }
+    case 'refund.confirmed':
+      return payload.by === 'client' ? 'Клиент подтвердил, что получил возврат' : 'Исполнитель отметил, что вернул предоплату';
+    default:
+      return null;
+  }
+}
+
 // --- подписи кнопок. Ровно те, что в SPEC §5.5, §6.4, §6.5 и DESIGN §6 ---
 
 export const BTN = {

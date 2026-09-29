@@ -27,6 +27,8 @@ export type Harness = {
   sendAttachment(userId: number, chatId: number, attachment: Record<string, unknown>): Promise<void>;
   /** Запрос к /api/* с настоящей подписью initData — тем же путём, каким ходит мини-приложение. */
   api(method: 'GET' | 'POST' | 'PUT', path: string, userId: number, body?: unknown): Promise<{ status: number; json: any }>;
+  /** Загрузка файла телом запроса (чек из мини-приложения, ЗАДАЧА_08 B) — с настоящей подписью initData. */
+  apiUpload(path: string, userId: number, file: Buffer, contentType: string, fileName?: string): Promise<{ status: number; json: any }>;
   /** Запрос без подписи или с испорченной — для проверки 401. */
   apiRaw(method: 'GET' | 'POST' | 'PUT', path: string, headers: Record<string, string>, body?: unknown): Promise<{ status: number; json: any }>;
   /** Доставка вебхука провайдера ровно тем же путём, каким её принимает Fastify. */
@@ -179,6 +181,20 @@ export async function createHarness(databaseUrl: string, opts?: HarnessOptions):
         url: path,
         headers: { 'x-max-init-data': signInitData(userId), 'content-type': 'application/json' },
         payload: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return { status: res.statusCode, json: safeJson(res.body) };
+    },
+
+    async apiUpload(path, userId, file, contentType, fileName) {
+      const res = await http.inject({
+        method: 'POST',
+        url: path,
+        headers: {
+          'x-max-init-data': signInitData(userId),
+          'content-type': contentType,
+          ...(fileName ? { 'x-file-name': encodeURIComponent(fileName) } : {}),
+        },
+        payload: file,
       });
       return { status: res.statusCode, json: safeJson(res.body) };
     },

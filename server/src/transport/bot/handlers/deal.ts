@@ -5,7 +5,7 @@ import { cfg } from '../../../config.js';
 import { inTx } from '../../../db/pool.js';
 import * as inputsRepo from '../../../db/repos/inputs.js';
 import * as texts from '../../../texts.js';
-import { isTerminal, remaining, type CardRole, type DealBundle } from '../../../types.js';
+import { isTerminal, type CardRole, type DealBundle } from '../../../types.js';
 import { addMinutes } from '../../../domain/time.js';
 import * as dealService from '../../../domain/deal/service.js';
 import { INPUT_TTL_MINUTES } from '../../../domain/deal/service.js';
@@ -26,7 +26,7 @@ import {
   type Deps,
 } from './shared.js';
 import { cancelReasonKeyboard, confirmKeyboard } from '../keyboards.js';
-import { notifyManualReminder } from '../notify.js';
+import { remindClientNow, remindNote } from '../remind.js';
 import type { ParsedCallback } from '../callbacks.js';
 
 /** Какой роли принадлежит кнопка, если нажатое сообщение — не карточка (уведомление или напоминание). */
@@ -200,24 +200,10 @@ async function openCard(ctx: Context, deps: Deps, bundle: DealBundle, viewRole: 
   for (const role of roles) await showCardBelow(deps.max, bundle, role, { userId, chatId });
 }
 
-/** Ручное напоминание клиенту: не чаще раза в 4 часа на сделку (SPEC §5.5). */
-const MANUAL_REMINDER_COOLDOWN_MS = 4 * 60 * 60 * 1000;
-const lastManualReminder = new Map<number, number>();
-
+/** Ручное напоминание клиенту: не чаще раза в 4 часа на сделку, счётчик общий с мини-приложением (SPEC §5.5). */
 async function remindClient(ctx: Context, deps: Deps, bundle: DealBundle, role: CardRole): Promise<void> {
-  const last = lastManualReminder.get(bundle.deal.id) ?? 0;
-  if (Date.now() - last < MANUAL_REMINDER_COOLDOWN_MS) {
-    await reply(ctx, deps, bundle, { role, note: texts.REMIND_COOLDOWN });
-    return;
-  }
-  const context = texts.statusText(bundle.deal.status, 'client', {
-    prepaymentKopecks: bundle.version.prepaymentKopecks,
-    remainingKopecks: remaining(bundle.version),
-    scheduledAt: bundle.version.scheduledAt,
-  });
-  const sent = await notifyManualReminder(deps.max, bundle, context);
-  if (sent) lastManualReminder.set(bundle.deal.id, Date.now());
-  await reply(ctx, deps, bundle, { role, note: sent ? texts.REMIND_SENT : texts.REMIND_NO_CHAT });
+  const outcome = await remindClientNow(deps.max, bundle);
+  await reply(ctx, deps, bundle, { role, note: remindNote(outcome) });
 }
 
 /** Демо-режим: исполнитель проходит клиентскую сторону в своём же чате (SPEC §12). */

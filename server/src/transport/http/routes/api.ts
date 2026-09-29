@@ -1,10 +1,10 @@
 // HTTP API мини-приложения (SPEC §7.8). Внутренний: авторизация только по initData, внешних потребителей нет.
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { cfg } from '../../../config.js';
 import { inTx } from '../../../db/pool.js';
 import * as dealsRepo from '../../../db/repos/deals.js';
 import * as usersRepo from '../../../db/repos/users.js';
-import { AppError, DealNotEditableError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from '../../../errors.js';
+import { AppError, UnauthorizedError } from '../../../errors.js';
 import type { MaxGateway } from '../../../integrations/max/gateway.js';
 import { log } from '../../../logger.js';
 import * as texts from '../../../texts.js';
@@ -17,6 +17,7 @@ import { rescheduleDigest } from '../../../domain/reminder/digest.js';
 import { displayName, sendCard } from '../../bot/cards.js';
 import { publishNewVersion, sendRepeatToClient } from '../../bot/outcome.js';
 import { verifyInitData } from '../auth.js';
+import { checkedPublicId, fail, firstIssue, me, sendError, viewerRole, type AuthedRequest } from '../common.js';
 import { createDealSchema, dealListQuerySchema, profileSchema, updateDealSchema, type CreateDealBody } from '../schemas.js';
 import { dealEditView, dealListItemView, dealView, profileView, shareText, templatesView, userView } from '../views.js';
 
@@ -191,15 +192,7 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
 
 export { RateLimitedError };
 
-// ─────────────────────────── авторизация и ошибки ───────────────────────────
-
-type AuthedRequest = FastifyRequest & { appUser?: User };
-
-function me(req: FastifyRequest): User {
-  const user = (req as AuthedRequest).appUser;
-  if (!user) throw new UnauthorizedError('запрос без проверенного пользователя');
-  return user;
-}
+// ─────────────────────────── авторизация ───────────────────────────
 
 async function authenticate(req: FastifyRequest): Promise<User> {
   const c = cfg();
@@ -227,30 +220,6 @@ async function authenticate(req: FastifyRequest): Promise<User> {
   );
 }
 
-function firstIssue(issues: { message: string; path: (string | number | symbol)[] }[]): string {
-  const i = issues[0];
-  return i ? i.message : 'Проверьте заполнение полей';
-}
-
-function fail(reply: FastifyReply, status: number, code: string, message: string, extra?: Record<string, unknown>) {
-  reply.code(status);
-  return { error: { code, message, ...extra } };
-}
-
-/** public_id не того вида — такой сделки нет (404), в БД не ходим. */
-function checkedPublicId(publicId: string): string {
-  if (!PUBLIC_ID_RE.test(publicId)) throw new NotFoundError(`сделка ${publicId}`);
-  return publicId;
-}
-
-/** Роль смотрящего; в демо он и исполнитель, и клиент — главная роль исполнителя. Посторонний — 403. */
-function viewerRole(bundle: DealBundle, userId: number): 'seller' | 'client' {
-  const roles = dealService.participantRole(bundle.deal, userId);
-  if (roles.includes('seller')) return 'seller';
-  if (roles.includes('client')) return 'client';
-  throw new ForbiddenError('not_participant');
-}
-
 /** Тело формы → условия новой версии (рубли → копейки); пустые «Уточнения» — null. */
 function termsOf(body: Omit<CreateDealBody, 'template'>): dealService.NewVersionInput {
   return {
@@ -264,26 +233,3 @@ function termsOf(body: Omit<CreateDealBody, 'template'>): dealService.NewVersion
   };
 }
 
-function sendError(reply: FastifyReply, e: unknown) {
-  if (e instanceof UnauthorizedError) return fail(reply, 401, e.code, 'Откройте мини-приложение внутри MAX');
-  if (e instanceof ValidationError) return fail(reply, 400, 'validation', e.message);
-  if (e instanceof DealNotEditableError) return fail(reply, 409, e.code, texts.API_NOT_EDITABLE, { status: e.status });
-  if (e instanceof AppError) {
-    switch (e.code) {
-      case 'forbidden':
-        return fail(reply, 403, 'forbidden', texts.API_FORBIDDEN_DEAL);
-      case 'deal_not_found':
-        return fail(reply, 404, 'not_found', texts.API_DEAL_NOT_FOUND);
-      case 'no_changes':
-        return fail(reply, 409, 'no_changes', texts.API_NO_CHANGES);
-      case 'invalid_transition':
-        return fail(reply, 409, e.code, e.message);
-      default:
-        break;
-    }
-    log.error({ err: e.message, code: e.code }, 'API: ошибка домена');
-    return fail(reply, 500, 'internal', 'Внутренняя ошибка, попробуйте позже');
-  }
-  log.error({ err: (e as Error).message }, 'API: необработанная ошибка');
-  return fail(reply, 500, 'internal', 'Внутренняя ошибка, попробуйте позже');
-}
