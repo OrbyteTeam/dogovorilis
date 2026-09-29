@@ -1,10 +1,12 @@
-// Строка сделки в расписании и списке «Моих сделок»: CellSimple из MAX UI + ряд действий под ним (ЗАДАЧА_04 C4–C5).
-// Строка сама не открывается — экрана сделки нет, карточка в чате и есть экран сделки.
+// Строка сделки в расписании и списке (DESIGN_BRIEF §5.3): CellSimple из MAX UI, справа сумма и плашка статуса,
+// под строкой действия. Экрана «Сделка» пока нет (ЗАДАЧА_08 B), поэтому строка не открывается, а действия
+// «Открыть в чате / Изменить условия / Повторить сделку» остаются под ней.
 import type { ReactNode } from 'react';
-import { Button, CellSimple, Typography } from '@maxhub/max-ui';
+import { Button, CellSimple } from '@maxhub/max-ui';
 
-import { formatKopecks } from '../format';
 import type { DealListItem } from '../types';
+import { AmountText } from './AmountText';
+import { StatusBadge, Tag } from './StatusBadge';
 
 export interface DealRowAction {
   label: string;
@@ -13,24 +15,21 @@ export interface DealRowAction {
 
 export interface DealRowProps {
   item: DealListItem;
-  /** Время слева (в расписании день уже выбран — показываем только «14:00»). */
-  lead?: string;
-  /** Подпись под названием: «Пн 28 сен, 14:00 · ждём предоплату». */
-  meta: string;
+  /** Над названием: время в расписании («14:00»). */
+  overline?: string;
+  /** Под названием: имя клиента в расписании или «12 окт, 14:00» в списке. */
+  subtitle?: ReactNode;
   actions: DealRowAction[];
 }
 
-export function DealRow({ item, lead, meta, actions }: DealRowProps) {
-  // Исполнителю после названия — имя клиента: «Маникюр с покрытием · Саша». Клиенту имя клиента не нужно — это он сам.
-  const clientName = item.role === 'seller' ? item.client_name?.trim() : null;
+export function DealRow({ item, overline, subtitle, actions }: DealRowProps) {
   const title: ReactNode = (
     <>
       {item.title}
-      {clientName ? <span className="dg-deal__client">{` · ${clientName}`}</span> : null}
       {item.demo ? (
         <>
           {' '}
-          <span className="dg-tag">демо</span>
+          <Tag>демо</Tag>
         </>
       ) : null}
     </>
@@ -38,13 +37,14 @@ export function DealRow({ item, lead, meta, actions }: DealRowProps) {
   return (
     <div className="dg-deal">
       <CellSimple
-        before={lead ? <span className="dg-deal__time">{lead}</span> : undefined}
+        overline={overline}
         title={title}
-        subtitle={meta}
+        subtitle={subtitle}
         after={
-          <Typography.Text variant="body-strong" color="secondary" className="dg-deal__sum">
-            {formatKopecks(item.total_kopecks)}
-          </Typography.Text>
+          <span className="dg-deal__after">
+            <AmountText kopecks={item.total_kopecks} />
+            <StatusBadge status={item.status} role={item.role} text={item.status_short} />
+          </span>
         }
       />
       {actions.length > 0 ? (

@@ -1,6 +1,13 @@
 // DEV-ONLY заглушка API для визуальной проверки экранов без сервера: включается VITE_MOCK_API=1.
-// В прод-бандл не попадает — импорт в api.ts стоит под `import.meta.env.DEV` (мёртвая ветка вырезается сборкой).
-// Данные повторяют контракт docs/SPEC.md §7.8 и шаблоны §7.6.
+// В прод-бандл не попадает: импорт в api.ts стоит под `import.meta.env.DEV` (мёртвая ветка вырезается сборкой).
+// Данные повторяют контракт SPEC §7.8 и примеры §7.6, тексты статусов как у сервера (server/src/texts.ts).
+//
+// Сценарии для скриншотов состояний (ЗАДАЧА_07), без перезапуска Vite, параметрами адреса до «#»:
+//   ?mock_hang=me,deals,deal    запрос не отвечает: видно загрузку (скелет);
+//   ?mock_fail=me,deals,deal    запрос падает «нет связи»: видно ошибку с «Повторить»;
+//   ?mock_fail=write            отправка формы падает: Snackbar с «Повторить»;
+//   ?mock_deals=none|seller|client|all, ?mock_profile=1   данные, как у одноимённых VITE_MOCK_*.
+// Переменные VITE_MOCK_* по-прежнему работают и действуют, если параметра в адресе нет.
 import { ApiError } from '../api';
 import { moscowInputToIso } from '../format';
 import { addDays, dayKey } from '../schedule';
@@ -20,10 +27,27 @@ import type {
   UpdateDealResponse,
 } from '../types';
 
+/** Параметр сценария из адреса (`?mock_x=…`) или переменной VITE_MOCK_X. */
+function scenario(name: string, env: unknown): string {
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get(`mock_${name}`);
+    if (fromUrl !== null) return fromUrl;
+  } catch {
+    /* адреса нет (тесты): берём переменную */
+  }
+  return String(env ?? '');
+}
+
+const listed = (name: string, env: unknown) =>
+  scenario(name, env)
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+
 const BOT = String(import.meta.env.VITE_BOT_USERNAME ?? 'dogovorilis_bot').trim();
 const CARD_SENT = import.meta.env.VITE_MOCK_CARD_SENT !== '0';
-/** VITE_MOCK_PROFILE=1 — как будто профиль исполнителя уже сохранён (блок «О вас» скрыт). */
-const HAS_PROFILE = import.meta.env.VITE_MOCK_PROFILE === '1';
+/** VITE_MOCK_PROFILE=1 или ?mock_profile=1: профиль исполнителя уже сохранён (блок «О вас» скрыт). */
+const HAS_PROFILE = scenario('profile', import.meta.env.VITE_MOCK_PROFILE) === '1';
 
 const DEMO_PROFILE: SellerProfile = {
   display_name: 'Анна Аксёнова',
@@ -61,7 +85,7 @@ const TEMPLATES: TemplatesResponse = {
       prepayment_percent: 30,
       cancel_rule: 'free_24h',
       date_required: true,
-      hint: 'Дата обязательна — клиент увидит время визита',
+      hint: 'Дата обязательна: клиент увидит, когда приходить',
     },
     {
       key: 'lesson',
@@ -70,16 +94,16 @@ const TEMPLATES: TemplatesResponse = {
       prepayment_percent: 100,
       cancel_rule: 'free_24h',
       date_required: true,
-      hint: 'Предоплата 100 % — занятие оплачивается заранее',
+      hint: 'Предоплата 100 %: занятие оплачивается заранее',
     },
     {
       key: 'repair',
-      label: 'Ремонт / выезд',
-      title: 'Ремонт / выезд мастера',
+      label: 'Ремонт и выезд',
+      title: 'Ремонт с выездом',
       prepayment_percent: 0,
       cancel_rule: 'free_24h',
       date_required: false,
-      hint: 'В «Уточнениях» напишите адрес и что входит в диагностику',
+      hint: 'В уточнениях укажите адрес и сколько стоит диагностика',
     },
     {
       key: 'custom_order',
@@ -88,7 +112,7 @@ const TEMPLATES: TemplatesResponse = {
       prepayment_percent: 50,
       cancel_rule: 'nonrefundable',
       date_required: true,
-      hint: 'Дата — день выдачи заказа',
+      hint: 'Дата: день, когда отдаёте изделие',
     },
     {
       key: 'freelance',
@@ -97,7 +121,7 @@ const TEMPLATES: TemplatesResponse = {
       prepayment_percent: 50,
       cancel_rule: 'full_refund',
       date_required: true,
-      hint: 'Дата — срок сдачи',
+      hint: 'Дата: срок сдачи работы',
     },
     {
       key: 'free',
@@ -111,13 +135,13 @@ const TEMPLATES: TemplatesResponse = {
   ],
 };
 
-// ───────────── «Мои сделки»: набор на разные дни, роли и статусы (VITE_MOCK_DEALS=none|seller|client) ─────────────
+// ───────────── «Сделки»: набор на разные дни, роли и статусы (?mock_deals / VITE_MOCK_DEALS=none|seller|client) ─────────────
 
-const MOCK_DEALS = String(import.meta.env.VITE_MOCK_DEALS ?? 'all');
+const MOCK_DEALS = scenario('deals', import.meta.env.VITE_MOCK_DEALS) || 'all';
 
 const SHORT: Record<DealStatus, { seller: string; client: string }> = {
   awaiting_confirmation: { seller: 'ждём подтверждения', client: 'подтвердите условия' },
-  changes_requested: { seller: 'клиент предложил изменения', client: 'ждём новые условия' },
+  changes_requested: { seller: 'предложены изменения', client: 'ждём новые условия' },
   declined: { seller: 'клиент отказался', client: 'вы отказались' },
   expired: { seller: 'срок истёк', client: 'срок истёк' },
   awaiting_prepayment: { seller: 'ждём предоплату', client: 'внесите предоплату' },
@@ -125,7 +149,7 @@ const SHORT: Record<DealStatus, { seller: string; client: string }> = {
   awaiting_acceptance: { seller: 'ждём приёмку', client: 'примите работу' },
   remarks: { seller: 'есть замечания', client: 'ждём исправлений' },
   awaiting_payment: { seller: 'ждём остаток', client: 'оплатите остаток' },
-  paid: { seller: 'оплачено, нужен чек', client: 'ждём чек' },
+  paid: { seller: 'нужен чек', client: 'ждём чек' },
   closed: { seller: 'закрыта', client: 'закрыта' },
   cancelled: { seller: 'отменена', client: 'отменена' },
 };
@@ -157,7 +181,7 @@ const MOCK_DEAL_ROWS: MockDeal[] = [
   { id: 'Cr3Chng120', role: 'seller', status: 'changes_requested', title: 'Маникюр с дизайном на все пальцы, долгое название', at: [3, '12:00'], total: 3200, prepay: 1600, client: 'Ольга' },
   { id: 'Cl2Past110', role: 'seller', status: 'closed', title: 'Маникюр с покрытием', at: [-2, '11:00'], total: 2500, prepay: 750, client: 'Саша', description: 'Френч, форма миндаль' },
   { id: 'Cn1Cancel9', role: 'seller', status: 'cancelled', title: 'Педикюр', at: [-1, '09:00'], total: 3000, prepay: 900, client: 'Вера' },
-  { id: 'NoDateRep1', role: 'seller', status: 'awaiting_confirmation', title: 'Ремонт / выезд мастера', at: null, total: 4000, prepay: 0, template: 'repair', description: 'Адрес: ул. Ленина, 5. Диагностика стиральной машины' },
+  { id: 'NoDateRep1', role: 'seller', status: 'awaiting_confirmation', title: 'Ремонт с выездом', at: null, total: 4000, prepay: 0, template: 'repair', description: 'Адрес: ул. Ленина, 5. Диагностика стиральной машины' },
   { id: 'ExpNoDate1', role: 'seller', status: 'expired', title: 'Изделие на заказ', at: null, total: 6000, prepay: 3000, template: 'free', cancel: 'nonrefundable' },
   { id: 'Later30day', role: 'seller', status: 'scheduled', title: 'Занятие 60 минут', at: [30, '19:00'], total: 2000, prepay: 2000, client: 'Игорь', template: 'lesson' },
   { id: 'Cli5Lesson', role: 'client', status: 'awaiting_prepayment', title: 'Занятие 60 минут', at: [5, '16:00'], total: 2000, prepay: 2000 },
@@ -262,8 +286,8 @@ function dealView(row: MockDeal): DealView {
   };
 }
 
-/** VITE_MOCK_WRITE_FAIL=network|500 — отправка формы падает: видно тост и «Повторить». */
-const WRITE_FAIL = String(import.meta.env.VITE_MOCK_WRITE_FAIL ?? '');
+/** VITE_MOCK_WRITE_FAIL=network|500 или ?mock_fail=write: отправка формы падает, видно Snackbar с «Повторить». */
+const WRITE_FAIL = listed('fail', '').includes('write') ? 'network' : String(import.meta.env.VITE_MOCK_WRITE_FAIL ?? '');
 
 function maybeFailWrite(): void {
   if (WRITE_FAIL === 'network') throw new ApiError(0, 'network', 'Нет связи. Проверьте интернет и повторите');
@@ -333,7 +357,7 @@ function createDeal(body: CreateDealRequest): CreateDealResponse {
   return {
     deal,
     link: deal.link,
-    share_text: `Подтвердите нашу договорённость: ${body.title}`,
+    share_text: `Подтвердите условия: ${body.title}`,
     card_sent: CARD_SENT,
     client_card_sent: withClient,
     client: body.same_client && source?.client ? { name: source.client } : null,
@@ -344,8 +368,19 @@ function createDeal(body: CreateDealRequest): CreateDealResponse {
 /** VITE_MOCK_AUTH_FAIL=1 — сервер не принял initData (401): экран «Не удалось подтвердить вход через MAX». */
 const AUTH_FAIL = import.meta.env.VITE_MOCK_AUTH_FAIL === '1';
 
+/** Какой группе запросов принадлежит путь: для ?mock_hang и ?mock_fail. */
+function groupOf(method: string, path: string): 'me' | 'deals' | 'deal' | 'other' {
+  if (path === '/me' || path === '/templates') return 'me';
+  if (method === 'GET' && path.startsWith('/deals?')) return 'deals';
+  if (method === 'GET' && path.startsWith('/deals/')) return 'deal';
+  return 'other';
+}
+
 export async function mockRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const group = groupOf(method, path);
+  if (listed('hang', '').includes(group)) await new Promise<never>(() => undefined);
   await delay(300);
+  if (listed('fail', '').includes(group)) throw new ApiError(0, 'network', 'Нет связи. Проверьте интернет и повторите');
   if (AUTH_FAIL) throw new ApiError(401, 'init_data_invalid', 'Откройте мини-приложение внутри MAX');
   if (method === 'GET' && path === '/me') return me() as unknown as T;
   if (method === 'GET' && path === '/templates') return TEMPLATES as unknown as T;

@@ -1,10 +1,12 @@
-// «Повторить сделку» — `#/new?from=:id` и start_param `repeat_<id>`, docs/SPEC.md §7.5, ЗАДАЧА_04 F. Та же форма,
-// что и «Новая сделка», с предзаполнением из GET /api/deals/:id, кроме даты; создание — обычный POST /api/deals
-// с repeat_of и same_client, дальше — экран «Готово».
+// «Повторить сделку»: `#/new?from=:id` и start_param `repeat_<id>`, SPEC §7.5, ЗАДАЧА_04 F, DESIGN_BRIEF §5.3. Та же
+// форма, что «Новая сделка», с предзаполнением из GET /api/deals/:id, кроме даты; создание обычным POST /api/deals
+// с repeat_of и same_client, дальше экран «Готово».
 import { useCallback, useEffect, useState } from 'react';
 
 import { api, ApiError, errorText } from '../api';
-import { ErrorScreen, LoadingScreen, NoticeScreen } from '../components/StateScreen';
+import { AppHeader } from '../components/AppHeader';
+import { Screen } from '../components/Screen';
+import { ErrorState, NoticeState, Skeleton } from '../components/States';
 import { isTerminal } from '../schedule';
 import type { CreateDealRequest, DealDetails, MeResponse, Template } from '../types';
 import { NewScreen } from './New';
@@ -15,12 +17,12 @@ type State =
   | { kind: 'form'; deal: DealDetails }
   | { kind: 'locked'; text: string };
 
-/** Почему повторить нельзя — объясняем и даём выход: новая сделка с нуля или «Мои сделки». */
+/** Почему повторить нельзя: объясняем и даём выход, новая сделка с нуля или «Сделки». */
 function lockText(deal: DealDetails | null): string {
   if (!deal) return 'Повторить может только исполнитель этой сделки. Можно создать новую сделку с нуля';
-  if (deal.demo) return 'Демо-сделки не повторяются — создайте настоящую сделку, это займёт полминуты';
-  if (deal.role !== 'seller') return 'Повторить может только исполнитель. Если хотите записаться снова — напишите исполнителю';
-  if (!isTerminal(deal.status)) return 'Эта сделка ещё идёт — повторить можно после её завершения. Или создайте новую сделку с нуля';
+  if (deal.demo) return 'Демо-сделки не повторяются. Создайте настоящую сделку, это займёт полминуты';
+  if (deal.role !== 'seller') return 'Повторить может только исполнитель. Если нужна новая сделка, напишите исполнителю';
+  if (!isTerminal(deal.status)) return 'Эта сделка ещё идёт, повторить её можно после завершения. Или создайте новую сделку с нуля';
   return 'Эту сделку повторить нельзя. Создайте новую сделку с нуля';
 }
 
@@ -59,24 +61,40 @@ export function RepeatDealScreen({ publicId, me, templates, onSubmit, onNewDeal,
     void load();
   }, [load]);
 
-  if (state.kind === 'loading') return <LoadingScreen />;
+  const header = <AppHeader title="Повторить сделку" subtitle={`Условия из сделки #${publicId}, дата новая`} />;
+
+  if (state.kind === 'loading') {
+    return (
+      <Screen>
+        {header}
+        <Skeleton kind="form" />
+      </Screen>
+    );
+  }
 
   if (state.kind === 'error') {
     return (
-      <ErrorScreen message={state.message} onRetry={() => void load()} secondary={{ label: 'Новая сделка', onClick: onNewDeal }} />
+      <Screen>
+        {header}
+        <ErrorState title="Не удалось загрузить сделку" text={state.message} onRetry={() => void load()} secondary={{ label: 'Новая сделка', onClick: onNewDeal }} />
+      </Screen>
     );
   }
 
   if (state.kind === 'locked') {
     return (
-      <NoticeScreen
-        title="Повторить нельзя"
-        text={state.text}
-        actions={[
-          { label: 'Новая сделка', onClick: onNewDeal },
-          { label: 'Мои сделки', onClick: onDeals },
-        ]}
-      />
+      <Screen>
+        {header}
+        <NoticeState
+          tone="locked"
+          title="Повторить нельзя"
+          text={state.text}
+          actions={[
+            { label: 'Новая сделка', onClick: onNewDeal },
+            { label: 'Все сделки', onClick: onDeals },
+          ]}
+        />
+      </Screen>
     );
   }
 

@@ -70,8 +70,9 @@ export function filesUnder(dir: string): string[] {
   return out;
 }
 
+/** Сервер и всё мини-приложение: новый экран попадает под проверку сам (чек-лист §9 п. 1, п. 8). */
 export function checkedFiles(): string[] {
-  return SERVER_FILES;
+  return [...SERVER_FILES, ...filesUnder('webapp/src')];
 }
 
 const FORBIDDEN_CHARS = /[—–·•]/;

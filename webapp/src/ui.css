@@ -1,7 +1,14 @@
-/* Свои компоненты (чипы, сегмент-контрол, тост, поле, datetime) — только на CSS-переменных MAX UI: docs/DESIGN.md §1–§4. */
+/* Свои компоненты мини-приложения только на CSS-переменных MAX UI (DESIGN_BRIEF §5.2, §6; токены docs/DESIGN.md).
+   Своих цветов нет: единственные свои переменные --deal-* объявлены через var(...) и дают семантику «чей ход».
+   Тёмная тема приходит от провайдера MaxUI сама, отдельных значений для тем здесь нет. */
 
-/* Провайдер MaxUI объявляет переменные на своём div, поэтому фон экрана задаём здесь, а не на body. */
 .dg-app {
+  --deal-action: var(--text-themed);
+  --deal-waiting: var(--text-tertiary);
+  --deal-success: var(--icon-positive);
+  --deal-danger: var(--icon-negative);
+  --dg-tabbar-height: 56px;
+
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -11,8 +18,15 @@
   font-family: var(--family-base);
 }
 
+/* Каркас: экран и нижняя панель */
+.dg-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+}
+
 /* Корень экрана (Panel): тянется минимум на высоту окна, но растёт вместе с содержимым
-   (у Panel из MAX UI height: 100% — его надо снять, иначе длинная форма обрезается). */
+   (у Panel из MAX UI height: 100%, его надо снять, иначе длинная форма обрезается). */
 .dg-root {
   box-sizing: border-box;
   flex: 1 0 auto;
@@ -29,20 +43,59 @@
   width: 100%;
   max-width: 480px;
   margin: 0 auto;
-  padding: var(--spacing-size2xl) var(--spacing-size2xl) calc(var(--spacing-size4xl) + env(safe-area-inset-bottom));
+  padding: var(--spacing-size2xl) var(--spacing-size2xl)
+    calc(var(--dg-tabbar-height) + env(safe-area-inset-bottom) + var(--spacing-size4xl));
   display: flex;
   flex-direction: column;
   gap: var(--spacing-size-xl);
 }
 
-.dg-screen_centered {
+/* Служебные экраны вне MAX и отказ входа: без панели, содержимое по центру */
+.dg-screen_service {
+  min-height: 100dvh;
   justify-content: center;
   align-items: center;
   text-align: center;
-  gap: var(--spacing-size2xl);
+  padding-bottom: calc(var(--spacing-size4xl) + env(safe-area-inset-bottom));
 }
 
-/* Карточка-остров */
+/* Шапка: логотип 24 px слева от заголовка, поле вокруг не меньше четверти высоты знака (§7) */
+.dg-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.dg-header__row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-size-l);
+}
+
+.dg-header__title {
+  margin: 0;
+  min-width: 0;
+}
+
+.dg-header__subtitle {
+  color: var(--text-secondary);
+}
+
+.dg-logo {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.dg-logo_large {
+  width: 96px;
+  height: 96px;
+  margin-bottom: var(--spacing-size-xl);
+}
+
+/* Остров-блок */
 .dg-card {
   box-sizing: border-box;
   background-color: var(--background-card);
@@ -53,11 +106,24 @@
   gap: var(--spacing-size-xl);
 }
 
+.dg-card > h2 {
+  margin: 0;
+}
+
 .dg-card_flat {
   background-color: var(--background-tertiary);
 }
 
-/* Текстовое превью карточки: моно-ритм не нужен, но цифры табличные (DESIGN.md §2) */
+/* Строка «текст + кнопка», на узком экране переносится */
+.dg-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-size-l);
+}
+
+/* Превью карточки: тот же текст, что в чате, цифры табличные (§6) */
 .dg-preview {
   margin: 0;
   white-space: pre-wrap;
@@ -67,6 +133,25 @@
   line-height: var(--line-height-detail);
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
+}
+
+/* Подписи третичным: пояснения под кнопкой, «Время МСК» */
+.dg-note {
+  display: block;
+  color: var(--text-tertiary);
+}
+
+.dg-note_center {
+  text-align: center;
+}
+
+.dg-muted {
+  color: var(--text-secondary);
+}
+
+.dg-link {
+  color: var(--text-themed);
+  overflow-wrap: anywhere;
 }
 
 /* Поле: подпись сверху, подсказка или ошибка снизу */
@@ -95,7 +180,7 @@
   color: var(--text-negative);
 }
 
-/* Чипы шаблонов: горизонтальный скролл, активный — акцентная кнопка */
+/* Чипы примеров: горизонтальный скролл, радиус 20 px (§6), активный акцентом */
 .dg-chips {
   display: flex;
   gap: var(--spacing-size-m);
@@ -111,7 +196,7 @@
 
 .dg-chip {
   flex: 0 0 auto;
-  min-height: 40px;
+  min-height: 36px;
   padding: 0 var(--spacing-size2xl);
   border: none;
   border-radius: var(--size-border-radius-semantic-border-radius-promo);
@@ -133,11 +218,8 @@
   color: var(--text-primary-inverse-static);
 }
 
-.dg-chip_active:hover {
-  background-color: var(--states-button-primary-hover);
-}
-
-/* Сегмент-контрол предоплаты */
+/* Сегмент-контрол вкладок, вида, фильтров и предоплаты (§5.2): активный --button-primary с белым текстом,
+   радиус 20 px, высота 36 px */
 .dg-segmented {
   display: grid;
   grid-auto-flow: column;
@@ -145,18 +227,18 @@
   gap: var(--spacing-size2xs);
   padding: var(--spacing-size2xs);
   background-color: var(--background-secondary);
-  border-radius: var(--size-border-radius-action-medium);
+  border-radius: var(--size-border-radius-semantic-border-radius-promo);
 }
 
-.dg-segmented_compact .dg-segment {
-  padding: 0 var(--spacing-size2xs);
+.dg-card .dg-segmented {
+  background-color: var(--background-tertiary);
 }
 
 .dg-segment {
-  min-height: 40px;
+  min-height: 36px;
   padding: 0 var(--spacing-size-s);
   border: none;
-  border-radius: var(--size-border-radius-action-small);
+  border-radius: var(--size-border-radius-button-medium);
   background-color: transparent;
   color: var(--text-secondary);
   font-family: var(--family-base);
@@ -168,13 +250,16 @@
   text-overflow: ellipsis;
 }
 
-.dg-segment_active {
-  background-color: var(--background-primary);
-  color: var(--text-primary);
-  box-shadow: 0 1px 2px var(--background-overlay);
+.dg-segmented_compact .dg-segment {
+  padding: 0 var(--spacing-size2xs);
 }
 
-/* Строка с радио / переключателем: тап-зона не меньше 44 px (DESIGN.md §3) */
+.dg-segment_active {
+  background-color: var(--button-primary);
+  color: var(--text-primary-inverse-static);
+}
+
+/* Строка с радио или переключателем: тап-зона не меньше 44 px */
 .dg-control-row {
   display: flex;
   align-items: center;
@@ -198,7 +283,7 @@
   color: var(--text-tertiary);
 }
 
-/* Нативный datetime-local под вид Input size=large (DESIGN.md §4) */
+/* Нативный datetime-local под вид Input size=large */
 .dg-datetime {
   box-sizing: border-box;
   width: 100%;
@@ -214,10 +299,10 @@
 }
 
 .dg-datetime:disabled {
-  color: var(--states-text-primary-disabled);
+  color: var(--text-tertiary);
 }
 
-/* Нативный select под вид Input (время утренней сводки): стрелка — из токенов, не картинкой */
+/* Нативный select под вид Input (время утренней сводки): стрелка из токенов, не картинкой */
 .dg-select {
   position: relative;
 }
@@ -230,8 +315,8 @@
   width: 8px;
   height: 8px;
   margin-top: -6px;
-  border-right: 2px solid var(--icon-tertiary, var(--text-tertiary));
-  border-bottom: 2px solid var(--icon-tertiary, var(--text-tertiary));
+  border-right: 2px solid var(--icon-tertiary);
+  border-bottom: 2px solid var(--icon-tertiary);
   transform: rotate(45deg);
   pointer-events: none;
 }
@@ -258,10 +343,9 @@
   color: var(--text-primary);
 }
 
-/* Предупреждение (например, пустые реквизиты) */
+/* Предупреждение (пустые реквизиты, клиент без диалога) */
 .dg-warning {
-  display: flex;
-  gap: var(--spacing-size-m);
+  margin: 0;
   padding: var(--spacing-size-xl);
   border-radius: var(--size-border-radius-semantic-border-radius-paper);
   background-color: var(--background-tertiary);
@@ -270,81 +354,76 @@
   color: var(--text-secondary);
 }
 
-/* Тост: живёт внутри дерева MaxUI, поэтому переменные доступны */
-.dg-toast-layer {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: calc(var(--spacing-size2xl) + env(safe-area-inset-bottom));
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--spacing-size-m);
-  padding: 0 var(--spacing-size2xl);
-  pointer-events: none;
-  z-index: 100;
-}
-
-.dg-toast {
-  box-sizing: border-box;
-  max-width: 420px;
-  width: 100%;
-  padding: var(--spacing-size-xl) var(--spacing-size2xl);
-  border-radius: var(--size-border-radius-semantic-border-radius-floating);
-  background-color: var(--background-card);
-  color: var(--text-primary);
-  font-size: var(--font-size-detail);
-  line-height: var(--line-height-detail);
-  box-shadow: 0 8px 24px var(--background-overlay);
-  animation: dg-toast-in 0.2s ease;
-}
-
-.dg-toast_error {
-  color: var(--text-negative);
-}
-
-@keyframes dg-toast-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .dg-toast {
-    animation: none;
-  }
-}
-
-/* Вертикальный столбец кнопок */
+/* Колонка кнопок: главное действие внизу контента над панелью */
 .dg-actions {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-size-l);
 }
 
-.dg-divider {
-  height: 1px;
-  background-color: var(--divider-secondary);
+/* ───────────── плашка статуса, метка, сумма (§5.2) ───────────── */
+
+.dg-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-size-s);
+  box-sizing: border-box;
+  height: 24px;
+  max-width: 100%;
+  padding: 0 var(--spacing-size-m);
+  border-radius: var(--size-border-radius-button-xsmall);
+  background-color: var(--background-secondary);
+  font-size: var(--font-size-label);
+  line-height: var(--line-height-label);
+  font-weight: var(--font-weight-label-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.dg-link {
-  color: var(--text-themed);
-  overflow-wrap: anywhere;
+.dg-badge__dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: currentColor;
 }
 
-/* ───────────── «Мои сделки»: вкладки, лента дней, строки (ЗАДАЧА_04 C) ───────────── */
-
-/* Чипы вида «Расписание / Список»: ряд не прокручивается, нижний отступ как у остальных блоков */
-.dg-chips_tight {
-  padding-bottom: var(--spacing-size2xs);
+.dg-badge_action {
+  color: var(--deal-action);
 }
 
-/* Лента дней: прокручивается только она, от края до края экрана (поля экрана компенсируем отрицательным отступом) */
+.dg-badge_waiting {
+  color: var(--deal-waiting);
+}
+
+.dg-badge_success {
+  color: var(--deal-success);
+}
+
+.dg-badge_danger {
+  color: var(--deal-danger);
+}
+
+.dg-tag {
+  display: inline-block;
+  padding: 0 var(--spacing-size-s);
+  border-radius: var(--size-border-radius-button-xsmall);
+  background-color: var(--background-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--font-size-tag);
+  line-height: var(--line-height-tag);
+  font-weight: var(--font-weight-tag-strong);
+  vertical-align: middle;
+}
+
+.dg-amount {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ───────────── «Сделки»: лента дней, разделы, строки ───────────── */
+
 .dg-days {
   position: relative;
   display: flex;
@@ -419,7 +498,7 @@
   visibility: hidden;
 }
 
-/* Сегодня — рамка акцентом; выбранный день — залит акцентом (цвет — не единственный признак: есть aria-pressed и заголовок дня) */
+/* Сегодня рамкой акцента, выбранный день заливкой (цвет не единственный признак: aria-pressed и заголовок дня) */
 .dg-day_today {
   border-color: var(--button-primary);
 }
@@ -444,7 +523,6 @@
   color: var(--button-primary);
 }
 
-/* Блок с заголовком (день расписания, «Без даты») */
 .dg-section {
   display: flex;
   flex-direction: column;
@@ -458,15 +536,10 @@
   padding: 0 var(--spacing-size-xs);
 }
 
-/* Карточка «текст + кнопка» в одну строку, на узком экране — переносится */
-.dg-card_row {
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
+.dg-section__head h2 {
+  margin: 0;
 }
 
-/* Строки сделок: остров с разделителями, в строке — CellSimple и ряд действий */
 .dg-deals {
   display: flex;
   flex-direction: column;
@@ -479,18 +552,12 @@
   border-top: 1px solid var(--divider-secondary);
 }
 
-.dg-deal__time {
-  min-width: 44px;
-  font-size: var(--font-size-body);
-  line-height: var(--line-height-body);
-  font-weight: var(--font-weight-body-strong);
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-}
-
-.dg-deal__sum {
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
+.dg-deal__after {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--spacing-size-xs);
+  max-width: 45vw;
 }
 
 .dg-deal__actions {
@@ -500,48 +567,370 @@
   padding: 0 var(--spacing-size-xl) var(--spacing-size-xl);
 }
 
-/* Имя клиента после названия — тем же размером, но тише названия */
-.dg-deal__client {
-  font-weight: var(--font-weight-body);
-  color: var(--text-secondary);
-}
+/* ───────────── состояния: пустое, ошибка, итог, загрузка, скелет (§5.2) ───────────── */
 
-/* Бейдж «демо» в названии */
-.dg-tag {
-  display: inline-block;
-  padding: 0 var(--spacing-size-s);
-  border-radius: var(--size-border-radius-action-small);
-  background-color: var(--background-tertiary);
-  color: var(--text-secondary);
-  font-size: var(--font-size-tag);
-  line-height: var(--line-height-tag);
-  font-weight: var(--font-weight-tag-strong);
-  vertical-align: middle;
-}
-
-/* Экран-итог: значок успеха на токенах и кнопки на всю ширину колонки */
-.dg-notice-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  background-color: var(--icon-positive);
-  color: var(--text-primary-inverse-static);
-  font-size: 28px;
-  font-weight: 600;
-  line-height: 1;
-}
-
-.dg-actions_full {
-  align-self: stretch;
-}
-
-/* Заголовок экрана с подписью под ним («Изменить условия #id» + «Клиент получит новую версию…») */
-.dg-head {
+.dg-state {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-size-xs);
-  overflow-wrap: anywhere;
+  align-items: center;
+  gap: var(--spacing-size-l);
+  padding: var(--spacing-size4xl) var(--spacing-size4xl);
+  text-align: center;
+}
+
+.dg-state__icon {
+  display: inline-flex;
+  color: var(--icon-tertiary);
+}
+
+.dg-state_error .dg-state__icon {
+  color: var(--icon-negative);
+}
+
+.dg-state_success .dg-state__icon {
+  color: var(--icon-positive);
+}
+
+.dg-state_locked .dg-state__icon {
+  color: var(--icon-tertiary);
+}
+
+.dg-state__title {
+  margin: 0;
+}
+
+.dg-state__text {
+  color: var(--text-secondary);
+}
+
+.dg-state__actions {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-size-l);
+  margin-top: var(--spacing-size-l);
+}
+
+.dg-state_loading {
+  padding-top: calc(var(--spacing-size4xl) * 2);
+}
+
+.dg-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-size-xl);
+}
+
+.dg-skeleton_list {
+  gap: 0;
+  border-radius: var(--size-border-radius-semantic-border-radius-card);
+  background-color: var(--background-card);
+  overflow: hidden;
+}
+
+.dg-skeleton__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-size-m);
+  padding: var(--spacing-size-xl) var(--spacing-size2xl);
+}
+
+.dg-skeleton__row + .dg-skeleton__row {
+  border-top: 1px solid var(--divider-secondary);
+}
+
+.dg-skeleton__island {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-size-xl);
+  padding: var(--spacing-size2xl);
+  border-radius: var(--size-border-radius-semantic-border-radius-card);
+  background-color: var(--background-card);
+}
+
+.dg-skeleton__bar,
+.dg-skeleton__field {
+  display: block;
+  border-radius: var(--size-border-radius-button-xsmall);
+  background-color: var(--background-tertiary);
+  animation: dg-pulse 1.4s ease-in-out infinite;
+}
+
+.dg-skeleton__bar {
+  height: 14px;
+  width: 80%;
+}
+
+.dg-skeleton__bar_short {
+  width: 25%;
+}
+
+.dg-skeleton__bar_mid {
+  width: 50%;
+}
+
+.dg-skeleton__field {
+  height: 52px;
+  border-radius: var(--size-border-radius-action-large);
+}
+
+@keyframes dg-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* ───────────── нижняя панель (§5.1) ───────────── */
+
+.dg-tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  box-sizing: border-box;
+  height: calc(var(--dg-tabbar-height) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  background-color: var(--background-primary);
+  border-top: 1px solid var(--divider-secondary);
+}
+
+.dg-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-size2xs);
+  min-height: 44px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--icon-tertiary);
+  font-family: var(--family-base);
+  cursor: pointer;
+}
+
+.dg-tab__icon {
+  position: relative;
+  display: inline-flex;
+}
+
+.dg-tab__label {
+  color: var(--text-tertiary);
+}
+
+.dg-tab_active {
+  color: var(--icon-themed);
+}
+
+.dg-tab_active .dg-tab__label {
+  color: var(--text-themed);
+}
+
+.dg-tab__counter {
+  position: absolute;
+  top: -6px;
+  left: 14px;
+}
+
+.dg-counter-overflow {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 var(--spacing-size-xs);
+  border-radius: 9px;
+  background-color: var(--counter-attention);
+  color: var(--text-primary-inverse-static);
+  font-size: var(--font-size-tag);
+  line-height: 18px;
+  font-weight: var(--font-weight-tag-strong);
+}
+
+/* ───────────── Snackbar (§5.1): над панелью, 5 секунд, одно действие ───────────── */
+
+.dg-snackbar-layer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--dg-tabbar-height) + env(safe-area-inset-bottom) + var(--spacing-size-xl));
+  z-index: 60;
+  display: flex;
+  justify-content: center;
+  padding: 0 var(--spacing-size2xl);
+  pointer-events: none;
+}
+
+.dg-snackbar {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 448px;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-size-l);
+  padding: var(--spacing-size-l) var(--spacing-size-xl);
+  border-radius: var(--size-border-radius-semantic-border-radius-floating);
+  background-color: var(--background-card);
+  color: var(--text-primary);
+  box-shadow: 0 8px 24px var(--background-overlay);
+  font-size: var(--font-size-detail);
+  line-height: var(--line-height-detail);
+  pointer-events: auto;
+  animation: dg-snackbar-in 0.2s ease;
+}
+
+.dg-snackbar__icon {
+  flex: 0 0 auto;
+}
+
+.dg-snackbar_error .dg-snackbar__icon {
+  color: var(--icon-negative);
+}
+
+.dg-snackbar_success .dg-snackbar__icon {
+  color: var(--icon-positive);
+}
+
+.dg-snackbar__text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dg-snackbar__action {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0 var(--spacing-size-m);
+  border: none;
+  background: transparent;
+  color: var(--text-themed);
+  font-family: var(--family-base);
+  font-size: var(--font-size-action-small);
+  font-weight: var(--font-weight-action-small);
+  cursor: pointer;
+}
+
+@keyframes dg-snackbar-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ───────────── лист снизу (§5.2) ───────────── */
+
+.dg-sheet-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.dg-sheet-overlay {
+  position: absolute;
+  inset: 0;
+  border: none;
+  background-color: var(--background-overlay);
+  cursor: pointer;
+}
+
+.dg-sheet {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-size-l);
+  padding: var(--spacing-size-m) var(--spacing-size2xl) calc(var(--spacing-size2xl) + env(safe-area-inset-bottom));
+  border-radius: var(--size-border-radius-semantic-border-radius-card) var(--size-border-radius-semantic-border-radius-card) 0 0;
+  background-color: var(--background-card);
+  animation: dg-sheet-in 0.2s ease;
+}
+
+.dg-sheet h2 {
+  margin: 0;
+}
+
+.dg-sheet__grip {
+  align-self: center;
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background-color: var(--divider-primary);
+}
+
+.dg-sheet__text {
+  color: var(--text-secondary);
+}
+
+.dg-sheet__actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-size-m);
+  margin-top: var(--spacing-size-m);
+}
+
+@keyframes dg-sheet-in {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* ───────────── хронология (§5.2, экран «Сделка» в ЗАДАЧА_08) ───────────── */
+
+.dg-timeline {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dg-timeline__item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-size2xs);
+  padding: 0 0 var(--spacing-size-xl) var(--spacing-size3xl);
+  border-left: 1px solid var(--divider-primary);
+  margin-left: var(--spacing-size-xs);
+}
+
+.dg-timeline__item:last-child {
+  border-left-color: transparent;
+  padding-bottom: 0;
+}
+
+.dg-timeline__dot {
+  position: absolute;
+  left: -5px;
+  top: 6px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background-color: var(--background-card);
+  border: 1px solid var(--divider-primary);
+}
+
+.dg-timeline__at,
+.dg-timeline__empty {
+  color: var(--text-tertiary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dg-snackbar,
+  .dg-sheet,
+  .dg-skeleton__bar,
+  .dg-skeleton__field {
+    animation: none;
+  }
 }
