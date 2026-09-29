@@ -612,3 +612,367 @@
 .dg-app:has(.dg-tabbar) .dg-toast-layer {
   bottom: calc(var(--spacing-size2xl) + 56px + env(safe-area-inset-bottom));
 }
+
+/* ───────── Экран сделки (ЗАДАЧА_08 B, SPEC §7.9) ─────────
+   Семантика статусов — свои переменные поверх MAX UI (DESIGN.md §1): только полоса у статуса и точка хронологии,
+   смысл всегда несут эмодзи и слова. */
+.dg-app {
+  --deal-waiting: var(--text-tertiary);
+  --deal-action: var(--text-themed);
+  --deal-success: var(--icon-positive);
+  --deal-danger: var(--icon-negative);
+  --deal-muted: var(--text-tertiary);
+}
+
+/* Строка «Моих сделок» — кнопка, открывающая экран сделки: снимаем вид кнопки браузера, фокус видно с клавиатуры */
+.dg-deal__open {
+  margin: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Сумма и шеврон строки-кнопки не слипаются */
+.dg-deal__open .dg-deal__sum {
+  margin-right: var(--spacing-size-xs);
+}
+
+.dg-deal__open:focus-visible {
+  outline: 2px solid var(--icon-themed);
+  outline-offset: -2px;
+}
+
+@media (hover: hover) {
+  .dg-deal__open:hover {
+    background-color: var(--background-tertiary);
+  }
+}
+
+/* Экран длинный: заголовки без полей браузера, блоки отделены отступом, внутри блока — заголовок вплотную к острову */
+.dg-screen_deal h1,
+.dg-screen_deal h2 {
+  margin: 0;
+}
+
+.dg-screen_deal > .dg-section {
+  margin-top: var(--spacing-size-xl);
+}
+
+.dg-deal-id {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-size-m);
+}
+
+/* Статус для роли: полоса слева — тон (нужен ваш шаг / ждём / закрыта / отмена) */
+.dg-status {
+  box-sizing: border-box;
+  margin: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-size-m);
+  padding: var(--spacing-size-xl) var(--spacing-size2xl);
+  border-left: 4px solid var(--deal-waiting);
+  border-radius: var(--size-border-radius-semantic-border-radius-paper);
+  background-color: var(--background-card);
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  font-weight: var(--font-weight-body-strong);
+  overflow-wrap: anywhere;
+}
+
+.dg-status_action {
+  border-left-color: var(--deal-action);
+}
+
+.dg-status_success {
+  border-left-color: var(--deal-success);
+}
+
+.dg-status_danger {
+  border-left-color: var(--deal-danger);
+}
+
+/* Остров строк (CellSimple) с разделителями — как CellList island, но без его боковых полей: у экрана они уже есть */
+.dg-island {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--size-border-radius-semantic-border-radius-card);
+  background-color: var(--background-card);
+  overflow: hidden;
+}
+
+.dg-island > * + * {
+  border-top: 1px solid var(--divider-secondary);
+}
+
+.dg-island__note {
+  margin: 0;
+  padding: var(--spacing-size-l) var(--spacing-size-xl);
+  font-size: var(--font-size-description);
+  line-height: var(--line-height-description);
+  color: var(--text-tertiary);
+}
+
+/* Ссылка для клиента мелким текстом: цвет подписи, не акцент (DESIGN.md §7 — акцент только для крупного) */
+.dg-break {
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.dg-num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Клиента ещё нет — пустой кружок на месте аватара */
+.dg-avatar-empty {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px dashed var(--divider-primary);
+  color: var(--text-tertiary);
+  font-size: var(--font-size-body);
+}
+
+/* Подсказка «Оплата — в чате с ботом»: текст слева, кнопка справа */
+.dg-hint-text {
+  flex: 1 1 180px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-size2xs);
+  min-width: 0;
+}
+
+/* Хронология: точки и линия на токенах, последняя точка — акцентом */
+.dg-timeline {
+  box-sizing: border-box;
+  list-style: none;
+  margin: 0;
+  padding: var(--spacing-size-xl);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--size-border-radius-semantic-border-radius-card);
+  background-color: var(--background-card);
+}
+
+.dg-timeline__item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-size2xs);
+  padding: 0 0 var(--spacing-size-xl) var(--spacing-size3xl);
+}
+
+.dg-timeline__item::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--deal-muted);
+}
+
+.dg-timeline__item::after {
+  content: '';
+  position: absolute;
+  left: 5.5px;
+  top: 16px;
+  bottom: 2px;
+  width: 1px;
+  background-color: var(--divider-primary);
+}
+
+.dg-timeline__item:last-child {
+  padding-bottom: 0;
+}
+
+.dg-timeline__item:last-child::after {
+  display: none;
+}
+
+.dg-timeline__item:last-child::before {
+  background-color: var(--deal-action);
+}
+
+.dg-timeline__meta {
+  font-size: var(--font-size-description);
+  line-height: var(--line-height-description);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.dg-timeline__text {
+  font-size: var(--font-size-detail);
+  line-height: var(--line-height-detail);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* История версий */
+.dg-version {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-size-xs);
+  padding: var(--spacing-size-l) var(--spacing-size-xl);
+}
+
+.dg-version__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-size-m);
+}
+
+.dg-version__title {
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  font-weight: var(--font-weight-body-strong);
+  color: var(--text-primary);
+}
+
+.dg-version__date {
+  margin-left: auto;
+  font-size: var(--font-size-description);
+  line-height: var(--line-height-description);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.dg-version__line,
+.dg-version__request {
+  margin: 0;
+  font-size: var(--font-size-description);
+  line-height: var(--line-height-description);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.dg-version__request {
+  color: var(--text-primary);
+}
+
+/* Загрузка чека: спиннер и имя файла под кнопками */
+.dg-upload {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-size-m);
+  font-size: var(--font-size-description);
+  line-height: var(--line-height-description);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* Под Textarea: ошибка слева, счётчик символов «12/500» справа */
+.dg-field__meta {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-size-m);
+}
+
+.dg-counter {
+  flex: 0 0 auto;
+  padding-right: var(--spacing-size-xs);
+  font-size: var(--font-size-description);
+  line-height: var(--line-height-description);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.dg-counter_over {
+  color: var(--text-negative);
+}
+
+/* ───────── Лист снизу (подтверждение, ввод текста): оверлей и лист с радиусом 16 px — DESIGN.md §4 ─────────
+   Выше нижней панели (90), ниже тостов (100): ответ действия виден поверх листа. */
+.dg-sheet-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.dg-sheet-overlay {
+  position: absolute;
+  inset: 0;
+  background-color: var(--background-overlay);
+  animation: dg-fade-in 0.2s ease;
+}
+
+.dg-sheet {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 480px;
+  max-height: calc(100dvh - 48px);
+  margin: 0 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-size-xl);
+  padding: var(--spacing-size-m) var(--spacing-size2xl) calc(var(--spacing-size2xl) + env(safe-area-inset-bottom));
+  border-radius: var(--size-border-radius-semantic-border-radius-card) var(--size-border-radius-semantic-border-radius-card) 0 0;
+  background-color: var(--background-primary);
+  color: var(--text-primary);
+  box-shadow: 0 -8px 24px var(--background-overlay);
+  outline: none;
+  animation: dg-sheet-in 0.22s ease;
+}
+
+.dg-sheet__grip {
+  align-self: center;
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background-color: var(--divider-primary);
+}
+
+.dg-sheet__title {
+  margin: 0;
+}
+
+@keyframes dg-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes dg-sheet-in {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dg-sheet,
+  .dg-sheet-overlay {
+    animation: none;
+  }
+}

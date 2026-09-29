@@ -26,12 +26,25 @@ describe('стартовый экран', () => {
     expect(initialRoute('', `d_${ID}`)).toEqual({ name: 'done', id: ID });
     expect(initialRoute('', `edit_${ID}`)).toEqual({ name: 'edit', id: ID });
     expect(initialRoute('', `repeat_${ID}`)).toEqual({ name: 'new', from: ID });
+    expect(initialRoute('', `deal_${ID}`)).toEqual({ name: 'deal', id: ID });
   });
 
   it('неизвестный или испорченный start_param — форма новой сделки', () => {
     expect(initialRoute('', null)).toEqual({ name: 'new' });
     expect(initialRoute('', 'что-то')).toEqual({ name: 'new' });
     expect(initialRoute('', 'edit_short')).toEqual({ name: 'new' });
+    expect(initialRoute('', 'deal_short')).toEqual({ name: 'new' });
+    expect(initialRoute('', `deal_${ID}X`)).toEqual({ name: 'new' });
+    expect(initialRoute('', `deal_${ID.slice(0, 9)}-`)).toEqual({ name: 'new' });
+  });
+
+  it('экран сделки и правка условий не путаются', () => {
+    expect(parseHash(`#/deals/${ID}`)).toEqual({ name: 'deal', id: ID });
+    expect(parseHash(`#/deals/${ID}/edit`)).toEqual({ name: 'edit', id: ID });
+    expect(parseHash('#/deals/short')).toBeNull();
+    expect(parseHash(`#/deals/${ID}X`)).toBeNull();
+    expect(parseHash(`#/deals/${ID}/`)).toBeNull();
+    expect(routeToHash({ name: 'deal', id: ID })).toBe(`#/deals/${ID}`);
   });
 
   it('hash после перезагрузки главнее start_param', () => {
@@ -45,6 +58,7 @@ describe('стартовый экран', () => {
       { name: 'done', id: ID },
       { name: 'deals' },
       { name: 'edit', id: ID },
+      { name: 'deal', id: ID },
       { name: 'settings' },
     ];
     for (const r of routes) expect(parseHash(routeToHash(r))).toEqual(r);
@@ -57,6 +71,7 @@ describe('вкладки', () => {
     expect(tabOf({ name: 'done', id: ID })).toBe('new');
     expect(tabOf({ name: 'deals' })).toBe('deals');
     expect(tabOf({ name: 'edit', id: ID })).toBe('deals');
+    expect(tabOf({ name: 'deal', id: ID })).toBe('deals');
     expect(tabOf({ name: 'new', from: ID })).toBe('deals');
     expect(tabOf({ name: 'settings' })).toBe('settings');
   });
@@ -93,6 +108,20 @@ describe('история «назад»', () => {
     h = push(h, { name: 'deals' });
     expect(current(h)).toEqual({ name: 'deals' });
     expect(current(back(h))).toEqual({ name: 'edit', id: ID });
+  });
+
+  it('из списка в сделку, оттуда в правку — «назад» возвращает по шагам', () => {
+    let h = startHistory({ name: 'deals' });
+    h = push(h, { name: 'deal', id: ID });
+    h = push(h, { name: 'edit', id: ID });
+    expect(current(back(h))).toEqual({ name: 'deal', id: ID });
+    expect(current(back(back(h)))).toEqual({ name: 'deals' });
+  });
+
+  it('экран сделки, открытый из чата (deal_<id>), — корень: «назад» закрывает приложение', () => {
+    const h = startHistory(initialRoute('', `deal_${ID}`));
+    expect(current(h)).toEqual({ name: 'deal', id: ID });
+    expect(canGoBack(h)).toBe(false);
   });
 
   it('переключение вкладок туда-обратно не растит стек', () => {

@@ -21,6 +21,7 @@ import {
   type History,
   type Route,
 } from './nav';
+import { DealScreen } from './screens/Deal';
 import { DealsScreen } from './screens/Deals';
 import { DoneScreen } from './screens/Done';
 import { EditDealScreen } from './screens/EditDeal';
@@ -172,6 +173,7 @@ function Router() {
           <DealsScreen
             me={data.me}
             onNewDeal={() => navigate({ name: 'new' })}
+            onOpen={(id) => navigate({ name: 'deal', id })}
             onEdit={(id) => navigate({ name: 'edit', id })}
             onRepeat={(id) => navigate({ name: 'new', from: id })}
           />
@@ -187,6 +189,17 @@ function Router() {
             onRepeat={(id) => navigate({ name: 'new', from: id })}
           />
         );
+      case 'deal':
+        return (
+          <DealScreen
+            key={route.id}
+            publicId={route.id}
+            me={data.me}
+            onEdit={(id) => navigate({ name: 'edit', id })}
+            onRepeat={(id) => navigate({ name: 'new', from: id })}
+            onDeals={() => navigate({ name: 'deals' })}
+          />
+        );
       case 'settings':
         return <SettingsScreen me={data.me} onSaved={setProfile} />;
       case 'done':
@@ -198,6 +211,7 @@ function Router() {
             result={recallDone(route.id)}
             onNewDeal={() => navigate({ name: 'new' })}
             onDeals={() => navigate({ name: 'deals' })}
+            onOpenDeal={() => navigate({ name: 'deal', id: route.id })}
           />
         );
       case 'new':

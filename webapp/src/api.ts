@@ -3,12 +3,17 @@ import { DEV_NO_BRIDGE, initData, insideMax } from './bridge';
 import type {
   CreateDealRequest,
   CreateDealResponse,
+  DealActionRequest,
+  DealActionResponse,
   DealDetails,
+  DealFull,
+  DealRole,
   DealsFilter,
   DealsResponse,
   DealsRole,
   MeResponse,
   ProfileResponse,
+  ReceiptUploadResponse,
   SellerProfile,
   TemplatesResponse,
   UpdateDealRequest,
@@ -17,6 +22,8 @@ import type {
 
 const BASE = '/api';
 const TIMEOUT_MS = 10_000;
+/** Файл чека до 20 МБ по мобильной сети за 10 с не уходит — у загрузки свой таймаут (ЗАДАЧА_08 B). */
+const UPLOAD_TIMEOUT_MS = 60_000;
 
 /** Заглушка API для визуальной проверки без сервера; в прод-бандл не попадает (см. mock/api-mock.ts). */
 const USE_MOCK = import.meta.env.DEV && import.meta.env.VITE_MOCK_API === '1';
@@ -27,6 +34,17 @@ export type ApiErrorCode =
   | 'forbidden'
   | 'not_found'
   | 'invalid_transition'
+  // 409 экрана сделки (SPEC §7.8, §7.9): клиенту отмена закрыта после выполнения (E7), условия сменились под
+  // «Подтверждаю», квитанция запрошена до завершения; правка условий (T5) — сделка уже не правится / ничего не изменилось.
+  | 'client_cancel_locked'
+  | 'version_mismatch'
+  | 'receipt_not_ready'
+  | 'deal_not_editable'
+  | 'no_changes'
+  // Чек: 413 — больше 20 МБ; 502 — MAX не принял файл; 503 — на сервере нет связи с MAX.
+  | 'file_too_large'
+  | 'upload_failed'
+  | 'unavailable'
   | 'rate_limited'
   | 'internal'
   | 'network'
@@ -52,6 +70,7 @@ export class ApiError extends Error {
 
 const NETWORK_MESSAGE = 'Нет связи. Проверьте интернет и повторите';
 const TIMEOUT_MESSAGE = 'Сервер не ответил за 10 секунд. Попробуйте ещё раз';
+const UPLOAD_TIMEOUT_MESSAGE = 'Файл не загрузился за минуту. Проверьте интернет и попробуйте ещё раз';
 
 function authHeaders(): Record<string, string> {
   const raw = initData();
@@ -76,29 +95,37 @@ async function parseError(response: Response): Promise<ApiError> {
   return new ApiError(response.status, code, message);
 }
 
-async function request<T>(method: 'GET' | 'POST' | 'PUT', path: string, body?: unknown): Promise<T> {
-  if (USE_MOCK) {
-    const { mockRequest } = await import('./mock/api-mock');
-    return mockRequest<T>(method, path, body);
-  }
+interface SendOptions {
+  /** Тело как есть (файл чека), без JSON — заголовки задаёт вызывающий. */
+  raw?: Blob;
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+  timeoutMessage?: string;
+}
 
+/** Один запрос к API: заголовок авторизации, таймаут, коды ошибок `{ error: { code, message } }` (SPEC §7.8). */
+async function send<T>(method: 'GET' | 'POST' | 'PUT', path: string, body: unknown, opts: SendOptions = {}): Promise<T> {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = window.setTimeout(() => controller.abort(), opts.timeoutMs ?? TIMEOUT_MS);
+  const json = opts.raw === undefined && body !== undefined;
   let response: Response;
   try {
     response = await fetch(`${BASE}${path}`, {
       method,
       headers: {
         Accept: 'application/json',
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...(json ? { 'Content-Type': 'application/json' } : {}),
+        ...opts.headers,
         ...authHeaders(),
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: opts.raw ?? (json ? JSON.stringify(body) : undefined),
       signal: controller.signal,
     });
   } catch (error) {
     const aborted = error instanceof DOMException && error.name === 'AbortError';
-    throw aborted ? new ApiError(0, 'timeout', TIMEOUT_MESSAGE) : new ApiError(0, 'network', NETWORK_MESSAGE);
+    throw aborted
+      ? new ApiError(0, 'timeout', opts.timeoutMessage ?? TIMEOUT_MESSAGE)
+      : new ApiError(0, 'network', NETWORK_MESSAGE);
   } finally {
     window.clearTimeout(timer);
   }
@@ -110,6 +137,32 @@ async function request<T>(method: 'GET' | 'POST' | 'PUT', path: string, body?: u
   } catch {
     throw new ApiError(response.status, 'bad_response', 'Сервер вернул неожиданный ответ');
   }
+}
+
+async function request<T>(method: 'GET' | 'POST' | 'PUT', path: string, body?: unknown): Promise<T> {
+  if (USE_MOCK) {
+    const { mockRequest } = await import('./mock/api-mock');
+    return mockRequest<T>(method, path, body);
+  }
+  return send<T>(method, path, body);
+}
+
+/**
+ * Чек к сделке (T15): тело — сам файл, имя — в заголовке `X-File-Name` (URL-encoded), таймаут 60 с (SPEC §7.8).
+ * Тип файла проверен до вызова (deal-screen.ts `checkReceiptFile`) и передаётся явно: у части Android WebView
+ * `file.type` пустой, а сервер принимает только pdf/jpeg/png по Content-Type.
+ */
+async function uploadReceipt(publicId: string, file: File, contentType: string = file.type): Promise<ReceiptUploadResponse> {
+  if (USE_MOCK) {
+    const { mockUploadReceipt } = await import('./mock/api-mock');
+    return mockUploadReceipt(publicId, file, contentType);
+  }
+  return send<ReceiptUploadResponse>('POST', `/deals/${encodeURIComponent(publicId)}/receipt`, undefined, {
+    raw: file,
+    headers: { 'Content-Type': contentType, 'X-File-Name': encodeURIComponent(file.name) },
+    timeoutMs: UPLOAD_TIMEOUT_MS,
+    timeoutMessage: UPLOAD_TIMEOUT_MESSAGE,
+  });
 }
 
 export const get = <T>(path: string): Promise<T> => request<T>('GET', path);
@@ -127,6 +180,12 @@ export const api = {
   deal: (publicId: string) => get<DealDetails>(`/deals/${encodeURIComponent(publicId)}`),
   updateDeal: (publicId: string, body: UpdateDealRequest) =>
     put<UpdateDealResponse>(`/deals/${encodeURIComponent(publicId)}`, body),
+  /** Экран сделки (§7.9). `as=client` — демо «Как видит клиент»; без параметра сервер берёт роль смотрящего. */
+  dealFull: (publicId: string, as?: DealRole) =>
+    get<DealFull>(`/deals/${encodeURIComponent(publicId)}/full${as === 'client' ? '?as=client' : ''}`),
+  dealAction: (publicId: string, body: DealActionRequest) =>
+    post<DealActionResponse>(`/deals/${encodeURIComponent(publicId)}/actions`, body),
+  uploadReceipt,
 };
 
 /**

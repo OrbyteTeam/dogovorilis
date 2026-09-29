@@ -25,9 +25,11 @@ export interface DoneScreenProps {
   result: CreateDealResponse | null;
   onNewDeal: () => void;
   onDeals: () => void;
+  /** «К сделке» — экран сделки `#/deals/:id` (ЗАДАЧА_08 B, SPEC §7.9). */
+  onOpenDeal: () => void;
 }
 
-export function DoneScreen({ publicId, me, result, onNewDeal, onDeals }: DoneScreenProps) {
+export function DoneScreen({ publicId, me, result, onNewDeal, onDeals, onOpenDeal }: DoneScreenProps) {
   const showToast = useToast();
   const bot = me.config.bot_username;
   const link = result?.link ?? botLink(bot, `d_${publicId}`);
@@ -138,6 +140,9 @@ export function DoneScreen({ publicId, me, result, onNewDeal, onDeals }: DoneScr
               Открыть чат с ботом
             </Button>
           )}
+          <Button variant="secondary" size="large" stretched onClick={onOpenDeal}>
+            К сделке
+          </Button>
           <Button variant="ghost" size="large" stretched onClick={onDeals}>
             Все сделки
           </Button>

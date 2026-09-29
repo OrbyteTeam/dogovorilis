@@ -1,6 +1,6 @@
 // Экран «Мои сделки» — docs/SPEC.md §7.4, ЗАДАЧА_04 C: вкладки «Я исполнитель» / «Я клиент», внутри —
-// «Расписание» (лента дней по МСК) или «Список» с фильтрами. Строки не открываются: действия — «Открыть в чате»
-// (карточка в боте и есть экран сделки), «Изменить» и «Повторить». Вид — docs/DESIGN.md §4.
+// «Расписание» (лента дней по МСК) или «Список» с фильтрами. Строка открывает экран сделки `#/deals/:id` (§7.9,
+// ЗАДАЧА_08 B); под строкой остаются «Открыть в чате», «Изменить» и «Повторить». Вид — docs/DESIGN.md §4.
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Button, Panel, Spinner, Typography } from '@maxhub/max-ui';
 
@@ -120,13 +120,15 @@ function listMeta(item: DealListItem): string {
 export interface DealsScreenProps {
   me: MeResponse;
   onNewDeal: () => void;
+  /** Экран сделки `#/deals/:id` — по нажатию на строку. */
+  onOpen: (publicId: string) => void;
   /** Правка условий (`#/deals/:id/edit`); не передан — кнопки «Изменить» нет. */
   onEdit?: (publicId: string) => void;
   /** Повтор закрытой сделки (`#/new?from=:id`); не передан — кнопки «Повторить» нет. */
   onRepeat?: (publicId: string) => void;
 }
 
-export function DealsScreen({ me, onNewDeal, onEdit, onRepeat }: DealsScreenProps) {
+export function DealsScreen({ me, onNewDeal, onOpen, onEdit, onRepeat }: DealsScreenProps) {
   const showToast = useToast();
   const [items, setItems] = useState<DealListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -254,6 +256,7 @@ export function DealsScreen({ me, onNewDeal, onEdit, onRepeat }: DealsScreenProp
             onSelectDay={setPickedDay}
             schedule={schedule}
             actionsFor={actionsFor}
+            onOpen={onOpen}
             onShowList={() => switchView('list')}
           />
         ) : (
@@ -263,6 +266,7 @@ export function DealsScreen({ me, onNewDeal, onEdit, onRepeat }: DealsScreenProp
             filter={filter}
             onFilter={setFilter}
             actionsFor={actionsFor}
+            onOpen={onOpen}
             onNewDeal={onNewDeal}
           />
         )}
@@ -281,7 +285,7 @@ export function DealsScreen({ me, onNewDeal, onEdit, onRepeat }: DealsScreenProp
 
         <footer className="dg-card dg-card_flat dg-card_row">
           <Typography.Text variant="description" color="secondary">
-            Действия по сделке — на её карточке в чате
+            Карточки сделок — в чате с ботом
           </Typography.Text>
           <Button type="button" variant="secondary" size="small" onClick={openChat}>
             Открыть чат
@@ -320,10 +324,11 @@ interface ScheduleViewProps {
   onSelectDay: (key: string) => void;
   schedule: ReturnType<typeof buildSchedule>;
   actionsFor: (item: DealListItem) => DealRowAction[];
+  onOpen: (publicId: string) => void;
   onShowList: () => void;
 }
 
-function ScheduleView({ days, todayKey, selectedDay, onSelectDay, schedule, actionsFor, onShowList }: ScheduleViewProps) {
+function ScheduleView({ days, todayKey, selectedDay, onSelectDay, schedule, actionsFor, onOpen, onShowList }: ScheduleViewProps) {
   const dayItems = schedule.byDay.get(selectedDay) ?? [];
   return (
     <>
@@ -352,6 +357,7 @@ function ScheduleView({ days, todayKey, selectedDay, onSelectDay, schedule, acti
                 lead={item.scheduled_at ? timeOf(item.scheduled_at) : undefined}
                 meta={item.status_short}
                 actions={actionsFor(item)}
+                onOpen={() => onOpen(item.public_id)}
               />
             ))}
           </DealRows>
@@ -376,7 +382,13 @@ function ScheduleView({ days, todayKey, selectedDay, onSelectDay, schedule, acti
           </div>
           <DealRows>
             {schedule.undated.map((item) => (
-              <DealRow key={item.public_id} item={item} meta={item.status_short} actions={actionsFor(item)} />
+              <DealRow
+                key={item.public_id}
+                item={item}
+                meta={item.status_short}
+                actions={actionsFor(item)}
+                onOpen={() => onOpen(item.public_id)}
+              />
             ))}
           </DealRows>
         </section>
@@ -404,10 +416,11 @@ interface ListViewProps {
   filter: DealsFilter;
   onFilter: (filter: DealsFilter) => void;
   actionsFor: (item: DealListItem) => DealRowAction[];
+  onOpen: (publicId: string) => void;
   onNewDeal: () => void;
 }
 
-function ListView({ role, items, filter, onFilter, actionsFor, onNewDeal }: ListViewProps) {
+function ListView({ role, items, filter, onFilter, actionsFor, onOpen, onNewDeal }: ListViewProps) {
   const shown = sortForFilter(
     items.filter((item) => matchesFilter(item, filter)),
     filter,
@@ -419,7 +432,13 @@ function ListView({ role, items, filter, onFilter, actionsFor, onNewDeal }: List
         <>
           <DealRows>
             {shown.map((item) => (
-              <DealRow key={item.public_id} item={item} meta={listMeta(item)} actions={actionsFor(item)} />
+              <DealRow
+                key={item.public_id}
+                item={item}
+                meta={listMeta(item)}
+                actions={actionsFor(item)}
+                onOpen={() => onOpen(item.public_id)}
+              />
             ))}
           </DealRows>
           <Typography.Text variant="description" color="tertiary">

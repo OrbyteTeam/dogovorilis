@@ -11,6 +11,8 @@ export type Route =
   | { name: 'done'; id: string }
   | { name: 'deals' }
   | { name: 'edit'; id: string }
+  /** Экран сделки `#/deals/<id>` (SPEC §7.9, ЗАДАЧА_08 B). */
+  | { name: 'deal'; id: string }
   | { name: 'settings' };
 
 /** Вкладки нижней панели (ЗАДАЧА_08 A). */
@@ -32,6 +34,9 @@ const EDIT_HASH_RE = new RegExp(`^/deals/${ID}/edit$`);
 const REPEAT_PARAM_RE = new RegExp(`^repeat_${ID}$`);
 const REPEAT_HASH_RE = new RegExp(`^/new\\?from=${ID}$`);
 const DONE_HASH_RE = /^\/done\/([A-Za-z0-9]{1,32})$/;
+/** Экран сделки: `deal_<id>` → `#/deals/<id>` (ЗАДАЧА_08 B). Ровно 10 символов — `#/deals/<id>/edit` сюда не попадает. */
+const DEAL_PARAM_RE = new RegExp(`^deal_${ID}$`);
+const DEAL_HASH_RE = new RegExp(`^/deals/${ID}$`);
 
 export function parseHash(hash: string): Route | null {
   const path = hash.replace(/^#/, '');
@@ -42,6 +47,8 @@ export function parseHash(hash: string): Route | null {
   if (repeat) return { name: 'new', from: repeat[1] };
   const edit = EDIT_HASH_RE.exec(path);
   if (edit) return { name: 'edit', id: edit[1] };
+  const deal = DEAL_HASH_RE.exec(path);
+  if (deal) return { name: 'deal', id: deal[1] };
   const done = DONE_HASH_RE.exec(path);
   if (done) return { name: 'done', id: done[1] };
   return null;
@@ -57,6 +64,8 @@ export function routeToHash(route: Route): string {
       return '#/settings';
     case 'edit':
       return `#/deals/${route.id}/edit`;
+    case 'deal':
+      return `#/deals/${route.id}`;
     case 'new':
       return route.from ? `#/new?from=${route.from}` : '#/new';
   }
@@ -68,7 +77,8 @@ export function sameRoute(a: Route, b: Route): boolean {
 
 /**
  * Стартовый экран по `start_param` (SPEC §7.1, §13): `new` → форма, `d_<id>` → «Готово» с ссылкой,
- * `deals` → «Мои сделки», `settings` → настройки, `edit_<id>` → правка условий, `repeat_<id>` → повтор.
+ * `deals` → «Мои сделки», `settings` → настройки, `edit_<id>` → правка условий, `repeat_<id>` → повтор,
+ * `deal_<id>` → экран сделки (§7.9).
  * Непустой hash (перезагрузка WebView) главнее start_param; неизвестное — форма новой сделки.
  */
 export function initialRoute(hash: string, startParam: string | null): Route {
@@ -81,12 +91,14 @@ export function initialRoute(hash: string, startParam: string | null): Route {
   if (edit) return { name: 'edit', id: edit[1] };
   const repeat = REPEAT_PARAM_RE.exec(param);
   if (repeat) return { name: 'new', from: repeat[1] };
+  const deal = DEAL_PARAM_RE.exec(param);
+  if (deal) return { name: 'deal', id: deal[1] };
   if (param === 'deals') return { name: 'deals' };
   if (param === 'settings') return { name: 'settings' };
   return { name: 'new' };
 }
 
-/** Какая вкладка подсвечена на экране: всё про сделки (правка, повтор) — «Сделки», «Готово» — «Новая». */
+/** Какая вкладка подсвечена на экране: всё про сделки (экран сделки, правка, повтор) — «Сделки», «Готово» — «Новая». */
 export function tabOf(route: Route): Tab {
   switch (route.name) {
     case 'new':
@@ -94,6 +106,7 @@ export function tabOf(route: Route): Tab {
     case 'done':
       return 'new';
     case 'deals':
+    case 'deal':
     case 'edit':
       return 'deals';
     case 'settings':

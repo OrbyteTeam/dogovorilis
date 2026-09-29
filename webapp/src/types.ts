@@ -204,3 +204,161 @@ export interface UpdateDealResponse {
 export interface ProfileResponse {
   profile: SellerProfile;
 }
+
+// ─────────────── Экран сделки (`#/deals/:id`) — SPEC §7.9, §7.8 (`/full`, `/actions`, `/receipt`), ЗАДАЧА_08 B ───────────────
+
+/** Чьими глазами собран экран сделки. */
+export type DealRole = 'seller' | 'client';
+
+/**
+ * Коды действий — ровно кнопки карточки этой роли в этом статусе (SPEC §7.9, таблица). Последние семь мини-приложение
+ * выполняет само, а не через `POST …/actions`: переход на форму, выбор файла, шеринг, «оплата — в чате».
+ */
+export type ActionCode =
+  | 'confirm'
+  | 'request_changes'
+  | 'decline'
+  | 'accept'
+  | 'remarks'
+  | 'cancel'
+  | 'keep_as_is'
+  | 'done'
+  | 'fixed'
+  | 'close_without_receipt'
+  | 'remind_client'
+  | 'refund_confirmed'
+  | 'receipt_pdf'
+  | 'edit'
+  | 'repeat'
+  | 'attach_receipt'
+  | 'share'
+  | 'pay'
+  | 'confirm_transfer'
+  | 'open_as_client';
+
+/** Действия, которые идут через `POST /api/deals/:id/actions`. */
+export type PostActionCode = Exclude<
+  ActionCode,
+  'edit' | 'repeat' | 'attach_receipt' | 'share' | 'pay' | 'confirm_transfer' | 'open_as_client'
+>;
+
+export interface DealFullTerms {
+  version: number;
+  title: string;
+  description: string | null;
+  /** ISO UTC; null — без даты. */
+  scheduled_at: string | null;
+  total_kopecks: number;
+  prepayment_kopecks: number;
+  /** total − prepayment */
+  remaining_kopecks: number;
+  cancel_rule: CancelRule;
+  /** Готовый текст правила отмены. */
+  cancel_rule_text: string;
+  /** Когда создана текущая версия. */
+  created_at: string;
+  /** Когда клиент подтвердил текущую версию. */
+  confirmed_at: string | null;
+}
+
+export interface DealFullVersion {
+  version: number;
+  created_at: string;
+  confirmed_at: string | null;
+  title: string;
+  scheduled_at: string | null;
+  total_kopecks: number;
+  prepayment_kopecks: number;
+  cancel_rule: CancelRule;
+  /** Что просил клиент перед этой версией. */
+  change_request_text: string | null;
+}
+
+export type DealPaymentStatus = 'pending' | 'claimed' | 'succeeded' | 'canceled' | 'expired';
+
+export interface DealPayment {
+  kind: 'prepayment' | 'final';
+  rail: 'link' | 'transfer';
+  status: DealPaymentStatus;
+  amount_kopecks: number;
+  /** succeeded_at ?? claimed_at ?? created_at */
+  at: string | null;
+  /** Готовая строка: «Предоплата 500 ₽ · ссылка ЮKassa (тест) · оплачено». */
+  label: string;
+}
+
+export interface DealTimelineItem {
+  at: string;
+  actor: 'seller' | 'client' | 'system';
+  /** Готовый текст события (server/src/texts.ts). */
+  text: string;
+}
+
+/** `GET /api/deals/:id/full[?as=client]` — всё для экрана сделки одним ответом. */
+export interface DealFull {
+  public_id: string;
+  role: DealRole;
+  /** Демо: исполнитель он же клиент — можно переключиться «Как видит клиент». */
+  can_view_as_client: boolean;
+  demo: boolean;
+  status: DealStatus;
+  /** Статус для роли словами, готов к показу. */
+  status_text: string;
+  /** Коротко: «ждём предоплату». */
+  status_short: string;
+  /** https://max.ru/<bot>?start=d_<id> */
+  link: string;
+  /** Приглашение без ссылки — для shareDeal({ text, link }). */
+  share_text: string;
+  terms: DealFullTerms;
+  /** По возрастанию, включая текущую; блок истории — если версий больше одной. */
+  versions: DealFullVersion[];
+  seller: { name: string };
+  /** null — клиент ещё не открыл ссылку. */
+  client: { name: string } | null;
+  money: {
+    paid_kopecks: number;
+    /** Сколько ждём сейчас (предоплата или остаток), иначе 0. */
+    due_kopecks: number;
+    payments: DealPayment[];
+  };
+  /** От старых к новым, текст готов. */
+  timeline: DealTimelineItem[];
+  documents: {
+    /** Квитанцию можно запросить (терминальный статус). */
+    receipt_pdf: boolean;
+    /** «Чек приложен 22.09» / «Чек: до 9 октября» / «Чек не требуется» / null. */
+    cheque_text: string | null;
+  };
+  /** Кнопки карточки этой роли в этом статусе, в порядке карточки. */
+  actions: ActionCode[];
+  /** Для диалога отмены: что станет с предоплатой. */
+  cancel_consequence: string | null;
+}
+
+/** `POST /api/deals/:id/actions`. */
+export interface DealActionRequest {
+  action: PostActionCode;
+  /** Роль, под которой открыт экран (важно для демо). */
+  as?: DealRole;
+  /** Для `confirm` — обязательно: версия условий, которую видит клиент. */
+  version?: number;
+  /** `request_changes`, `remarks` — 1–500 символов. */
+  text?: string;
+  /** `cancel` исполнителем — необязательно, ≤ 300. */
+  reason?: string;
+}
+
+export interface DealActionResponse {
+  deal: DealFull;
+  result: 'done' | 'already_done';
+  /** Показать тостом, если не null: «Напоминание отправлено». */
+  notice: string | null;
+}
+
+/** `POST /api/deals/:id/receipt` — тело сам файл. */
+export interface ReceiptUploadResponse {
+  deal: DealFull;
+  /** Сервер B-srv отдаёт готовый текст «Чек приложен, квитанция ушла обеим сторонам»; в контракте его нет — необязателен. */
+  notice?: string | null;
+}
