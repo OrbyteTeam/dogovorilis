@@ -35,6 +35,17 @@ export interface SellerProfile {
    * undefined — сервер старше этого поля: экран показывает значение по умолчанию (08:00).
    */
   digest_time?: number | null;
+  /** Строка надёжности в карточке клиента (§7.11); undefined — сервер старше поля (считаем выключенной). */
+  show_reliability?: boolean;
+}
+
+/** Показатели надёжности исполнителя из фактов сделок (§7.11); доли в процентах, null — пока нет данных. */
+export interface Reliability {
+  closed: number;
+  no_dispute_percent: number | null;
+  cheque_on_time_percent: number | null;
+  seller_cancel_percent: number | null;
+  rating: { average: number; count: number } | null;
 }
 
 export interface MeUser {
@@ -55,6 +66,8 @@ export interface MeResponse {
   user: MeUser;
   profile: SellerProfile | null;
   config: AppConfig;
+  /** Надёжность — исполнителю с профилем (§7.11); null — профиля нет. */
+  reliability?: Reliability | null;
 }
 
 export interface Template {
@@ -354,6 +367,10 @@ export interface DealFull {
   cancel_consequence: string | null;
   /** Клиент выбрал время и ждёт ответа исполнителя; нет поля — сервер старше ЗАДАЧА_08 D. */
   time_proposal?: DealTimeProposal | null;
+  /** «3 сделки, 100 % без споров»: исполнителю — своя, клиенту — если исполнитель показывает (§7.11). */
+  reliability_line?: string | null;
+  /** Оценка клиента: исполнителю и её автору (§7.11). */
+  rating?: { score: number; comment: string | null } | null;
 }
 
 /** `POST /api/deals/:id/actions`. */

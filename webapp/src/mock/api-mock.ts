@@ -33,8 +33,10 @@ import type {
 
 const BOT = String(import.meta.env.VITE_BOT_USERNAME ?? 'dogovorilis_bot').trim();
 const CARD_SENT = import.meta.env.VITE_MOCK_CARD_SENT !== '0';
-/** VITE_MOCK_PROFILE=1 — как будто профиль исполнителя уже сохранён (блок «О вас» скрыт). */
-const HAS_PROFILE = import.meta.env.VITE_MOCK_PROFILE === '1';
+/** VITE_MOCK_PROFILE=1 или `?mock_profile=1` — как будто профиль исполнителя уже сохранён (блок «О вас» скрыт). */
+const HAS_PROFILE =
+  import.meta.env.VITE_MOCK_PROFILE === '1' ||
+  (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('mock_profile') === '1');
 
 const DEMO_PROFILE: SellerProfile = {
   display_name: 'Анна Аксёнова',
@@ -54,12 +56,20 @@ function me(): MeResponse {
     user: { id: 1001, first_name: 'Анна', last_name: 'Аксёнова', username: 'anna', phone_verified: false },
     profile,
     config: { provider: 'none', demo: true, bot_username: BOT },
+    // Надёжность (§7.11) — исполнителю с профилем; на стенде — правдоподобный набор с одной спорной сделкой.
+    reliability: profile
+      ? { closed: 12, no_dispute_percent: 92, cheque_on_time_percent: 83, seller_cancel_percent: 0, rating: { average: 4.8, count: 5 } }
+      : null,
   };
 }
 
 /** Как на сервере: поле, которого нет в теле, — значение по умолчанию (08:00). */
 function saveProfile(body: SellerProfile): SellerProfile {
-  profile = { ...body, digest_time: body.digest_time === undefined ? 480 : body.digest_time };
+  profile = {
+    ...body,
+    digest_time: body.digest_time === undefined ? 480 : body.digest_time,
+    show_reliability: body.show_reliability ?? profile?.show_reliability ?? false,
+  };
   return profile;
 }
 
@@ -853,6 +863,9 @@ function dealFull(row: MockDeal, role: DealRole): DealFull {
     actions: mockActions(row, st, role),
     cancel_consequence: cancelConsequenceOf(row, st, role),
     time_proposal: st.proposal ? { ...st.proposal } : null,
+    // §7.11: исполнителю — своя строка; клиенту — если исполнитель её показывает (на стенде — у «Стрижки и укладки»)
+    reliability_line: role === 'seller' ? '12 сделок, 92 % без споров' : row.id === 'Cli2Confrm' ? '48 сделок, 98 % без споров' : null,
+    rating: row.status === 'closed' ? { score: 5, comment: row.role === 'seller' ? 'Всё аккуратно, приду ещё' : null } : null,
   };
 }
 

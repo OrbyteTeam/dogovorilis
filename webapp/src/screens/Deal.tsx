@@ -37,6 +37,7 @@ import {
   type TextCode,
 } from '../deal-screen';
 import { formatDateTime, formatKopecks, statusEmoji } from '../format';
+import { dealRatingText } from '../reliability';
 import { shortDateTime } from '../schedule';
 import type { DealActionRequest, DealFull, DealRole, MeResponse, PostActionCode } from '../types';
 
@@ -613,6 +614,17 @@ function PartyAvatar({ name }: { name: string | null }) {
 }
 
 /** 3. Стороны. Клиента ещё нет — исполнителю здесь же ссылка для него (её можно выделить, если копирование не сработало). */
+/** Подпись строки стороны из нескольких частей — каждая с новой строки (надёжность, оценка, «это вы»). */
+function joinLines(...parts: (string | undefined)[]): ReactNode {
+  const shown = parts.filter((p): p is string => Boolean(p));
+  if (shown.length === 0) return undefined;
+  return shown.map((part, index) => (
+    <span key={index} className="dg-line">
+      {part}
+    </span>
+  ));
+}
+
 function PartiesSection({ deal }: { deal: DealFull }) {
   const you = (role: DealRole) => (deal.role === role ? 'Это вы' : undefined);
   return (
@@ -623,14 +635,20 @@ function PartiesSection({ deal }: { deal: DealFull }) {
           before={<PartyAvatar name={deal.seller.name} />}
           overline="Исполнитель"
           title={deal.seller.name}
-          subtitle={you('seller')}
+          subtitle={joinLines(you('seller'), deal.reliability_line ? `🛡 ${deal.reliability_line}` : undefined)}
         />
         <CellSimple
           height="compact"
           before={<PartyAvatar name={deal.client?.name ?? null} />}
           overline="Клиент"
           title={deal.client ? deal.client.name : 'Ещё не открыл ссылку'}
-          subtitle={deal.client ? you('client') : deal.role === 'seller' ? <span className="dg-break">{deal.link}</span> : undefined}
+          subtitle={
+            deal.client
+              ? joinLines(you('client'), deal.rating ? `⭐ ${dealRatingText(deal.role, deal.rating)}` : undefined)
+              : deal.role === 'seller'
+                ? <span className="dg-break">{deal.link}</span>
+                : undefined
+          }
         />
       </div>
     </Section>

@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react';
 import { Button, CellAction, Input, Panel, Radio, Switch, Textarea, Typography } from '@maxhub/max-ui';
 
 import { api, errorText } from '../api';
+import { reliabilityRows } from '../reliability';
 import { ControlRow } from '../components/ControlRow';
 import { Field, revealField } from '../components/Field';
 import { useToast } from '../components/Toast';
@@ -62,6 +63,7 @@ export function SettingsScreen({ me, onSaved, onServices }: SettingsScreenProps)
   const [transferEnabled, setTransferEnabled] = useState(profile?.transfer_enabled ?? true);
   const [linkEnabled, setLinkEnabled] = useState(providerOff ? false : (profile?.link_enabled ?? true));
   const [digestTime, setDigestTime] = useState<number | null>(() => initialDigestTime(profile));
+  const [showReliability, setShowReliability] = useState(profile?.show_reliability ?? false);
   const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -101,6 +103,7 @@ export function SettingsScreen({ me, onSaved, onServices }: SettingsScreenProps)
       link_enabled: providerOff ? false : linkEnabled,
       default_cancel_rule: cancelRule,
       digest_time: digestTime,
+      show_reliability: showReliability,
     };
 
     setSaving(true);
@@ -232,6 +235,30 @@ export function SettingsScreen({ me, onSaved, onServices }: SettingsScreenProps)
             Подставляется в новую сделку; в самой сделке правило всё равно можно поменять.
           </Typography.Text>
         </section>
+
+        {me.reliability ? (
+          <section className="dg-card" aria-labelledby="settings-reliability">
+            <Typography.Text variant="title" asChild>
+              <h2 id="settings-reliability">Надёжность</h2>
+            </Typography.Text>
+            <Typography.Text variant="description" color="tertiary">
+              Считается по вашим завершённым сделкам, демо не входят. Оценки клиентов видите только вы.
+            </Typography.Text>
+            <dl className="dg-facts">
+              {reliabilityRows(me.reliability).map((row) => (
+                <div key={row.label} className="dg-facts__row">
+                  <dt>{row.label}</dt>
+                  <dd>{row.value}</dd>
+                </div>
+              ))}
+            </dl>
+            <ControlRow
+              control={<Switch checked={showReliability} onChange={(event) => setShowReliability(event.currentTarget.checked)} />}
+              title="Показывать надёжность клиентам"
+              subtitle="Клиент увидит в карточке строку вроде «12 сделок, 98 % без споров», когда закрытых сделок 3 и больше"
+            />
+          </section>
+        ) : null}
 
         <section className="dg-card" aria-labelledby="settings-digest">
           <Typography.Text variant="title" asChild>
