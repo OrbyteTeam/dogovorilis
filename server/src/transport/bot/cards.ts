@@ -56,7 +56,7 @@ function lastLinkAttempt(bundle: DealBundle, kind: 'prepayment' | 'final') {
   );
 }
 
-/** Реквизиты в карточке клиента, пока он платит переводом (SPEC §6.4, §9.1). */
+/** Реквизиты в карточке клиента, пока он платит переводом (SPEC §6.4, §9.1, DESIGN_BRIEF §3.1). */
 function transferLinesFor(bundle: DealBundle, role: CardRole): string[] | null {
   if (role === 'seller') return null;
   const kind = pendingKind(bundle);
@@ -66,7 +66,10 @@ function transferLinesFor(bundle: DealBundle, role: CardRole): string[] | null {
   return texts.transferLines({ sumKopecks: live.amountKopecks, payoutDetails: bundle.sellerProfile?.payoutDetails ?? '' });
 }
 
-function paymentLineFor(bundle: DealBundle, role: CardRole): string | null {
+/** Блок платежа карточки: ожидание, ссылка, перевод, получено (DESIGN_BRIEF §3.1). Пустой массив, если сказать нечего. */
+function paymentLinesFor(bundle: DealBundle, role: CardRole): string[] {
+  const transfer = transferLinesFor(bundle, role);
+  if (transfer) return transfer;
   const viewer = role === 'seller' ? 'seller' : 'client';
   const kind = pendingKind(bundle);
   if (kind) {
@@ -74,17 +77,17 @@ function paymentLineFor(bundle: DealBundle, role: CardRole): string | null {
     const sum = kind === 'prepayment' ? bundle.version.prepaymentKopecks : remaining(bundle.version);
     if (!live || live.status === 'pending') {
       if (live?.rail === 'transfer') {
-        // Клиент видит вместо этой строки реквизиты (transferLinesFor); исполнителю — что выбран перевод.
-        return texts.paymentLine({ kind, state: 'transfer_chosen', sumKopecks: sum, at: null, rail: 'transfer', provider: live.provider, linkExpiresAt: null });
+        // Клиент видит вместо этой строки реквизиты (transferLinesFor); исполнителю: что выбран перевод.
+        return texts.paymentLines({ kind, state: 'transfer_chosen', sumKopecks: sum, at: null, rail: 'transfer', provider: live.provider, linkExpiresAt: null });
       }
       if (live?.rail === 'link') {
-        return texts.paymentLine({ kind, state: 'link_issued', sumKopecks: sum, at: null, rail: 'link', provider: live.provider, linkExpiresAt: live.expiresAt });
+        return texts.paymentLines({ kind, state: 'link_issued', sumKopecks: sum, at: null, rail: 'link', provider: live.provider, linkExpiresAt: live.expiresAt });
       }
-      // Живого платежа нет. Если предыдущая ссылка истекла или её отменил провайдер — говорим об этом
+      // Живого платежа нет. Если предыдущая ссылка истекла или её отменил провайдер, говорим об этом
       // прямо в карточке, иначе клиент не поймёт, почему кнопка называется «Новая ссылка» (§9.2, §14 п. 7).
       const failed = !live ? lastLinkAttempt(bundle, kind) : null;
       if (failed) {
-        return texts.paymentLine({
+        return texts.paymentLines({
           kind,
           state: failed.status === 'expired' ? 'link_expired' : 'link_canceled',
           sumKopecks: sum,
@@ -95,18 +98,18 @@ function paymentLineFor(bundle: DealBundle, role: CardRole): string | null {
           cancelReason: failed.cancellationReason,
         });
       }
-      return texts.paymentLine({ kind, state: 'awaiting', sumKopecks: sum, at: null, rail: null, provider: null, linkExpiresAt: null });
+      return texts.paymentLines({ kind, state: 'awaiting', sumKopecks: sum, at: null, rail: null, provider: null, linkExpiresAt: null });
     }
     if (live.status === 'claimed') {
-      return texts.paymentLine({ kind, state: 'claimed', sumKopecks: live.amountKopecks, at: live.claimedAt, rail: live.rail, provider: live.provider, linkExpiresAt: null, viewer });
+      return texts.paymentLines({ kind, state: 'claimed', sumKopecks: live.amountKopecks, at: live.claimedAt, rail: live.rail, provider: live.provider, linkExpiresAt: null, viewer });
     }
   }
   const succeeded = bundle.payments
     .filter((p) => p.status === 'succeeded')
     .sort((a, b) => (a.succeededAt?.getTime() ?? 0) - (b.succeededAt?.getTime() ?? 0))
     .at(-1);
-  if (!succeeded) return null;
-  return texts.paymentLine({
+  if (!succeeded) return [];
+  return texts.paymentLines({
     kind: succeeded.kind,
     state: 'received',
     sumKopecks: succeeded.amountKopecks,
@@ -176,8 +179,7 @@ export function buildCardView(bundle: DealBundle, role: CardRole): texts.CardVie
         ? displayName(client.firstName, client.lastName)
         : null,
     demo: deal.demo,
-    paymentLine: paymentLineFor(bundle, role),
-    transferLines: transferLinesFor(bundle, role),
+    paymentLines: paymentLinesFor(bundle, role),
     receiptLine: receiptLineFor(bundle),
     refundLine: refund,
     claimLine: claim,

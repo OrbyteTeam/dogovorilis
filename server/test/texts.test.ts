@@ -45,7 +45,7 @@ import {
   card,
   demoNotifyPrefix,
   esc,
-  paymentLine,
+  paymentLines,
   quote,
   railHow,
   railTestLine,
@@ -126,7 +126,7 @@ function view(over: Partial<CardView> = {}): CardView {
     sellerName: 'Анна А.',
     clientName: null,
     demo: false,
-    paymentLine: null,
+    paymentLines: [],
     receiptLine: null,
     refundLine: null,
     clientLink: null,
@@ -171,27 +171,29 @@ describe('quote', () => {
   });
 });
 
-describe('карточка (SPEC §6.4, DESIGN §6)', () => {
-  it('исполнитель, awaiting_confirmation, клиент ещё не открыл — со ссылкой', () => {
+const NB = ' ';
+
+describe('карточка (DESIGN_BRIEF §3.1)', () => {
+  it('исполнитель, awaiting_confirmation, клиент ещё не открыл: со ссылкой', () => {
     const text = card(view({ clientLink: LINK }));
     expect(text).toBe(
       [
         `⏳ **Маникюр с покрытием** #${ID}`,
         'Статус: ждём подтверждения клиента',
         '',
-        '📌 Гель-лак, укрепление',
-        `🗓 ${formatDateTime(SCHEDULED)}`,
-        `💰 **${formatMoney(250_000)}**, предоплата **${formatMoney(50_000)}** (20\u00A0%)`,
-        '↩️ Отмена без потери предоплаты за 24 ч и более до срока',
+        `Когда: ${formatDateTime(SCHEDULED)}`,
+        `Сумма: **${formatMoney(250_000)}**, предоплата **${formatMoney(50_000)}** (20${NB}%)`,
+        'Отмена: без потери предоплаты за 24 ч и более до срока',
+        'Уточнения: Гель-лак, укрепление',
         '',
-        '👤 Исполнитель: Анна А.',
-        '👤 Клиент: ещё не открыл ссылку',
-        `🔗 Ссылка для клиента: \`${LINK}\``,
+        'Исполнитель: Анна А.',
+        'Клиент: ещё не открыл ссылку',
+        `Ссылка для клиента: \`${LINK}\``,
       ].join('\n'),
     );
   });
 
-  it('клиент, awaiting_prepayment — статус с суммой, строка оплаты, макет', () => {
+  it('клиент, awaiting_prepayment: статус с суммой, строка оплаты, макет', () => {
     const text = card(
       view({
         status: 'awaiting_prepayment',
@@ -199,15 +201,7 @@ describe('карточка (SPEC §6.4, DESIGN §6)', () => {
         description: null,
         hasPhoto: true,
         clientName: 'Иван И.',
-        paymentLine: paymentLine({
-          kind: 'prepayment',
-          state: 'awaiting',
-          sumKopecks: 50_000,
-          at: null,
-          rail: null,
-          provider: null,
-          linkExpiresAt: null,
-        }),
+        paymentLines: paymentLines({ kind: 'prepayment', state: 'awaiting', sumKopecks: 50_000, at: null, rail: null, provider: null, linkExpiresAt: null }),
       }),
     );
     expect(text).toBe(
@@ -215,20 +209,20 @@ describe('карточка (SPEC §6.4, DESIGN §6)', () => {
         `💳 **Маникюр с покрытием** #${ID}`,
         `Статус: внесите предоплату ${formatMoney(50_000)}`,
         '',
-        `🗓 ${formatDateTime(SCHEDULED)}`,
-        `💰 **${formatMoney(250_000)}**, предоплата **${formatMoney(50_000)}** (20\u00A0%)`,
-        '↩️ Отмена без потери предоплаты за 24 ч и более до срока',
-        '🖼 макет приложён',
+        `Когда: ${formatDateTime(SCHEDULED)}`,
+        `Сумма: **${formatMoney(250_000)}**, предоплата **${formatMoney(50_000)}** (20${NB}%)`,
+        'Отмена: без потери предоплаты за 24 ч и более до срока',
+        'Макет: приложён',
         '',
-        '👤 Исполнитель: Анна А.',
-        '👤 Клиент: Иван И.',
+        'Исполнитель: Анна А.',
+        'Клиент: Иван И.',
         `Предоплата ${formatMoney(50_000)} ждёт оплаты`,
       ].join('\n'),
     );
     expect(text).not.toContain(DEMO_CARD_PREFIX);
   });
 
-  it('демо-клиент, closed — префикс ДЕМО первой строкой, экранированное название', () => {
+  it('демо-клиент, closed: префикс «Демо» первой строкой, экранированное название, тест отдельной строкой', () => {
     const paidAt = new Date('2026-09-28T11:03:00Z');
     const text = card(
       view({
@@ -238,15 +232,7 @@ describe('карточка (SPEC §6.4, DESIGN §6)', () => {
         title: 'Маникюр *с* покрытием',
         description: 'Гель-лак',
         clientName: 'Анна А.',
-        paymentLine: paymentLine({
-          kind: 'final',
-          state: 'received',
-          sumKopecks: 200_000,
-          at: paidAt,
-          rail: 'link',
-          provider: 'yookassa',
-          linkExpiresAt: null,
-        }),
+        paymentLines: paymentLines({ kind: 'final', state: 'received', sumKopecks: 200_000, at: paidAt, rail: 'link', provider: 'yookassa', linkExpiresAt: null }),
         receiptLine: receiptLine({ attachedAt: new Date('2026-09-28T12:00:00Z'), deadline: null, taxModeNone: false }),
       }),
     );
@@ -256,24 +242,29 @@ describe('карточка (SPEC §6.4, DESIGN §6)', () => {
         DEMO_CARD_PREFIX,
         `✅ **Маникюр \\*с\\* покрытием** #${ID}`,
         'Статус: сделка закрыта, квитанция отправлена',
-        '',
-        '📌 Гель-лак',
-        `🗓 ${formatDateTime(SCHEDULED)}`,
-        `💰 **${formatMoney(250_000)}**, предоплата **${formatMoney(50_000)}** (20\u00A0%)`,
-        '↩️ Отмена без потери предоплаты за 24 ч и более до срока',
-        '👤 Исполнитель: Анна А.',
-        '👤 Клиент: Анна А.',
-        `Остаток ${formatMoney(200_000)} получен ${formatMoment(paidAt).replace(' (МСК)', '')} по ссылке ЮKassa. 🧪 Тестовый магазин, деньги не списывались`,
+        `Когда: ${formatDateTime(SCHEDULED)}`,
+        `Сумма: **${formatMoney(250_000)}**, предоплата **${formatMoney(50_000)}** (20${NB}%)`,
+        'Отмена: без потери предоплаты за 24 ч и более до срока',
+        'Уточнения: Гель-лак',
+        'Исполнитель: Анна А.',
+        'Клиент: Анна А.',
+        `Остаток ${formatMoney(200_000)} получен 28 сен, 14:03 по ссылке ЮKassa`,
+        '🧪 Тестовый магазин, деньги не списывались',
         'Чек приложен 28 сен (содержимое не проверялось)',
       ].join('\n'),
     );
   });
 
-  it('без предоплаты — вместо процента «без предоплаты», без даты — «без даты»', () => {
-    const text = card(view({ prepaymentKopecks: 0, remainingKopecks: 250_000, scheduledAt: null }));
-    expect(text).toContain(`💰 **${formatMoney(250_000)}**, без предоплаты`);
-    expect(text).toContain('🗓 без даты');
-    expect(text).not.toContain('предоплата **');
+  it('исполнитель демо-сделки: «демо» после номера', () => {
+    expect(card(view({ demo: true })).split('\n')[0]).toBe(`⏳ **Маникюр с покрытием** #${ID}, демо`);
+  });
+
+  it('без предоплаты: «без предоплаты»; без даты: «без даты, срок обсудите отдельно»; без уточнений строки нет', () => {
+    const text = card(view({ prepaymentKopecks: 0, remainingKopecks: 250_000, scheduledAt: null, description: null }));
+    expect(text).toContain(`Сумма: **${formatMoney(250_000)}**, без предоплаты`);
+    expect(text).toContain('Когда: без даты, срок обсудите отдельно');
+    expect(text).not.toContain('Уточнения:');
+    expect(text).not.toContain('(МСК)'); // времени в карточке нет, пояс не нужен
   });
 
   it('суммы выводятся через formatMoney (неразрывный пробел), а не своим форматированием', () => {
@@ -282,20 +273,23 @@ describe('карточка (SPEC §6.4, DESIGN §6)', () => {
   });
 
   it('ссылка для клиента печатается только когда она передана', () => {
-    expect(card(view({ clientLink: null }))).not.toContain('🔗 Ссылка для клиента');
+    expect(card(view({ clientLink: null }))).not.toContain('Ссылка для клиента');
     expect(card(view({ clientLink: LINK }))).toContain(`\`${LINK}\``);
   });
 
-  it('версия > 1: строка «Версия N, условия изменены …» под статусом; у версии 1 её нет', () => {
+  it('версия > 1: строка «Версия N, условия изменены …» под статусом; у версии 1 её нет; пояс у срока', () => {
     const at = new Date('2026-09-26T11:24:00Z');
     const lines = card(view({ version: 2, versionCreatedAt: at })).split('\n');
-    expect(lines[2]).toBe(`Версия 2, условия изменены ${formatMoment(at)}`);
+    expect(lines[2]).toBe('Версия 2, условия изменены 26 сен, 14:24');
+    expect(lines.find((l) => l.startsWith('Когда:'))).toContain('(МСК)');
     expect(card(view({ version: 1, versionCreatedAt: at }))).not.toContain('Версия');
+    // Без срока пояс переезжает к первому времени в карточке.
+    expect(card(view({ version: 2, versionCreatedAt: at, scheduledAt: null })).split('\n')[2]).toBe('Версия 2, условия изменены 26 сен, 14:24 (МСК)');
   });
 
-  it('многострочное описание не увеличивает число строк', () => {
+  it('многострочные уточнения не увеличивают число строк', () => {
     const text = card(view({ description: 'Первая строка\nвторая строка\n\nтретья' }));
-    expect(text).toContain('📌 Первая строка вторая строка третья');
+    expect(text).toContain('Уточнения: Первая строка вторая строка третья');
   });
 
   it('держит лимиты 12 строк и 1200 символов на самой перегруженной карточке', () => {
@@ -312,15 +306,7 @@ describe('карточка (SPEC §6.4, DESIGN §6)', () => {
         cancelRule: 'nonrefundable',
         hasPhoto: true,
         clientName: 'Иван И.',
-        paymentLine: paymentLine({
-          kind: 'prepayment',
-          state: 'received',
-          sumKopecks: 50_000_000,
-          at: SCHEDULED,
-          rail: 'transfer',
-          provider: 'manual',
-          linkExpiresAt: null,
-        }),
+        paymentLines: paymentLines({ kind: 'prepayment', state: 'received', sumKopecks: 50_000_000, at: SCHEDULED, rail: 'link', provider: 'yookassa', linkExpiresAt: null }),
         receiptLine: receiptLine({ attachedAt: null, deadline: new Date('2026-10-09T20:59:00Z'), taxModeNone: false }),
         refundLine: refundLine({ prepaymentKopecks: 50_000_000, expected: false }),
         clientLink: LINK,
@@ -328,7 +314,7 @@ describe('карточка (SPEC §6.4, DESIGN §6)', () => {
     );
     expect(text.split('\n').length).toBeLessThanOrEqual(12);
     expect(text.length).toBeLessThanOrEqual(1200);
-    expect(text).toContain('…'); // описание обрезано, а не выкинуто
+    expect(text).toContain('…'); // уточнения обрезаны, а не выкинуты
   });
 
   it('версия + реквизиты перевода в демо-карточке: 12 строк, строка версии уступает место', () => {
@@ -341,11 +327,12 @@ describe('карточка (SPEC §6.4, DESIGN §6)', () => {
         hasPhoto: true,
         version: 2,
         versionCreatedAt: new Date('2026-09-26T11:24:00Z'),
-        transferLines: ['Переведите **500 ₽** по реквизитам:', '`СБП +7 900`', '🧪 Перевод продукт не видит'],
+        paymentLines: ['Переведите **500 ₽** по реквизитам', '`СБП +7 900`', '🧪 Перевод продукт не видит'],
       }),
     );
     expect(text.split('\n').length).toBeLessThanOrEqual(12);
     expect(text).toContain('Переведите **500 ₽**'); // реквизиты важнее строки версии
+    expect(text).not.toContain('Макет:'); // макет уходит первым
   });
 
   it('лимиты соблюдаются для всех статусов и ролей', () => {
@@ -359,15 +346,7 @@ describe('карточка (SPEC §6.4, DESIGN §6)', () => {
             clientLink: role === 'seller' ? LINK : null,
             hasPhoto: true,
             description: 'о'.repeat(600),
-            paymentLine: paymentLine({
-              kind: 'final',
-              state: 'awaiting',
-              sumKopecks: 200_000,
-              at: null,
-              rail: null,
-              provider: null,
-              linkExpiresAt: null,
-            }),
+            paymentLines: paymentLines({ kind: 'final', state: 'received', sumKopecks: 200_000, at: SCHEDULED, rail: 'link', provider: 'yookassa', linkExpiresAt: null }),
             receiptLine: receiptLine({ attachedAt: null, deadline: new Date('2026-10-09T20:59:00Z'), taxModeNone: false }),
             version: 3,
             versionCreatedAt: new Date('2026-09-26T11:24:00Z'),
@@ -446,47 +425,28 @@ describe('статусы', () => {
 });
 
 describe('строки карточки', () => {
-  it('строка оплаты по состояниям', () => {
-    expect(
-      paymentLine({ kind: 'final', state: 'awaiting', sumKopecks: 200_000, at: null, rail: null, provider: null, linkExpiresAt: null }),
-    ).toBe(`Остаток ${formatMoney(200_000)} ждёт оплаты`);
+  it('строки оплаты по состояниям', () => {
+    const base = { at: null, rail: null, provider: null, linkExpiresAt: null } as const;
+    expect(paymentLines({ ...base, kind: 'final', state: 'awaiting', sumKopecks: 200_000 })).toEqual([`Остаток ${formatMoney(200_000)} ждёт оплаты`]);
 
     const expires = new Date('2026-09-20T12:03:00Z');
-    expect(
-      paymentLine({
-        kind: 'prepayment',
-        state: 'link_issued',
-        sumKopecks: 50_000,
-        at: null,
-        rail: 'link',
-        provider: 'yookassa',
-        linkExpiresAt: expires,
-      }),
-    ).toBe(`Ссылка на оплату ${formatMoney(50_000)} действует до ${formatMoment(expires)}`);
-
-    expect(
-      paymentLine({
-        kind: 'prepayment',
-        state: 'claimed',
-        sumKopecks: 50_000,
-        at: expires,
-        rail: 'transfer',
-        provider: 'manual',
-        linkExpiresAt: null,
-      }),
-    ).toContain('клиент сообщил о переводе');
-
-    expect(
-      paymentLine({
-        kind: 'prepayment',
-        state: 'received',
-        sumKopecks: 50_000,
-        at: expires,
-        rail: 'link',
-        provider: 'tbank',
-        linkExpiresAt: null,
-      }),
-    ).toBe(`Предоплата ${formatMoney(50_000)} получена ${formatMoment(expires)} по ссылке Т-Банка (СБП). 🧪 DEMO-терминал Т-Банка, деньги не списывались`);
+    expect(paymentLines({ kind: 'prepayment', state: 'link_issued', sumKopecks: 50_000, at: null, rail: 'link', provider: 'yookassa', linkExpiresAt: expires })).toEqual([
+      `Ссылка на оплату ${formatMoney(50_000)} действует до ${formatMoment(expires)}`,
+    ]);
+    expect(paymentLines({ ...base, kind: 'prepayment', state: 'link_expired', sumKopecks: 50_000 })).toEqual([`Ссылка на оплату ${formatMoney(50_000)} истекла, нужна новая`]);
+    expect(paymentLines({ ...base, kind: 'prepayment', state: 'link_canceled', sumKopecks: 50_000, cancelReason: 'insufficient_funds' })).toEqual([
+      `Оплата ${formatMoney(50_000)} отменена: недостаточно средств`,
+    ]);
+    expect(paymentLines({ kind: 'prepayment', state: 'claimed', sumKopecks: 50_000, at: expires, rail: 'transfer', provider: 'manual', linkExpiresAt: null })).toEqual([
+      `Предоплата ${formatMoney(50_000)}: клиент сообщил о переводе ${formatMoment(expires)}. Проверьте поступление и подтвердите`,
+    ]);
+    expect(paymentLines({ kind: 'prepayment', state: 'received', sumKopecks: 50_000, at: expires, rail: 'transfer', provider: 'manual', linkExpiresAt: null })).toEqual([
+      `Предоплата ${formatMoney(50_000)} получена ${formatMoment(expires)} переводом по реквизитам`,
+    ]);
+    expect(paymentLines({ kind: 'prepayment', state: 'received', sumKopecks: 50_000, at: expires, rail: 'link', provider: 'tbank', linkExpiresAt: null })).toEqual([
+      `Предоплата ${formatMoney(50_000)} получена ${formatMoment(expires)} по ссылке Т-Банка (СБП)`,
+      '🧪 DEMO-терминал Т-Банка, деньги не списывались',
+    ]);
   });
 
   it('строка чека: приложен / дедлайн / без чека', () => {

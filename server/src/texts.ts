@@ -16,6 +16,7 @@ import {
   formatTime,
   formatWeekdayDay,
   listDateTime,
+  zoneLabel,
   zoneOnce,
 } from './domain/time.js';
 
@@ -350,7 +351,7 @@ export function cancelRuleLine(rule: CancelRule): string {
   return CANCEL_RULE_AFTER_LABEL[rule];
 }
 
-// --- карточка (§6.4). Данные собирает cards.ts, здесь только текст ---
+// --- карточка (DESIGN_BRIEF §3). Данные собирает cards.ts, здесь только текст ---
 
 export type CardView = {
   publicId: string;
@@ -367,9 +368,8 @@ export type CardView = {
   sellerName: string;
   clientName: string | null;
   demo: boolean;
-  paymentLine: string | null;
-  /** Реквизиты и подсказка рейла «перевод» в карточке клиента (§6.4): заменяют строку оплаты. */
-  transferLines?: string[] | null;
+  /** Блок платежа (paymentLines или transferLines клиенту): от одной до трёх строк, пусто, если сказать нечего. */
+  paymentLines: string[];
   receiptLine: string | null;
   refundLine: string | null;
   /** Отмена после «Я перевёл(а)» без подтверждения исполнителя: сверить поступление (ЗАДАЧА_03 F7). */
@@ -392,70 +392,74 @@ function moneyLine(totalKopecks: number, prepaymentKopecks: number): string {
   return `${total}, предоплата **${formatMoney(prepaymentKopecks)}** (${percent})`;
 }
 
+const WHEN_LABEL = 'Когда:';
+
+/**
+ * Пояс в карточке пишется один раз, и лучше всего у срока: «Когда: вт 12 окт, 14:00 (МСК)» (макет §3.1). Если срока
+ * нет, пояс остаётся у первого времени в карточке (строка версии, платежа, возврата).
+ */
+function cardZoneOnce(lines: string[]): string[] {
+  const mark = ` (${zoneLabel()})`;
+  const when = lines.findIndex((l) => l.startsWith(WHEN_LABEL) && l.includes(mark));
+  if (when < 0) return zoneOnce(lines.join('\n')).split('\n');
+  return lines.map((l, i) => (i === when ? l : l.split(mark).join('')));
+}
+
+/**
+ * Карточка сделки (DESIGN_BRIEF §3.1): шапка, условия, стороны, платёж и документы. Эмодзи только в первой строке
+ * (статус) и у тестовых строк 🧪; жирным только название и суммы. Не больше 12 строк и 1 200 символов.
+ */
 export function card(v: CardView): string {
-  // Сборка параметризована бюджетом описания: если карточка не влезает в 1200 символов, сжимаем именно его.
+  // Сборка параметризована бюджетом уточнений: если карточка не влезает в 1200 символов, сжимаем именно их.
   const build = (descBudget: number): string => {
     const head: string[] = [];
     if (v.role === 'client_demo') head.push(DEMO_CARD_PREFIX);
-    head.push(`${statusEmoji(v.status)} **${esc(oneLine(v.title))}** #${v.publicId}`);
+    const demoMark = v.demo && v.role === 'seller' ? ', демо' : '';
+    head.push(`${statusEmoji(v.status)} **${esc(oneLine(v.title))}** #${v.publicId}${demoMark}`);
     head.push(`Статус: ${lowerFirst(statusText(v.status, v.role, v))}`);
-    const versionAt = head.length;
-    if (v.version && v.version > 1 && v.versionCreatedAt) {
-      head.push(`Версия ${v.version}, условия изменены ${formatMoment(v.versionCreatedAt)}`);
+    let version: string | null =
+      v.version && v.version > 1 && v.versionCreatedAt ? `Версия ${v.version}, условия изменены ${formatMoment(v.versionCreatedAt)}` : null;
+
+    let photo: string | null = v.hasPhoto ? 'Макет: приложён' : null;
+    const terms = (): string[] =>
+      [
+        `${WHEN_LABEL} ${v.scheduledAt ? formatDateTime(v.scheduledAt) : 'без даты, срок обсудите отдельно'}`,
+        `Сумма: ${moneyLine(v.totalKopecks, v.prepaymentKopecks)}`,
+        `Отмена: ${cancelRuleLine(v.cancelRule)}`,
+        v.description ? `Уточнения: ${esc(clip(oneLine(v.description), descBudget))}` : null,
+        photo,
+      ].filter((l): l is string => l !== null);
+
+    let link: string | null = v.clientLink ? `Ссылка для клиента: \`${v.clientLink}\`` : null;
+    let receipt = v.receiptLine;
+    const parties = (): string[] =>
+      [
+        `Исполнитель: ${esc(oneLine(v.sellerName))}`,
+        `Клиент: ${v.clientName ? esc(oneLine(v.clientName)) : 'ещё не открыл ссылку'}`,
+        ...v.paymentLines,
+        receipt,
+        v.refundLine,
+        v.claimLine ?? null,
+        link,
+      ].filter((l): l is string => Boolean(l));
+
+    // Переполнение по строкам: убираем необязательное по возрастанию важности (DESIGN_BRIEF §3):
+    // макет, ссылка для клиента (она же в кнопке «Скопировать ссылку»), строка версии, строка чека.
+    const count = () => head.length + (version ? 1 : 0) + terms().length + parties().length;
+    const dropOrder: (() => void)[] = [() => (photo = null), () => (link = null), () => (version = null), () => (receipt = null)];
+    for (const drop of dropOrder) {
+      if (count() <= CARD_MAX_LINES) break;
+      drop();
     }
 
-    const terms: (string | null)[] = [
-      v.description ? `📌 ${esc(clip(oneLine(v.description), descBudget))}` : null,
-      `🗓 ${v.scheduledAt ? formatDateTime(v.scheduledAt) : 'без даты'}`,
-      `💰 ${moneyLine(v.totalKopecks, v.prepaymentKopecks)}`,
-      `↩️ ${cancelRuleText(v.cancelRule)}`,
-      v.hasPhoto ? '🖼 макет приложён' : null,
-    ];
-
-    const transfer = v.transferLines?.length ? v.transferLines : null;
-    const base: (string | null)[] = [
-      `👤 Исполнитель: ${esc(oneLine(v.sellerName))}`,
-      `👤 Клиент: ${v.clientName ? esc(oneLine(v.clientName)) : 'ещё не открыл ссылку'}`,
-      ...(transfer ?? [v.paymentLine]),
-    ];
-    const receiptAt = base.length;
-    const linkAt = base.length + 3;
-    const parties: (string | null)[] = [
-      ...base,
-      v.receiptLine,
-      v.refundLine,
-      v.claimLine ?? null,
-      v.clientLink ? `🔗 Ссылка для клиента: \`${v.clientLink}\`` : null,
-    ];
-
-    // Не больше 12 строк: необязательные убираем в порядке возрастания важности: макет, ссылка, версия, строка чека.
-    const countLines = () => head.filter(Boolean).length + terms.filter(Boolean).length + parties.filter(Boolean).length;
-    const dropOrder: (() => void)[] = [
-      () => {
-        terms[4] = null; // макет приложён
-      },
-      () => {
-        parties[linkAt] = null; // ссылка для клиента (она же в кнопке «Скопировать ссылку»)
-      },
-      () => {
-        if (head.length > versionAt) head.splice(versionAt, 1); // «Версия N, условия изменены …»
-      },
-      () => {
-        parties[receiptAt] = null; // строка чека
-      },
-    ];
-    for (const dropIt of dropOrder) {
-      if (countLines() <= CARD_MAX_LINES) break;
-      dropIt();
-    }
-
-    const separators = Math.max(0, Math.min(2, CARD_MAX_LINES - countLines()));
-    const lines: string[] = [...head];
-    if (separators >= 1) lines.push('');
-    lines.push(...terms.filter((l): l is string => Boolean(l)));
-    if (separators >= 2) lines.push('');
-    lines.push(...parties.filter((l): l is string => Boolean(l)));
-    return zoneOnce(lines.join('\n'));
+    // Блоки разделяются пустой строкой, пока это укладывается в 12 строк.
+    const blanks = Math.max(0, Math.min(2, CARD_MAX_LINES - count()));
+    const lines = [...head, ...(version ? [version] : [])];
+    if (blanks >= 1) lines.push('');
+    lines.push(...terms());
+    if (blanks >= 2) lines.push('');
+    lines.push(...parties());
+    return cardZoneOnce(lines.slice(0, CARD_MAX_LINES)).join('\n');
   };
 
   let budget = DESCRIPTION_BUDGET;
@@ -467,9 +471,10 @@ export function card(v: CardView): string {
   return text.length > CARD_MAX_CHARS ? clip(text, CARD_MAX_CHARS) : text;
 }
 
-// --- строки внутри карточки ---
+// --- строки внутри карточки (DESIGN_BRIEF §3.1, блок платежа и документов) ---
 
-export function paymentLine(a: {
+/** Строки платежа: одна, а у оплаты тестовым магазином ещё отдельная строка 🧪 (§2.1: тестовая пометка своей строкой). */
+export function paymentLines(a: {
   kind: 'prepayment' | 'final';
   state: 'awaiting' | 'link_issued' | 'link_expired' | 'link_canceled' | 'transfer_chosen' | 'claimed' | 'received';
   sumKopecks: number;
@@ -481,33 +486,35 @@ export function paymentLine(a: {
   cancelReason?: string | null;
   /** Кто читает строку: «клиент сообщил о переводе» исполнителю и «вы сообщили» клиенту. */
   viewer?: 'seller' | 'client';
-}): string {
+}): string[] {
   const label = a.kind === 'prepayment' ? 'Предоплата' : 'Остаток';
   const sum = formatMoney(a.sumKopecks);
   switch (a.state) {
     case 'awaiting':
-      return `${label} ${sum} ждёт оплаты`;
+      return [`${label} ${sum} ждёт оплаты`];
     case 'link_issued':
-      return a.linkExpiresAt ? `Ссылка на оплату ${sum} действует до ${formatMoment(a.linkExpiresAt)}` : `Ссылка на оплату ${sum} создана`;
+      return [a.linkExpiresAt ? `Ссылка на оплату ${sum} действует до ${formatMoment(a.linkExpiresAt)}` : `Ссылка на оплату ${sum} создана`];
     case 'link_expired':
-      return `Ссылка на оплату ${sum} истекла, нужна новая`;
+      return [`Ссылка на оплату ${sum} истекла, нужна новая`];
     case 'link_canceled':
-      return a.cancelReason ? `Оплата ${sum} отменена: ${cancelReasonText(a.cancelReason)}` : `Оплата ${sum} отменена, можно создать новую ссылку`;
+      return [a.cancelReason ? `Оплата ${sum} отменена: ${cancelReasonText(a.cancelReason)}` : `Оплата ${sum} отменена, можно создать новую ссылку`];
     case 'transfer_chosen':
-      return `${label} ${sum}: клиент выбрал перевод по реквизитам, ждём перевода`;
+      return [`${label} ${sum}: клиент выбрал перевод по реквизитам, ждём перевода`];
     case 'claimed': {
       const when = a.at ? ` ${formatMoment(a.at)}` : '';
-      return a.viewer === 'client'
-        ? `Вы сообщили о переводе ${sum}${when}. Ждём подтверждения исполнителя`
-        : `${label} ${sum}: клиент сообщил о переводе${when}. Проверьте поступление и подтвердите`;
+      return [
+        a.viewer === 'client'
+          ? `Вы сообщили о переводе ${sum}${when}. Ждём подтверждения исполнителя`
+          : `${label} ${sum}: клиент сообщил о переводе${when}. Проверьте поступление и подтвердите`,
+      ];
     }
     case 'received': {
       const verb = a.kind === 'prepayment' ? 'получена' : 'получен';
       const when = a.at ? ` ${formatMoment(a.at)}` : '';
       const how = a.rail && a.provider ? ` ${railHow(a.rail, a.provider)}` : '';
+      // Оплата тестовым магазином: отдельной строкой, что денег не было (ЗАДАЧА_04 A4, SPEC §18).
       const test = a.rail && a.provider ? railTestLine(a.rail, a.provider) : null;
-      // Оплата тестовым магазином: прямо в строке, что денег не было (ЗАДАЧА_04 A4, SPEC §18).
-      return `${label} ${sum} ${verb}${when}${how}${test ? `. ${test}` : ''}`;
+      return [`${label} ${sum} ${verb}${when}${how}`, ...(test ? [test] : [])];
     }
   }
 }
@@ -699,7 +706,7 @@ export function N16(a: { id: string; context: string }): string {
  */
 export function transferLines(a: { sumKopecks: number; payoutDetails: string }): string[] {
   return [
-    `Переведите **${formatMoney(a.sumKopecks)}** по реквизитам и нажмите «${BTN.transferDone}»:`,
+    `Переведите **${formatMoney(a.sumKopecks)}** по реквизитам и нажмите «${BTN.transferDone}»`,
     `\`${esc(oneLine(a.payoutDetails))}\``,
     testRailNotice('manual'),
   ];

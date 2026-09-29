@@ -170,8 +170,8 @@ describe.skipIf(!DB)('«Повторить сделку»: API и сквозно
 
     // Исполнителю: карточка без ссылки и кнопок шеринга, затем «Карточка отправлена …»
     const sellerCard = h.max.byMid(await cardMid(h, id, 'seller'));
-    expect(sellerCard?.text).not.toContain('🔗 Ссылка для клиента');
-    expect(sellerCard?.text).toContain(`👤 Клиент: Пользователь${CLIENT}`);
+    expect(sellerCard?.text).not.toContain('Ссылка для клиента:');
+    expect(sellerCard?.text).toContain(`Клиент: Пользователь${CLIENT}`);
     expect(sellerCard?.buttons.map((b) => b.text)).not.toContain(texts.BTN.sendToMax);
     expect(sellerCard?.buttons.map((b) => b.text)).not.toContain(texts.BTN.copyLink);
     expect(h.max.inChat(SELLER_CHAT).map((m) => m.text)).toContain(texts.REPEAT_CARD_SENT(`Пользователь${CLIENT}`));
@@ -187,7 +187,7 @@ describe.skipIf(!DB)('«Повторить сделку»: API и сквозно
     const [deal] = await h.query<{ client_user_id: number | null }>('SELECT client_user_id FROM deals WHERE public_id = $1', [res.json.deal.public_id]);
     expect(deal.client_user_id).toBeNull();
     expect(h.max.inChat(CLIENT_CHAT)).toHaveLength(0);
-    expect(h.max.byMid(await cardMid(h, res.json.deal.public_id, 'seller'))?.text).toContain('🔗 Ссылка для клиента');
+    expect(h.max.byMid(await cardMid(h, res.json.deal.public_id, 'seller'))?.text).toContain('Ссылка для клиента:');
   });
 
   it('repeat_of без same_client — обычная сделка, клиента в ответе нет', async () => {
