@@ -125,7 +125,7 @@ export async function reply(
     await answerWithCard(ctx, deps, bundle, card.role, { note: o.note, keyboard: o.keyboard });
     return card.mid;
   }
-  await answerWithText(ctx, deps, o.text ?? o.note ?? 'Готово.', o.keyboard);
+  await answerWithText(ctx, deps, o.text ?? o.note ?? texts.DONE_ACK, o.keyboard);
   return undefined;
 }
 
@@ -150,7 +150,7 @@ export async function publishResult(
 }
 
 function shortAck(result: ServiceResult): string {
-  return result.statusChanged ? 'Готово — карточка обновлена.' : 'Готово.';
+  return result.statusChanged ? texts.DONE_CARD_UPDATED : texts.DONE_ACK;
 }
 
 /**

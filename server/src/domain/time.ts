@@ -86,54 +86,106 @@ export function zoneLabel(tz: string = DEFAULT_TZ): string {
   return tz === DEFAULT_TZ ? 'МСК' : tz;
 }
 
-/** «сб, 27 сен, 14:00 (МСК)»; год добавляется, если он не текущий (SPEC §6). */
+/** «вт 12 окт» (с годом, если он не текущий): день недели строчными, месяц сокращённо без точки (DESIGN_BRIEF §2.4). */
+function dayLabel(p: Parts, cur: Parts, weekday: boolean): string {
+  const year = p.year === cur.year ? '' : ` ${p.year}`;
+  const base = `${p.day} ${MONTHS_SHORT[p.month - 1]}${year}`;
+  return weekday ? `${WEEKDAYS[p.weekday]} ${base}` : base;
+}
+
+function hhmm(p: Parts): string {
+  return `${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`;
+}
+
+/** «вт 12 окт, 14:00 (МСК)»; год добавляется, если он не текущий: «вт 12 окт 2027, 14:00 (МСК)». */
 export function formatDateTime(date: Date, tz: string = DEFAULT_TZ, now: Date = new Date()): string {
   const p = partsIn(date, tz);
-  const cur = partsIn(now, tz);
-  const year = p.year === cur.year ? '' : ` ${p.year}`;
-  const hh = String(p.hour).padStart(2, '0');
-  const mm = String(p.minute).padStart(2, '0');
-  return `${WEEKDAYS[p.weekday]}, ${p.day} ${MONTHS_SHORT[p.month - 1]}${year}, ${hh}:${mm} (${zoneLabel(tz)})`;
+  return `${dayLabel(p, partsIn(now, tz), true)}, ${hhmm(p)} (${zoneLabel(tz)})`;
+}
+
+/** «12 окт, 14:07 (МСК)»: момент без дня недели для строк платежей, версий и отметок сторон. */
+export function formatMoment(date: Date, tz: string = DEFAULT_TZ, now: Date = new Date()): string {
+  return `${formatDayTime(date, tz, now)} (${zoneLabel(tz)})`;
+}
+
+/** «12 окт, 14:07»: то же без пояса, для строк списков (пояс пишется один раз над списком). */
+export function formatDayTime(date: Date, tz: string = DEFAULT_TZ, now: Date = new Date()): string {
+  const p = partsIn(date, tz);
+  return `${dayLabel(p, partsIn(now, tz), false)}, ${hhmm(p)}`;
+}
+
+/** «9 ноя» (с годом, если он не текущий): сроки без времени, «Чек: до 9 ноя». */
+export function formatDayMonthShort(date: Date, tz: string = DEFAULT_TZ, now: Date = new Date()): string {
+  return dayLabel(partsIn(date, tz), partsIn(now, tz), false);
+}
+
+/** «вт 29 сен» (с годом, если он не текущий): заголовок дня в утренней сводке. */
+export function formatWeekdayDay(date: Date, tz: string = DEFAULT_TZ, now: Date = new Date()): string {
+  return dayLabel(partsIn(date, tz), partsIn(now, tz), true);
+}
+
+/** «14:00» по поясу приложения. */
+export function formatTime(date: Date, tz: string = DEFAULT_TZ): string {
+  return hhmm(partsIn(date, tz));
 }
 
 /**
- * День и время для списков: `{ day: 'Пн 28 сен', time: '14:00' }`; год — если не текущий.
- * Метку пояса список ставит один раз в заголовке, а не в каждой строке.
+ * Дата и время строки списка: «сегодня, 14:00», «завтра, 14:00», иначе «пн 28 сен, 14:00» (DESIGN_BRIEF §2.4).
+ * Словами только в списках: список собирается по запросу, а карточка и уведомление остаются в ленте, и через
+ * сутки «завтра» в них стало бы неправдой.
  */
-export function dayAndTime(date: Date, tz: string = DEFAULT_TZ, now: Date = new Date()): { day: string; time: string } {
+export function listDateTime(date: Date, tz: string = DEFAULT_TZ, now: Date = new Date()): string {
   const p = partsIn(date, tz);
-  const cur = partsIn(now, tz);
-  const wd = WEEKDAYS[p.weekday];
-  const year = p.year === cur.year ? '' : ` ${p.year}`;
-  return {
-    day: `${wd[0].toUpperCase()}${wd.slice(1)} ${p.day} ${MONTHS_SHORT[p.month - 1]}${year}`,
-    time: `${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`,
-  };
+  const key = (x: Parts) => x.year * 10_000 + x.month * 100 + x.day;
+  const today = partsIn(now, tz);
+  const tomorrow = partsIn(new Date(now.getTime() + DAY_MS), tz);
+  if (key(p) === key(today)) return `сегодня, ${hhmm(p)}`;
+  if (key(p) === key(tomorrow)) return `завтра, ${hhmm(p)}`;
+  return `${dayLabel(p, today, true)}, ${hhmm(p)}`;
 }
 
-/** «27.09» — короткая дата для строк оплаты и чека. */
-export function formatDateShort(date: Date, tz: string = DEFAULT_TZ): string {
-  const p = partsIn(date, tz);
-  return `${String(p.day).padStart(2, '0')}.${String(p.month).padStart(2, '0')}`;
+/**
+ * Пояс в сообщении пишется один раз (DESIGN_BRIEF §2.4, чек-лист п. 5): у первого времени «(МСК)» остаётся,
+ * у остальных убирается. Строки собираются с поясом у каждого времени, а сообщение целиком проходит через эту
+ * функцию, поэтому пропустить пояс, если время в сообщении одно, нельзя.
+ */
+export function zoneOnce(text: string, tz: string = DEFAULT_TZ): string {
+  const mark = ` (${zoneLabel(tz)})`;
+  const first = text.indexOf(mark);
+  if (first < 0) return text;
+  const head = text.slice(0, first + mark.length);
+  return head + text.slice(first + mark.length).split(mark).join('');
 }
 
-/** «27.09 14:03 (МСК)» — дата и время без дня недели. */
-export function formatDateTimeShort(date: Date, tz: string = DEFAULT_TZ): string {
+/** Полная дата-время для квитанции: «15 окт 2026, 19:02»; год всегда, документ живёт дольше года. */
+export function formatDocDateTime(date: Date, tz: string = DEFAULT_TZ): string {
   const p = partsIn(date, tz);
-  return `${formatDateShort(date, tz)} ${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')} (${zoneLabel(tz)})`;
+  return `${p.day} ${MONTHS_SHORT[p.month - 1]} ${p.year}, ${hhmm(p)}`;
 }
 
-/** «9 октября» — для текста про дедлайн чека. */
+/** «вт 12 окт 2026, 14:00» для квитанции: день недели и год всегда. */
+export function formatDocWhen(date: Date, tz: string = DEFAULT_TZ): string {
+  const p = partsIn(date, tz);
+  return `${WEEKDAYS[p.weekday]} ${p.day} ${MONTHS_SHORT[p.month - 1]} ${p.year}, ${hhmm(p)}`;
+}
+
+/** «9 октября» (полное название месяца) для текстов, где срок стоит внутри фразы. */
 export function formatDayMonth(date: Date, tz: string = DEFAULT_TZ): string {
   const p = partsIn(date, tz);
   return `${p.day} ${MONTHS_GEN[p.month - 1]}`;
 }
 
-/** Полная дата-время для квитанции: «27.09.2026 14:03 (МСК)». */
+/** «27.09.2026 14:03 (МСК)»: прежний формат квитанции, остаётся до её перевода на formatDocDateTime (ЗАДАЧА_07 п. 5). */
 export function formatFull(date: Date, tz: string = DEFAULT_TZ): string {
   const p = partsIn(date, tz);
   const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(p.day)}.${pad(p.month)}.${p.year} ${pad(p.hour)}:${pad(p.minute)} (${zoneLabel(tz)})`;
+  return `${pad(p.day)}.${pad(p.month)}.${p.year} ${hhmm(p)} (${zoneLabel(tz)})`;
+}
+
+/** «27.09»: прежний короткий формат квитанции (см. formatFull). */
+export function formatDateShort(date: Date, tz: string = DEFAULT_TZ): string {
+  const p = partsIn(date, tz);
+  return `${String(p.day).padStart(2, '0')}.${String(p.month).padStart(2, '0')}`;
 }
 
 /** 9-е число месяца, следующего за оплатой — крайний срок чека НПД (ст. 14 422-ФЗ). */

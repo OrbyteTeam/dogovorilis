@@ -8,27 +8,27 @@ export const taxModeSchema = z.enum(['npd', 'ip_kkt', 'none']);
 export const templateSchema = z.enum(['beauty', 'lesson', 'repair', 'custom_order', 'freelance', 'free']);
 
 export const profileSchema = z.object({
-  display_name: z.string().trim().min(2, 'Имя — от 2 до 40 символов').max(40, 'Имя — от 2 до 40 символов'),
+  display_name: z.string().trim().min(2, 'Имя от 2 до 40 символов').max(40, 'Имя от 2 до 40 символов'),
   tax_mode: taxModeSchema,
-  payout_details: z.string().max(200, 'Реквизиты — до 200 символов').nullish(),
+  payout_details: z.string().max(200, 'Реквизиты до 200 символов').nullish(),
   transfer_enabled: z.boolean().default(true),
   link_enabled: z.boolean().default(true),
   default_cancel_rule: cancelRuleSchema.default('free_24h'),
   // Утренняя сводка: минуты от полуночи по МСК, 06:00–12:00 с шагом 30; null — выключена; нет поля — не менять (ЗАДАЧА_04 B2).
   digest_time: z
     .number()
-    .refine(isValidDigestTime, 'Время сводки — с 06:00 до 12:00, шаг 30 минут')
+    .refine(isValidDigestTime, 'Время сводки с 06:00 до 12:00, шаг 30 минут')
     .nullable()
     .optional(),
 });
 
 export const createDealSchema = z.object({
   template: templateSchema,
-  title: z.string().trim().min(2, 'Название — от 2 до 80 символов').max(80, 'Название — от 2 до 80 символов'),
-  description: z.string().max(1000, 'Уточнения — до 1000 символов').nullish(),
+  title: z.string().trim().min(2, 'Название от 2 до 80 символов').max(80, 'Название от 2 до 80 символов'),
+  description: z.string().max(1000, 'Уточнения до 1000 символов').nullish(),
   scheduled_at: z.string().datetime({ offset: true }).nullish(),
-  total_rub: z.number().int('Сумма — целое число рублей').min(1, 'Сумма — от 1 до 1 000 000 ₽').max(1_000_000, 'Сумма — от 1 до 1 000 000 ₽'),
-  prepayment_rub: z.number().int('Предоплата — целое число рублей').min(0).max(1_000_000),
+  total_rub: z.number().int('Сумма целым числом рублей').min(1, 'Сумма от 1 до 1 000 000 ₽').max(1_000_000, 'Сумма от 1 до 1 000 000 ₽'),
+  prepayment_rub: z.number().int('Предоплата целым числом рублей').min(0).max(1_000_000),
   cancel_rule: cancelRuleSchema,
   photo_max_token: z.string().nullish(),
   profile: profileSchema.optional(),

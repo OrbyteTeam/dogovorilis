@@ -152,7 +152,7 @@ describe.skipIf(!DB)('платежи: провайдер — источник и
       expect(yk.created).toHaveLength(1);
       const rows = await payments(id);
       expect(rows.map((r) => r.status)).toEqual(['canceled', 'pending']);
-      expect(labels(clientCard)).toContain(texts.BTN.goToPayment);
+      expect(labels(clientCard)).toContain(texts.payButtonLabel(50_000)); // «Оплатить 500 ₽», DESIGN_BRIEF §2.8
     }, TIMEOUT);
   });
 
@@ -179,7 +179,7 @@ describe.skipIf(!DB)('платежи: провайдер — источник и
       const mark = h.max.sent.length;
       await h.press(CLIENT, CLIENT_CHAT, `tr:c:${id}:${pid}`, clientCard);
       expect(h.max.byMid(clientCard)!.text.startsWith(texts.E1)).toBe(true);
-      expect(h.max.sent.slice(mark).some((m) => m.kind === 'send' && m.text.includes('сообщает о переводе'))).toBe(false);
+      expect(h.max.sent.slice(mark).some((m) => m.kind === 'send' && m.text.includes('сообщил(а) о переводе'))).toBe(false);
     }, TIMEOUT);
 
     it('кнопки перевода с id ссылочного платежа → E1, ссылка жива', async () => {
@@ -216,7 +216,7 @@ describe.skipIf(!DB)('платежи: провайдер — источник и
       // строка возврата в карточках обеих сторон
       expect(h.max.byMid(sellerCard)!.text).toContain(claim);
       expect(h.max.byMid(clientCard)!.text).toContain(claim);
-      expect(h.max.byMid(clientCard)!.text).toContain('проверьте поступление и верните при необходимости');
+      expect(h.max.byMid(clientCard)!.text).toContain('Проверьте поступление и верните при необходимости');
       // «Предоплата …: ожидается возврат» не пишем — получение предоплаты никто не подтверждал
       expect(h.max.byMid(clientCard)!.text).not.toContain('ожидается возврат');
     }, TIMEOUT);

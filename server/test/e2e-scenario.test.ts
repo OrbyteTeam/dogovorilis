@@ -184,7 +184,7 @@ describe.skipIf(!DB)('сквозной сценарий', () => {
     await h.start(CLIENT, CLIENT_CHAT, `d_${id}`);
     const rows = await h.query<{ client_user_id: number }>('SELECT client_user_id FROM deals WHERE public_id = $1', [id]);
     expect(rows[0].client_user_id).toBe(CLIENT);
-    expect(h.max.inChat(CLIENT_CHAT).map((m) => m.text).join('\n')).toContain('предлагает договорённость'); // S2
+    expect(h.max.inChat(CLIENT_CHAT).map((m) => m.text).join('\n')).toContain('предлагает сделку'); // S2
     expect(h.max.inChat(SELLER_CHAT).map((m) => m.text).join('\n')).toContain('открыл(а) карточку'); // N1
 
     const clientCard = await cardMid(h, id, 'client');

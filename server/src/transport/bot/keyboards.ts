@@ -4,7 +4,7 @@
 import { Keyboard } from '@maxhub/max-bot-api';
 import type { Button } from '@maxhub/max-bot-api/types';
 import { botUsername } from '../../config.js';
-import { BTN, shareInvite } from '../../texts.js';
+import { BTN, payButtonLabel, shareInvite } from '../../texts.js';
 import type { AttachmentRequest } from '../../integrations/max/gateway.js';
 import type { CardRole, DealBundle, Payment, PaymentKind } from '../../types.js';
 import { livePayment, remaining } from '../../types.js';
@@ -188,7 +188,7 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
       // Живая ссылка вытесняет выбор рейла: пока она действует, клиенту нужны «Перейти» и «Проверить».
       const live = liveFor(bundle, status === 'awaiting_prepayment' ? 'prepayment' : 'final');
       if (live?.rail === 'link' && live.status === 'pending' && live.confirmationUrl) {
-        rows.push([link(BTN.goToPayment, live.confirmationUrl)]);
+        rows.push([link(payButtonLabel(live.amountKopecks), live.confirmationUrl)]);
         rows.push([callback(BTN.checkPayment, cb('pc', id, undefined, live.id))]);
       } else if (live?.rail === 'transfer' && live.status === 'pending') {
         // Реквизиты уже в тексте карточки (§6.4) — здесь только «перевёл» и отказ от этого способа.
@@ -225,7 +225,7 @@ export function cardKeyboard(bundle: DealBundle, role: CardRole, o: CardKeyboard
 export function linkPaymentKeyboard(publicId: string, payment: Payment): AttachmentRequest {
   if (payment.status === 'pending' && payment.confirmationUrl) {
     return keyboard([
-      [link(BTN.goToPayment, payment.confirmationUrl)],
+      [link(payButtonLabel(payment.amountKopecks), payment.confirmationUrl)],
       [callback(BTN.checkPayment, cb('pc', publicId, undefined, payment.id))],
     ]);
   }

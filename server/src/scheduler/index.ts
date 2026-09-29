@@ -15,6 +15,7 @@ import { remaining, type DealBundle, type Reminder } from '../types.js';
 import * as dealService from '../domain/deal/service.js';
 import * as digest from '../domain/reminder/digest.js';
 import { isDemoAccelerated, isSystemAction } from '../domain/reminder/plan.js';
+import { receiptDeadline } from '../domain/time.js';
 import { displayName, syncCards } from '../transport/bot/cards.js';
 import { digestKeyboard, openKeyboard } from '../transport/bot/keyboards.js';
 import { clientName, deliver, notifyForEvents } from '../transport/bot/notify.js';
@@ -168,7 +169,8 @@ function reminderMessage(reminder: Reminder, bundle: DealBundle): string {
     title: version.title,
     sumKopecks: kind === 'payment_due' || kind === 'payment_overdue' ? remaining(version) : version.prepaymentKopecks,
     scheduledAt: version.scheduledAt,
-    deadline: deal.paidAt,
+    // Срок чека: 9-е число следующего месяца (ст. 14 422-ФЗ), а не дата оплаты: в тексте «срок до 9 ноя».
+    deadline: deal.paidAt ? receiptDeadline(deal.paidAt, timezone()) : null,
     accelerated: deal.demo && isDemoAccelerated(kind),
   });
 }

@@ -84,7 +84,7 @@ describe.skipIf(!DB)('сделка-пример из чата', () => {
     const id = await onlyDealPublicId(h);
 
     await h.start(CLIENT, CLIENT_CHAT, `d_${id}`);
-    expect(h.max.inChat(CLIENT_CHAT).map((m) => m.text).join('\n')).toContain('предлагает договорённость'); // S2
+    expect(h.max.inChat(CLIENT_CHAT).map((m) => m.text).join('\n')).toContain('предлагает сделку'); // S2
     expect(h.max.inChat(SELLER_CHAT).map((m) => m.text).join('\n')).toContain('открыл(а) карточку'); // N1
 
     await h.press(CLIENT, CLIENT_CHAT, `cf:${id}`, await cardMid(h, id, 'client'));

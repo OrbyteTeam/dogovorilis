@@ -80,7 +80,7 @@ describe.skipIf(!DB)('API мини-приложения', () => {
     expect(res.status).toBe(200);
     expect(res.json.card_sent).toBe(false); // диалога с ботом нет — карточку отправить некуда
     expect(res.json.link).toBe(`https://max.ru/t713_hakaton_max_bot?start=d_${res.json.deal.public_id}`);
-    expect(res.json.share_text).toContain('Подтвердите нашу договорённость');
+    expect(res.json.share_text).toContain('Подтвердите условия');
     expect(res.json.deal.version.total_kopecks).toBe(250_000);
     expect(res.json.deal.remaining_kopecks).toBe(200_000);
   });

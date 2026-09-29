@@ -45,7 +45,15 @@ describe('пара кнопок в ряду', () => {
 
 describe('подписи, которые реально используются', () => {
   // Если кто-то удлинит подпись, тест покажет, что она больше не влезает в пару.
-  const mustBeAlone = [BTN.payByLink, BTN.payByTransfer, BTN.editTerms, BTN.remarks, BTN.requestChanges, BTN.sendToMax, BTN.copyLink];
+  // Без эмодзи подписи короче (DESIGN_BRIEF §2.8): «Изменить условия» и «Есть замечания» теперь влезают в пару,
+  // а эти пять по-прежнему длиннее 16 знаков и всегда занимают свой ряд.
+  const mustBeAlone = [BTN.payByLink, BTN.payByTransfer, BTN.requestChanges, BTN.sendToMax, BTN.copyLink];
+
+  it('короткие ответы на один вопрос помещаются в пару', () => {
+    for (const label of [BTN.accept, BTN.remarks, BTN.newDeal, BTN.myDeals, BTN.settings, BTN.help]) {
+      expect(labelWidth(label), label).toBeLessThanOrEqual(PAIR_LABEL_WIDTH);
+    }
+  });
 
   it.each(mustBeAlone)('«%s» слишком длинная для пары', (label) => {
     expect(labelWidth(label)).toBeGreaterThan(PAIR_LABEL_WIDTH);
