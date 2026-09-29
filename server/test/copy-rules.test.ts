@@ -19,6 +19,9 @@ const SERVER_FILES = [
   'server/src/transport/bot/notify.ts',
   'server/src/domain/templates.ts',
   'server/src/transport/http/schemas.ts',
+  'server/src/transport/bot/receipt.ts',
+  'server/src/domain/receipt/pdf.ts',
+  'server/src/domain/receipt/history.ts',
 ];
 
 type Literal = { file: string; line: number; text: string };
@@ -136,7 +139,11 @@ const VOCABULARY: [RegExp, string][] = [
 
 /** «Договорённость»: только название продукта и одна фраза в /start (S1). */
 const AGREEMENT = WORD('договор[её]нност');
-const AGREEMENT_ALLOWED = ['карточка договорённости прямо в чате MAX'];
+const AGREEMENT_ALLOWED = [
+  'карточка договорённости прямо в чате MAX',
+  // Подвал квитанции дословно по DESIGN_BRIEF §8 п. 8.
+  'Квитанция фиксирует договорённость',
+];
 
 describe('словарь (DESIGN_BRIEF §2.7)', () => {
   it.each(checkedFiles())('в текстах %s нет запрещённых слов', (file) => {

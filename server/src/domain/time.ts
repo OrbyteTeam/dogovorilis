@@ -175,19 +175,6 @@ export function formatDayMonth(date: Date, tz: string = DEFAULT_TZ): string {
   return `${p.day} ${MONTHS_GEN[p.month - 1]}`;
 }
 
-/** «27.09.2026 14:03 (МСК)»: прежний формат квитанции, остаётся до её перевода на formatDocDateTime (ЗАДАЧА_07 п. 5). */
-export function formatFull(date: Date, tz: string = DEFAULT_TZ): string {
-  const p = partsIn(date, tz);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(p.day)}.${pad(p.month)}.${p.year} ${hhmm(p)} (${zoneLabel(tz)})`;
-}
-
-/** «27.09»: прежний короткий формат квитанции (см. formatFull). */
-export function formatDateShort(date: Date, tz: string = DEFAULT_TZ): string {
-  const p = partsIn(date, tz);
-  return `${String(p.day).padStart(2, '0')}.${String(p.month).padStart(2, '0')}`;
-}
-
 /** 9-е число месяца, следующего за оплатой — крайний срок чека НПД (ст. 14 422-ФЗ). */
 export function receiptDeadline(paidAt: Date, tz: string = DEFAULT_TZ): Date {
   const p = partsIn(paidAt, tz);
