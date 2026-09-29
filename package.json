@@ -16,11 +16,12 @@
     "dev:server": "npm run dev -w server",
     "dev:webapp": "npm run dev -w webapp",
     "start": "npm run start -w server",
-    "test": "vitest run --root server",
+    "test": "vitest run --root server && vitest run --root webapp",
     "lint": "npm run typecheck",
     "check:secrets": "node scripts/check-secrets.mjs",
-    "typecheck": "tsc -p server/tsconfig.test.json --noEmit && tsc -p webapp/tsconfig.json --noEmit",
-    "test:e2e": "vitest run --root server"
+    "typecheck": "tsc -p server/tsconfig.test.json --noEmit && tsc -p webapp/tsconfig.test.json --noEmit",
+    "test:e2e": "vitest run --root server",
+    "test:webapp": "vitest run --root webapp"
   },
   "overrides": {
     "vite": "7.3.6"

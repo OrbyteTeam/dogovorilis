@@ -545,3 +545,70 @@
   gap: var(--spacing-size-xs);
   overflow-wrap: anywhere;
 }
+
+/* ───────── Нижняя панель разделов (ЗАДАЧА_08 A): «Новая · Сделки · Настройки» ─────────
+   Высота панели без safe area — 56 px; экран и тост поднимаются на неё, чтобы ничего не пряталось под панелью. */
+.dg-tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 90;
+  background-color: var(--background-primary);
+  border-top: 1px solid var(--divider-secondary);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.dg-tabbar__inner {
+  display: flex;
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+.dg-tab {
+  flex: 1 1 0;
+  min-height: 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-size2xs);
+  padding: var(--spacing-size-s) var(--spacing-size-xs);
+  border: 0;
+  background: none;
+  color: var(--text-tertiary);
+  font-family: inherit;
+  font-size: var(--font-size-label);
+  line-height: var(--line-height-label);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.dg-tab__icon {
+  display: inline-flex;
+  color: var(--icon-tertiary, var(--text-tertiary));
+}
+
+/* Активная вкладка: значок акцентом, подпись основным цветом и жирнее — цвет не единственный признак (DESIGN.md §7). */
+.dg-tab_active {
+  color: var(--text-primary);
+  font-weight: var(--font-weight-label-strong);
+}
+
+.dg-tab_active .dg-tab__icon {
+  color: var(--icon-themed);
+}
+
+.dg-tab:focus-visible {
+  outline: 2px solid var(--icon-themed);
+  outline-offset: -4px;
+  border-radius: var(--size-border-radius-semantic-border-radius-paper);
+}
+
+.dg-app:has(.dg-tabbar) .dg-screen {
+  padding-bottom: calc(var(--spacing-size4xl) + 56px + env(safe-area-inset-bottom));
+}
+
+.dg-app:has(.dg-tabbar) .dg-toast-layer {
+  bottom: calc(var(--spacing-size2xl) + 56px + env(safe-area-inset-bottom));
+}

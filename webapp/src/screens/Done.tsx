@@ -139,7 +139,7 @@ export function DoneScreen({ publicId, me, result, onNewDeal, onDeals }: DoneScr
             </Button>
           )}
           <Button variant="ghost" size="large" stretched onClick={onDeals}>
-            Мои сделки
+            Все сделки
           </Button>
           <Button variant="ghost" size="large" stretched onClick={onNewDeal}>
             Создать ещё одну

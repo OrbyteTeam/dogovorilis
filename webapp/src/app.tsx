@@ -1,11 +1,26 @@
-// Каркас мини-приложения: hash-роутинг, разбор start_param, загрузка /api/me и /api/templates,
-// состояния экранов и BackButton — docs/SPEC.md §7.1, §13; docs/DESIGN.md §5.
-import { useCallback, useEffect, useMemo, useState } from 'react';
+// Каркас мини-приложения: экран по стеку истории (nav.ts), загрузка /api/me и /api/templates, состояния экранов,
+// BackButton и нижняя панель разделов — docs/SPEC.md §7.1, §13; docs/DESIGN.md §5; ЗАДАЧА_08 A.
+import { useCallback, useEffect, useState } from 'react';
 
 import { api, ApiError, errorText } from './api';
 import { backButton, DEV_NO_BRIDGE, haptic, insideMax, isAvailable, startParam } from './bridge';
 import { AuthFailedScreen, BridgeMissingScreen, ErrorScreen, LoadingScreen } from './components/StateScreen';
-import { ToastProvider, useToast } from './components/Toast';
+import { TabBar } from './components/TabBar';
+import { ToastProvider } from './components/Toast';
+import {
+  back,
+  canGoBack,
+  current,
+  initialRoute,
+  parseHash,
+  push,
+  routeToHash,
+  startHistory,
+  tabOf,
+  tabRoute,
+  type History,
+  type Route,
+} from './nav';
 import { DealsScreen } from './screens/Deals';
 import { DoneScreen } from './screens/Done';
 import { EditDealScreen } from './screens/EditDeal';
@@ -14,22 +29,6 @@ import { NewScreen } from './screens/New';
 import { SettingsScreen } from './screens/Settings';
 import type { CreateDealRequest, CreateDealResponse, MeResponse, SellerProfile, Template } from './types';
 
-type Route =
-  /** `from` — «Повторить сделку»: форма с условиями прежней сделки (`#/new?from=<id>`). */
-  | { name: 'new'; from?: string }
-  | { name: 'done'; id: string }
-  | { name: 'deals' }
-  | { name: 'edit'; id: string }
-  | { name: 'settings' };
-
-/** Формат public_id — SPEC §13: `^d_[A-Za-z0-9]{10}$`. */
-const DEEPLINK_RE = /^d_([A-Za-z0-9]{10})$/;
-/** Правка условий из карточки бота: `edit_<id>` → `#/deals/<id>/edit` (ЗАДАЧА_04 E). */
-const EDIT_PARAM_RE = /^edit_([A-Za-z0-9]{10})$/;
-const EDIT_HASH_RE = /^\/deals\/([A-Za-z0-9]{10})\/edit$/;
-/** «Повторить» из карточки бота: `repeat_<id>` → `#/new?from=<id>` (ЗАДАЧА_04 F). */
-const REPEAT_PARAM_RE = /^repeat_([A-Za-z0-9]{10})$/;
-const REPEAT_HASH_RE = /^\/new\?from=([A-Za-z0-9]{10})$/;
 const DONE_STORAGE_PREFIX = 'dogovorilis:done:';
 
 /** Кэш результата создания на время сессии: sessionStorage в MAX WebView может быть недоступен. */
@@ -59,65 +58,10 @@ function recallDone(publicId: string): CreateDealResponse | null {
   }
 }
 
-function parseHash(hash: string): Route | null {
-  const path = hash.replace(/^#/, '');
-  if (path === '/new') return { name: 'new' };
-  if (path === '/deals') return { name: 'deals' };
-  if (path === '/settings') return { name: 'settings' };
-  const repeat = REPEAT_HASH_RE.exec(path);
-  if (repeat) return { name: 'new', from: repeat[1] };
-  const edit = EDIT_HASH_RE.exec(path);
-  if (edit) return { name: 'edit', id: edit[1] };
-  const done = /^\/done\/([A-Za-z0-9]{1,32})$/.exec(path);
-  if (done) return { name: 'done', id: done[1] };
-  return null;
-}
-
-function routeToHash(route: Route): string {
-  if (route.name === 'done') return `#/done/${route.id}`;
-  if (route.name === 'deals') return '#/deals';
-  if (route.name === 'settings') return '#/settings';
-  if (route.name === 'edit') return `#/deals/${route.id}/edit`;
-  return route.from ? `#/new?from=${route.from}` : '#/new';
-}
-
-/**
- * Старт по `start_param` (SPEC §7.1, §13): `new` → форма, `d_<id>` → экран «Готово» с ссылкой,
- * `deals` → список сделок (§7.4), `settings` → профиль (§7.7), `edit_<id>` → правка условий, `repeat_<id>` → повтор (§7.5).
- */
-function resolveInitialRoute(): { route: Route; notice: string | null } {
-  const fromHash = parseHash(window.location.hash);
-  if (fromHash) return { route: fromHash, notice: null };
-
-  const param = (startParam() ?? '').trim();
-  const deeplink = DEEPLINK_RE.exec(param);
-  if (deeplink) return { route: { name: 'done', id: deeplink[1] }, notice: null };
-  const edit = EDIT_PARAM_RE.exec(param);
-  if (edit) return { route: { name: 'edit', id: edit[1] }, notice: null };
-  const repeat = REPEAT_PARAM_RE.exec(param);
-  if (repeat) return { route: { name: 'new', from: repeat[1] }, notice: null };
-  if (param === 'deals') return { route: { name: 'deals' }, notice: null };
-  if (param === 'settings') return { route: { name: 'settings' }, notice: null };
-  return { route: { name: 'new' }, notice: null };
-}
-
-/**
- * Куда ведёт «назад». Корень — экран, с которого открыли мини-приложение (кнопкой в чате или по start_param):
- * у него «назад» нет. Правка и повтор возвращают в «Мои сделки»; если открыли по ссылке правки или повтора,
- * «Мои сделки» становятся корнем. Остальные экраны возвращают к стартовому.
- */
-function parentOf(route: Route, entry: Route): Route | null {
-  if (routeToHash(route) === routeToHash(entry)) return null;
-  const isEditOrRepeat = (r: Route) => r.name === 'edit' || (r.name === 'new' && Boolean(r.from));
-  if (isEditOrRepeat(route)) return { name: 'deals' };
-  if (isEditOrRepeat(entry)) return route.name === 'deals' ? null : { name: 'deals' };
-  return entry;
-}
-
-function navigate(route: Route): void {
+/** Адресная строка отражает текущий экран, но записей в истории WebView не создаёт: история — наш стек (nav.ts). */
+function syncHash(route: Route): void {
   const hash = routeToHash(route);
-  if (window.location.hash === hash) return;
-  window.location.hash = hash;
+  if (window.location.hash !== hash) window.history.replaceState(null, '', hash);
 }
 
 interface AppData {
@@ -132,45 +76,50 @@ type LoadState =
   | { status: 'unauthorized' };
 
 function Router() {
-  const showToast = useToast();
-  const initial = useMemo(resolveInitialRoute, []);
-  const [route, setRoute] = useState<Route>(initial.route);
+  const [history, setHistory] = useState<History>(() => startHistory(initialRoute(window.location.hash, startParam())));
   const [state, setState] = useState<LoadState>({ status: 'loading' });
+  const route = current(history);
 
-  // Приводим адресную строку к выбранному маршруту, не создавая лишнюю запись в истории.
-  useEffect(() => {
-    const hash = routeToHash(initial.route);
-    if (window.location.hash !== hash) window.history.replaceState(null, '', hash);
-  }, [initial.route]);
+  const navigate = useCallback((to: Route, opts?: { replace?: boolean }) => setHistory((h) => push(h, to, opts)), []);
+  const goBack = useCallback(() => setHistory(back), []);
 
-  useEffect(() => {
-    if (initial.notice) showToast(initial.notice);
-  }, [initial.notice, showToast]);
+  useEffect(() => syncHash(route), [route]);
 
+  // Ручная правка адреса (разработка в браузере) — как обычный переход.
   useEffect(() => {
-    const onHashChange = () => setRoute(parseHash(window.location.hash) ?? { name: 'new' });
+    const onHashChange = () => {
+      const parsed = parseHash(window.location.hash);
+      if (parsed) navigate(parsed);
+    };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
-  }, []);
+  }, [navigate]);
 
-  // BackButton — на всех экранах, кроме того, с которого открыли мини-приложение (SPEC §7.1): с него «назад»
-  // закрывает приложение средствами MAX, а не уводит в «Новую сделку». С правки и повтора — в «Мои сделки».
-  const parent = parentOf(route, initial.route);
-  const parentHash = parent ? routeToHash(parent) : null;
+  // BackButton MAX ведёт по истории внутри приложения; на корневом экране (с которого открыли мини-приложение)
+  // кнопки нет — «назад» закрывает приложение средствами MAX (SPEC §7.1, ЗАДАЧА_08 A).
+  const hasBack = canGoBack(history);
   useEffect(() => {
-    if (!parent) {
+    if (!hasBack) {
       backButton.hide();
       return;
     }
-    const onBack = () => navigate(parent);
-    backButton.onClick(onBack);
+    backButton.onClick(goBack);
     backButton.show();
     return () => {
-      backButton.offClick(onBack);
+      backButton.offClick(goBack);
       backButton.hide();
     };
-    // parent пересоздаётся на каждый рендер, поэтому зависимость — его адрес
-  }, [parentHash]);
+  }, [hasBack, goBack]);
+
+  // Экран сменился — наверх: иначе новый экран открывается с прокруткой прежнего.
+  const routeHash = routeToHash(route);
+  useEffect(() => {
+    try {
+      window.scrollTo(0, 0);
+    } catch {
+      /* нет окна — нечего прокручивать */
+    }
+  }, [routeHash]);
 
   const load = useCallback(async () => {
     setState({ status: 'loading' });
@@ -190,6 +139,7 @@ function Router() {
     void load();
   }, [load]);
 
+  // До ответа /api/me панели нет: без входа любой раздел покажет тот же экран загрузки или ошибки.
   if (state.status === 'loading') return <LoadingScreen />;
   // 401: вне MAX — экран W0; внутри MAX (initData есть, но не принят) — «закройте и откройте заново» + «Повторить».
   if (state.status === 'unauthorized') {
@@ -197,54 +147,11 @@ function Router() {
   }
   if (state.status === 'error') return <ErrorScreen message={state.message} onRetry={() => void load()} />;
 
-  if (route.name === 'deals') {
-    return (
-      <DealsScreen
-        me={state.data.me}
-        onNewDeal={() => navigate({ name: 'new' })}
-        onEdit={(id) => navigate({ name: 'edit', id })}
-        onRepeat={(id) => navigate({ name: 'new', from: id })}
-      />
-    );
-  }
+  const data = state.data;
 
-  if (route.name === 'edit') {
-    return (
-      <EditDealScreen
-        key={route.id}
-        publicId={route.id}
-        me={state.data.me}
-        templates={state.data.templates}
-        onDeals={() => navigate({ name: 'deals' })}
-        onRepeat={(id) => navigate({ name: 'new', from: id })}
-      />
-    );
-  }
-
-  if (route.name === 'settings') {
-    return (
-      <SettingsScreen
-        me={state.data.me}
-        onSaved={(profile: SellerProfile) =>
-          setState((prev) =>
-            prev.status === 'ready'
-              ? { ...prev, data: { ...prev.data, me: { ...prev.data.me, profile } } }
-              : prev,
-          )
-        }
-      />
-    );
-  }
-
-  if (route.name === 'done') {
-    return (
-      <DoneScreen
-        publicId={route.id}
-        me={state.data.me}
-        result={recallDone(route.id)}
-        onNewDeal={() => navigate({ name: 'new' })}
-        onDeals={() => navigate({ name: 'deals' })}
-      />
+  function setProfile(profile: SellerProfile): void {
+    setState((prev) =>
+      prev.status === 'ready' ? { ...prev, data: { ...prev.data, me: { ...prev.data.me, profile } } } : prev,
     );
   }
 
@@ -253,32 +160,69 @@ function Router() {
     haptic('success');
     rememberDone(result);
     // Профиль сохранён вместе со сделкой: без этого «Создать ещё одну» снова покажет пустой блок «О вас».
-    const savedProfile = payload.profile;
-    if (savedProfile) {
-      setState((prev) =>
-        prev.status === 'ready'
-          ? { ...prev, data: { ...prev.data, me: { ...prev.data.me, profile: savedProfile } } }
-          : prev,
-      );
+    if (payload.profile) setProfile(payload.profile);
+    // «Готово» заменяет форму: «назад» с него не должен возвращать к уже отправленной форме.
+    navigate({ name: 'done', id: result.deal.public_id }, { replace: true });
+  }
+
+  function screen() {
+    switch (route.name) {
+      case 'deals':
+        return (
+          <DealsScreen
+            me={data.me}
+            onNewDeal={() => navigate({ name: 'new' })}
+            onEdit={(id) => navigate({ name: 'edit', id })}
+            onRepeat={(id) => navigate({ name: 'new', from: id })}
+          />
+        );
+      case 'edit':
+        return (
+          <EditDealScreen
+            key={route.id}
+            publicId={route.id}
+            me={data.me}
+            templates={data.templates}
+            onDeals={() => navigate({ name: 'deals' })}
+            onRepeat={(id) => navigate({ name: 'new', from: id })}
+          />
+        );
+      case 'settings':
+        return <SettingsScreen me={data.me} onSaved={setProfile} />;
+      case 'done':
+        return (
+          <DoneScreen
+            key={route.id}
+            publicId={route.id}
+            me={data.me}
+            result={recallDone(route.id)}
+            onNewDeal={() => navigate({ name: 'new' })}
+            onDeals={() => navigate({ name: 'deals' })}
+          />
+        );
+      case 'new':
+        return route.from ? (
+          <RepeatDealScreen
+            key={route.from}
+            publicId={route.from}
+            me={data.me}
+            templates={data.templates}
+            onSubmit={createDeal}
+            onNewDeal={() => navigate({ name: 'new' })}
+            onDeals={() => navigate({ name: 'deals' })}
+          />
+        ) : (
+          <NewScreen me={data.me} templates={data.templates} onSubmit={createDeal} />
+        );
     }
-    navigate({ name: 'done', id: result.deal.public_id });
   }
 
-  if (route.from) {
-    return (
-      <RepeatDealScreen
-        key={route.from}
-        publicId={route.from}
-        me={state.data.me}
-        templates={state.data.templates}
-        onSubmit={createDeal}
-        onNewDeal={() => navigate({ name: 'new' })}
-        onDeals={() => navigate({ name: 'deals' })}
-      />
-    );
-  }
-
-  return <NewScreen me={state.data.me} templates={state.data.templates} onSubmit={createDeal} />;
+  return (
+    <>
+      {screen()}
+      <TabBar active={tabOf(route)} onSelect={(tab) => navigate(tabRoute(tab))} />
+    </>
+  );
 }
 
 export function App() {
