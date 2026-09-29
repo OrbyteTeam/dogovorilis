@@ -22,6 +22,11 @@ const SERVER_FILES = [
   'server/src/transport/bot/receipt.ts',
   'server/src/domain/receipt/pdf.ts',
   'server/src/domain/receipt/history.ts',
+  'server/src/domain/deal/service.ts',
+  'server/src/domain/money.ts',
+  'server/src/transport/http/routes/api.ts',
+  // Страница возврата с оплаты по ссылке (SPEC §9.2): её видит клиент в браузере.
+  'server/src/transport/http/server.ts',
 ];
 
 type Literal = { file: string; line: number; text: string };
@@ -47,13 +52,16 @@ function literals(file: string): Literal[] {
   return out;
 }
 
+const DEVELOPER_ERRORS = ['Error', 'ForbiddenError', 'UnauthorizedError'];
+
 /** `log.warn(…)`, `console.x(…)`, `new Error(…)`: текст для разработчика, правила интерфейса к нему не относятся. */
 function isDeveloperText(node: ts.Node): boolean {
   if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
     const target = node.expression.expression;
     return ts.isIdentifier(target) && (target.text === 'log' || target.text === 'console');
   }
-  if (ts.isNewExpression(node) && ts.isIdentifier(node.expression)) return node.expression.text === 'Error';
+  // Сообщения этих исключений пользователь не видит: API и бот подставляют вместо них тексты из texts.ts.
+  if (ts.isNewExpression(node) && ts.isIdentifier(node.expression)) return DEVELOPER_ERRORS.includes(node.expression.text);
   return false;
 }
 
@@ -134,6 +142,9 @@ const VOCABULARY: [RegExp, string][] = [
   [/sandbox/i, 'sandbox: «тест»'],
   [WORD('мои сделки'), '«Мои» убрано из названий'],
   [WORD('успешно'), 'тон §2.6: без «успешно»'],
+  [WORD('пожалуйста'), 'тон §2.6: без «пожалуйста»'],
+  [WORD('пользовател'), 'пользователь: «клиент» или «исполнитель»'],
+  [/(?<![А-ЯЁа-яё])СБП(?![А-ЯЁа-яё])/, 'СБП: «перевод по реквизитам» (кроме подсказки «через «+» в чате»)'],
   [WORD('не волнуйтесь'), 'тон §2.6'],
 ];
 
@@ -145,10 +156,17 @@ const AGREEMENT_ALLOWED = [
   'Квитанция фиксирует договорённость',
 ];
 
+/** Фразы, которые бриф задаёт дословно, хотя в них есть слово из словаря. */
+const VOCABULARY_ALLOWED = [
+  // Строка демо-квитанции по DESIGN_BRIEF §8 п. 1.
+  'Демонстрационная сделка: обе стороны один пользователь',
+];
+
 describe('словарь (DESIGN_BRIEF §2.7)', () => {
   it.each(checkedFiles())('в текстах %s нет запрещённых слов', (file) => {
     const problems: string[] = [];
     for (const l of literals(file)) {
+      if (VOCABULARY_ALLOWED.some((ok) => l.text.includes(ok))) continue;
       for (const [re, why] of VOCABULARY) {
         if (re.test(l.text)) problems.push(`${l.file}:${l.line}: ${why}: ${l.text.slice(0, 100)}`);
       }

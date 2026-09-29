@@ -277,7 +277,7 @@ function sendError(reply: FastifyReply, e: unknown) {
       case 'no_changes':
         return fail(reply, 409, 'no_changes', texts.API_NO_CHANGES);
       case 'invalid_transition':
-        return fail(reply, 409, e.code, e.message);
+        return fail(reply, 409, e.code, texts.API_INVALID_TRANSITION);
       default:
         break;
     }

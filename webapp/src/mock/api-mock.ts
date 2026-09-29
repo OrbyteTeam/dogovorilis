@@ -52,7 +52,7 @@ const HAS_PROFILE = scenario('profile', import.meta.env.VITE_MOCK_PROFILE) === '
 const DEMO_PROFILE: SellerProfile = {
   display_name: 'Анна Аксёнова',
   tax_mode: 'npd',
-  payout_details: 'СБП +7 900 000-00-00, Т-Банк, получатель Анна А.',
+  payout_details: '+7 900 000-00-00, Т-Банк, получатель Анна А.',
   transfer_enabled: true,
   link_enabled: false,
   default_cancel_rule: 'free_24h',

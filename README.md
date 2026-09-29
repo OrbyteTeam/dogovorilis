@@ -83,8 +83,10 @@ docker compose up --build     # сервис на http://localhost:8080 , БД �
 **Замер сборки из чистого клона (20.09.2026):** `docker compose build` — **43 секунды**.
 Машина: macOS 26, Docker 29.5.2 в colima, VM 2 vCPU / 2 ГБ (те же ресурсы, что у целевого VPS Timeweb Cloud-40).
 Базовые образы `node:22-alpine` и `postgres:16-alpine` скачаны заранее (`docker pull`), как и будет у проверяющего.
+Повторный замер после редизайна (29.09, ветка `finals/redesign`): `docker build` из чистого клона — **77 секунд**,
+в образе есть `server/assets/logo.png` и `webapp/dist`.
 Лимит регламента — 5 минут. Вне Docker из чистого клона: `npm ci` — 39 с на холодном кеше npm и 2 с на тёплом,
-`npm run build` — 6 с, `npm test` — 637 тестов за ~5,5 мин (27.09; сквозные ограничены настоящим троттлингом 2 сообщения/с).
+`npm run build` — 6 с, `npm test` — 896 тестов за ~5,5 мин (29.09; сквозные ограничены настоящим троттлингом 2 сообщения/с).
 
 Проверка после запуска:
 ```bash
@@ -145,7 +147,7 @@ pdfkit 0.20.2 + `dejavu-fonts-ttf`, zod 4.6.5, pino 10.3.1, vitest 5.0.1, vite 7
 ```bash
 npm ci
 npm run lint          # проверка типов: server (вместе с тестами) и webapp
-npm test              # 637 тестов; сквозные пропускаются, если нет TEST_DATABASE_URL
+npm test              # 896 тестов; сквозные пропускаются, если нет TEST_DATABASE_URL
 npm run check:secrets # поиск секретов в staged-изменениях (хук — .githooks-pre-commit.sample)
 ```
 Сквозные тесты требуют Postgres. Создайте базу и укажите её:

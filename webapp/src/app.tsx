@@ -184,22 +184,6 @@ function Router() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  const parent = parentOf(route, initial);
-  const parentHash = parent ? routeToHash(parent) : null;
-  useEffect(() => {
-    if (!parent) {
-      backButton.hide();
-      return;
-    }
-    const onBack = () => goTo(parent);
-    backButton.onClick(onBack);
-    backButton.show();
-    return () => {
-      backButton.offClick(onBack);
-      backButton.hide();
-    };
-    // parent пересоздаётся на каждый рендер, поэтому зависимость по его адресу
-  }, [parentHash]);
 
   const setDirty = useCallback((value: boolean) => {
     dirty.current = value;
@@ -217,6 +201,24 @@ function Router() {
     },
     [],
   );
+
+  const parent = parentOf(route, initial);
+  const parentHash = parent ? routeToHash(parent) : null;
+  useEffect(() => {
+    if (!parent) {
+      backButton.hide();
+      return;
+    }
+    // Через navigate, а не goTo: с несохранённой формы системная «Назад» тоже спрашивает (§5.2).
+    const onBack = () => navigate(parent);
+    backButton.onClick(onBack);
+    backButton.show();
+    return () => {
+      backButton.offClick(onBack);
+      backButton.hide();
+    };
+    // parent пересоздаётся на каждый рендер, поэтому зависимость по его адресу
+  }, [parentHash, navigate]);
 
   const countMoves = useCallback((items: DealListItem[]) => {
     const now = new Date();

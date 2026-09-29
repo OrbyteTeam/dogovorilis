@@ -15,9 +15,17 @@ const TABS: { value: Tab; label: string; icon: ReactNode }[] = [
   { value: 'settings', label: 'Настройки', icon: <IconGear /> },
 ];
 
-const EDITABLE = 'input:not([type="checkbox"]):not([type="radio"]), textarea, select, [contenteditable="true"]';
+// Дата и время открывают системный выбор, а не клавиатуру: панель при них не прячется.
+const EDITABLE =
+  'input:not([type="checkbox"]):not([type="radio"]):not([type="date"]):not([type="datetime-local"]):not([type="time"]), textarea, [contenteditable="true"]';
+/** На сколько должна уменьшиться видимая область, чтобы считать клавиатуру открытой. */
+const KEYBOARD_MIN_PX = 150;
 
-/** Клавиатура открыта: фокус в поле ввода на сенсорном устройстве (на компьютере панель не мешает и не прячется). */
+/**
+ * Клавиатура открыта: фокус в поле ввода на сенсорном устройстве И видимая область заметно уменьшилась.
+ * Одного фокуса мало: поле может получить его программно (автофокус «Когда» на повторе), а клавиатуры нет.
+ * На компьютере панель не мешает и не прячется.
+ */
 function useKeyboardOpen(): boolean {
   const [open, setOpen] = useState(false);
   useEffect(() => {
@@ -28,17 +36,36 @@ function useKeyboardOpen(): boolean {
       coarse = false;
     }
     if (!coarse) return;
+    const viewport = window.visualViewport ?? null;
+    let fullHeight = 0;
+    let width = 0;
+    const shrunk = () => {
+      const h = viewport ? viewport.height : window.innerHeight;
+      const w = viewport ? viewport.width : window.innerWidth;
+      // Поворот экрана: высота «без клавиатуры» считается заново.
+      if (w !== width) {
+        width = w;
+        fullHeight = h;
+      }
+      fullHeight = Math.max(fullHeight, h);
+      return fullHeight - h > KEYBOARD_MIN_PX;
+    };
     const update = () => {
       const active = document.activeElement;
-      setOpen(active instanceof HTMLElement && active.matches(EDITABLE));
+      setOpen(active instanceof HTMLElement && active.matches(EDITABLE) && shrunk());
     };
+    shrunk();
     // focusout приходит раньше, чем фокус встанет на следующий элемент: проверяем после него.
     const later = () => window.setTimeout(update, 0);
     document.addEventListener('focusin', update);
     document.addEventListener('focusout', later);
+    viewport?.addEventListener('resize', update);
+    window.addEventListener('resize', update);
     return () => {
       document.removeEventListener('focusin', update);
       document.removeEventListener('focusout', later);
+      viewport?.removeEventListener('resize', update);
+      window.removeEventListener('resize', update);
     };
   }, []);
   return open;

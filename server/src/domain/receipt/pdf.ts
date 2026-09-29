@@ -92,10 +92,10 @@ const DESCRIPTION_LIMIT = 600;
 
 // ——— тексты ———
 
-/** Правило отмены после подписи «Правило отмены:» (как в карточке, SPEC §6.4). */
+/** Правило отмены после подписи «Правило отмены:»: слово «отмена» не повторяем, как в карточке (DESIGN_BRIEF §3.1). */
 const CANCEL_RULE_TEXT: Record<CancelRule, string> = {
-  free_24h: 'отмена без потери предоплаты за 24 ч и более до срока',
-  free_48h: 'отмена без потери предоплаты за 48 ч и более до срока',
+  free_24h: 'без потери предоплаты за 24 ч и более до срока',
+  free_48h: 'без потери предоплаты за 48 ч и более до срока',
   nonrefundable: 'предоплата не возвращается при отмене клиентом',
   full_refund: 'предоплата возвращается при любой отмене',
 };
@@ -142,7 +142,7 @@ const FOOTER_TEXT =
 function railText(rail: PaymentRail, provider: PaymentProvider): string {
   if (rail === 'transfer') return 'перевод по реквизитам';
   if (provider === 'yookassa') return 'ссылка ЮKassa, тест';
-  if (provider === 'tbank') return 'СБП Т-Банк, тест';
+  if (provider === 'tbank') return 'ссылка Т-Банка, тест';
   return 'ссылка на оплату, тест';
 }
 

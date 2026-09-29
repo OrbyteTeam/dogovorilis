@@ -64,7 +64,7 @@ function upperFirst(text: string): string {
 export function railHow(rail: PaymentRail, provider: PaymentProvider): string {
   if (rail === 'transfer') return 'переводом по реквизитам';
   if (provider === 'yookassa') return 'по ссылке ЮKassa';
-  if (provider === 'tbank') return 'по ссылке Т-Банка (СБП)';
+  if (provider === 'tbank') return 'по ссылке Т-Банка';
   return 'по ссылке';
 }
 
@@ -628,7 +628,7 @@ export function termsChanges(changed: readonly TermsField[], v: TermsValues): st
     has('description') ? 'уточнения изменены' : null,
     has('scheduled_at') ? `когда: ${v.scheduledAt ? formatDateTime(v.scheduledAt) : 'без даты'}` : null,
     money,
-    has('cancel_rule') ? `правило отмены: ${lowerFirst(cancelRuleText(v.cancelRule))}` : null,
+    has('cancel_rule') ? `правило отмены: ${cancelRuleLine(v.cancelRule)}` : null,
   ].filter(Boolean);
   return groups.join('; ');
 }
@@ -738,12 +738,6 @@ export function transferLines(a: { sumKopecks: number; payoutDetails: string }):
     `\`${esc(oneLine(a.payoutDetails))}\``,
     testRailNotice('manual'),
   ];
-}
-
-export function P1(a: { sumKopecks: number; payoutDetails: string }): string {
-  return `Переведите ${formatMoney(a.sumKopecks)} исполнителю:
-\`${esc(a.payoutDetails)}\`
-После перевода нажмите «${BTN.transferDone}». Подсказка: перевод можно сделать прямо в чате MAX через «+», пункт «Перевести деньги» (СБП).`;
 }
 
 export function P2(a: { client: string; sumKopecks: number; id: string }): string {
@@ -1059,6 +1053,7 @@ export const API_DEAL_NOT_FOUND = 'Сделка не найдена';
 export const API_FORBIDDEN_DEAL = 'Это не ваша сделка';
 export const API_NOT_EDITABLE = 'Условия можно изменить, только пока клиент их не подтвердил';
 export const API_NO_CHANGES = 'Условия не изменились, отправлять клиенту нечего';
+export const API_INVALID_TRANSITION = 'Это действие уже недоступно: сделка изменилась. Откройте её заново';
 
 // --- подписи кнопок: DESIGN_BRIEF §2.8, колонка «После». Коды callback не меняются (callbacks.ts) ---
 // Глагол или результат от первого лица, первая буква прописная, без эмодзи (кроме 🧪 у демо и теста),

@@ -31,8 +31,8 @@ import {
   N4,
   N8,
   TERMS_UPDATED,
-  P1,
   P2,
+  transferLines,
   S1,
   S2,
   type CardView,
@@ -444,7 +444,7 @@ describe('строки карточки', () => {
       `Предоплата ${formatMoney(50_000)} получена ${formatMoment(expires)} переводом по реквизитам`,
     ]);
     expect(paymentLines({ kind: 'prepayment', state: 'received', sumKopecks: 50_000, at: expires, rail: 'link', provider: 'tbank', linkExpiresAt: null })).toEqual([
-      `Предоплата ${formatMoney(50_000)} получена ${formatMoment(expires)} по ссылке Т-Банка (СБП)`,
+      `Предоплата ${formatMoney(50_000)} получена ${formatMoment(expires)} по ссылке Т-Банка`,
       '🧪 DEMO-терминал Т-Банка, деньги не списывались',
     ]);
   });
@@ -532,7 +532,7 @@ describe('уведомления (SPEC §6.5, DESIGN_BRIEF §4)', () => {
     );
     const all = N4({ id: ID, version: 3, changed: ['title', 'description', 'scheduled_at', 'total', 'prepayment', 'cancel_rule'], terms: { ...terms, scheduledAt: null, prepaymentKopecks: 0 } });
     expect(all).toContain('что делаем: «Маникюр \\*люкс\\*»; уточнения изменены; когда: без даты; ');
-    expect(all).toContain(`сумма: ${formatMoney(300_000)}, без предоплаты; правило отмены: отмена без потери предоплаты за 48 ч`);
+    expect(all).toContain(`сумма: ${formatMoney(300_000)}, без предоплаты; правило отмены: без потери предоплаты за 48 ч`);
     expect(N4({ id: ID, version: 2, changed: ['prepayment'], terms })).toContain(`предоплата: ${formatMoney(60_000)}`);
     expect(N4({ id: ID, version: 2, changed: ['description'], terms })).toBe(
       `✏️ Исполнитель изменил условия #${ID}, версия 2: уточнения изменены.\nПроверьте и подтвердите.`,
@@ -563,15 +563,8 @@ describe('уведомления (SPEC §6.5, DESIGN_BRIEF §4)', () => {
 });
 
 describe('рейл «перевод» (SPEC §9.1) и пометки тестовой среды', () => {
-  it('P1: сумма, реквизиты в моноширинном блоке, подсказка про чат MAX', () => {
-    const text = P1({ sumKopecks: 50_000, payoutDetails: 'СБП +7 900 000-00-00, Т-Банк' });
-    expect(text).toContain(`Переведите ${formatMoney(50_000)} исполнителю:`);
-    expect(text).toContain('`СБП +7 900 000-00-00, Т-Банк`');
-    expect(text).toContain('«Перевести деньги»');
-  });
-
   it('реквизиты экранируются (исполнитель вводит их сам)', () => {
-    expect(P1({ sumKopecks: 100, payoutDetails: 'карта `1234`' })).toContain('карта \\`1234\\`');
+    expect(transferLines({ sumKopecks: 100, payoutDetails: 'карта `1234`' })[1]).toContain('карта \\`1234\\`');
   });
 
   it('пометка тестовой среды по провайдеру (SPEC §18)', () => {
