@@ -23,6 +23,8 @@ import type {
   MeResponse,
   ReceiptUploadResponse,
   SellerProfile,
+  Service,
+  ServiceBody,
   TemplateKey,
   TemplatesResponse,
   UpdateDealRequest,
@@ -164,6 +166,9 @@ interface MockDeal {
   request?: string;
   /** Клиент сообщил о переводе, исполнитель ещё не подтвердил (кнопки tr:g / tr:n в чате). */
   claimed?: boolean;
+  /** Услуга, из которой собрана сделка (§7.6a), и длительность на момент создания. */
+  serviceId?: number | null;
+  durationMin?: number | null;
 }
 
 const MOCK_DEAL_ROWS: MockDeal[] = [
@@ -184,8 +189,9 @@ const MOCK_DEAL_ROWS: MockDeal[] = [
     history: [{ at: [3, '11:00'], total: 2800, prepay: 1400, requestAfter: 'Давайте на 12:00 и дизайн на все пальцы' }],
     request: 'А можно без предоплаты? Оплачу всё после',
   },
-  { id: 'Cl2Past110', role: 'seller', status: 'closed', title: 'Маникюр с покрытием', at: [-2, '11:00'], total: 2500, prepay: 750, client: 'Саша', description: 'Френч, форма миндаль' },
-  { id: 'Cn1Cancel9', role: 'seller', status: 'cancelled', title: 'Педикюр', at: [-1, '09:00'], total: 3000, prepay: 900, client: 'Вера' },
+  { id: 'Cl2Past110', role: 'seller', status: 'closed', title: 'Маникюр с покрытием', at: [-2, '11:00'], total: 2500, prepay: 750, client: 'Саша', description: 'Френч, форма миндаль', serviceId: 1, durationMin: 90 },
+  // «Повторить» со скрытой услугой: услуга «Педикюр» потом скрыта, но повтор берёт её (§7.6a).
+  { id: 'Cn1Cancel9', role: 'seller', status: 'cancelled', title: 'Педикюр', at: [-1, '09:00'], total: 3000, prepay: 900, client: 'Вера', serviceId: 4, durationMin: 120 },
   { id: 'NoDateRep1', role: 'seller', status: 'awaiting_confirmation', title: 'Ремонт / выезд мастера', at: null, total: 4000, prepay: 0, template: 'repair', description: 'Адрес: ул. Ленина, 5. Диагностика стиральной машины' },
   { id: 'ExpNoDate1', role: 'seller', status: 'expired', title: 'Изделие на заказ', at: null, total: 6000, prepay: 3000, template: 'free', cancel: 'nonrefundable' },
   { id: 'Later30day', role: 'seller', status: 'scheduled', title: 'Занятие 60 минут', at: [30, '19:00'], total: 2000, prepay: 2000, client: 'Игорь', template: 'lesson' },
@@ -267,6 +273,9 @@ function details(row: MockDeal): DealDetails {
     can_edit: seller && EDITABLE.includes(row.status),
     can_repeat: seller && TERMINAL.includes(row.status) && !row.demo,
     same_client_available: seller && Boolean(row.client) && !row.demo,
+    // Услуга — инструмент исполнителя: клиенту не отдаётся (как views.ts на сервере).
+    service_id: seller ? (row.serviceId ?? null) : null,
+    duration_min: seller ? (row.durationMin ?? null) : null,
   };
 }
 
@@ -338,7 +347,12 @@ function updateDeal(publicId: string, body: UpdateDealRequest): UpdateDealRespon
     next.total === row.total &&
     next.prepay === row.prepay &&
     next.cancel === (row.cancel ?? 'free_24h');
+  // Как на сервере: смена одной услуги без условий — тоже «ничего не изменилось» (клиента зря не беспокоим).
   if (same) throw new ApiError(409, 'no_changes', 'Условия не изменились');
+  if (body.service_id !== undefined) {
+    const service = body.service_id === null ? null : serviceById(body.service_id);
+    Object.assign(row, { serviceId: service?.id ?? null, durationMin: service?.duration_min ?? null });
+  }
   Object.assign(row, next, { template: body.template, status: 'awaiting_confirmation', version: (row.version ?? 1) + 1 });
   return { deal: dealView(row), version: row.version ?? 2, client_notified: Boolean(row.client) };
 }
@@ -359,6 +373,7 @@ function createDeal(body: CreateDealRequest): CreateDealResponse {
     throw new ApiError(403, 'forbidden', 'Этого клиента нельзя подставить в новую сделку');
   }
   const withClient = Boolean(body.same_client && source?.client && CLIENT_DIALOG);
+  const service = typeof body.service_id === 'number' ? serviceById(body.service_id) : null;
   const row: MockDeal = {
     id: publicId,
     role: 'seller',
@@ -372,6 +387,8 @@ function createDeal(body: CreateDealRequest): CreateDealResponse {
     template: body.template,
     cancel: body.cancel_rule,
     client: withClient ? source?.client : undefined,
+    serviceId: service?.id ?? null,
+    durationMin: service?.duration_min ?? null,
   };
   MOCK_DEAL_ROWS.unshift(row);
   const deal = dealView(row);
@@ -384,6 +401,96 @@ function createDeal(body: CreateDealRequest): CreateDealResponse {
     client: body.same_client && source?.client ? { name: source.client } : null,
     client_no_dialog: Boolean(body.same_client && source?.client && !CLIENT_DIALOG),
   };
+}
+
+// ───────────── «Мои услуги» (§7.6a): GET/POST /services, PUT /services/:id, PUT /services/order ─────────────
+// `?mock_services=none` в адресе страницы (до `#`) или VITE_MOCK_SERVICES=none — у исполнителя ещё нет услуг
+// (пустой экран с примерами). По умолчанию — три показываемые и одна скрытая.
+
+function mockServicesMode(): string {
+  try {
+    return new URLSearchParams(window.location.search).get('mock_services') ?? String(import.meta.env.VITE_MOCK_SERVICES ?? 'some');
+  } catch {
+    return 'some';
+  }
+}
+
+const SEED_SERVICES: Service[] = [
+  { id: 1, title: 'Маникюр с покрытием', description: 'Гель-лак, снятие старого покрытия', price_rub: 2500, duration_min: 90, prepayment: { kind: 'percent', value: 30 }, cancel_rule: 'free_24h', template: 'beauty', active: true, sort_order: 1 },
+  { id: 2, title: 'Коррекция бровей', description: null, price_rub: 1500, duration_min: 45, prepayment: { kind: 'none', value: 0 }, cancel_rule: 'free_24h', template: 'beauty', active: true, sort_order: 2 },
+  { id: 3, title: 'Покрытие гель-лак', description: null, price_rub: 1800, duration_min: 60, prepayment: { kind: 'amount', value: 500 }, cancel_rule: 'free_48h', template: 'beauty', active: true, sort_order: 3 },
+  { id: 4, title: 'Педикюр', description: 'Аппаратный, с покрытием', price_rub: 3000, duration_min: 120, prepayment: { kind: 'amount', value: 900 }, cancel_rule: 'free_24h', template: 'beauty', active: false, sort_order: 4 },
+];
+
+let services: Service[] = mockServicesMode() === 'none' ? [] : SEED_SERVICES.map((s) => ({ ...s, prepayment: { ...s.prepayment } }));
+let nextServiceId = 100;
+
+function orderedServices(all: boolean): Service[] {
+  return [...services].sort((a, b) => a.sort_order - b.sort_order).filter((s) => all || s.active).map((s) => ({ ...s }));
+}
+
+function serviceById(id: number): Service {
+  const found = services.find((s) => s.id === id);
+  if (!found) throw new ApiError(404, 'not_found', 'Услуга не найдена');
+  return found;
+}
+
+/** Те же проверки, что server/src/domain/services.ts — и те же тексты (форма разносит их по полям). */
+function checkService(body: ServiceBody): Omit<Service, 'id' | 'active' | 'sort_order'> {
+  const title = body.title.trim();
+  if (title.length < 2 || title.length > 80) throw new ApiError(400, 'validation', 'Название от 2 до 80 символов');
+  const description = body.description?.trim() ? body.description.trim() : null;
+  if (description && description.length > 1000) throw new ApiError(400, 'validation', 'Уточнения до 1000 символов');
+  if (!Number.isInteger(body.price_rub) || body.price_rub < 1 || body.price_rub > 1_000_000) {
+    throw new ApiError(400, 'validation', 'Цена от 1 до 1 000 000 ₽');
+  }
+  const duration = body.duration_min ?? 60;
+  if (!Number.isInteger(duration) || duration < 15 || duration > 720 || duration % 15 !== 0) {
+    throw new ApiError(400, 'validation', 'Длительность от 15 минут до 12 часов, шаг 15 минут');
+  }
+  const { kind, value } = body.prepayment;
+  const prepaymentOk =
+    (kind === 'none' && value === 0) ||
+    (kind === 'percent' && Number.isInteger(value) && value >= 1 && value <= 100) ||
+    (kind === 'amount' && Number.isInteger(value) && value >= 1 && value <= body.price_rub);
+  if (!prepaymentOk) throw new ApiError(400, 'validation', 'Предоплата: процент от 1 до 100 или сумма не больше цены');
+  return {
+    title,
+    description,
+    price_rub: body.price_rub,
+    duration_min: duration,
+    prepayment: { kind, value },
+    cancel_rule: body.cancel_rule,
+    template: body.template ?? 'free',
+  };
+}
+
+function createService(body: ServiceBody): { service: Service } {
+  const fields = checkService(body);
+  if (services.length >= 50) throw new ApiError(409, 'services_limit', 'Услуг уже 50. Скройте ненужные или измените существующую');
+  maybeFailWrite();
+  const sortOrder = services.reduce((max, s) => Math.max(max, s.sort_order), 0) + 1;
+  const service: Service = { id: (nextServiceId += 1), ...fields, active: true, sort_order: sortOrder };
+  services.push(service);
+  return { service: { ...service } };
+}
+
+function updateService(id: number, body: ServiceBody): { service: Service } {
+  const current = serviceById(id);
+  const fields = checkService(body);
+  maybeFailWrite();
+  Object.assign(current, fields, { active: body.active ?? current.active });
+  return { service: { ...current } };
+}
+
+function reorderServices(ids: number[]): { items: Service[] } {
+  const own = new Set(services.map((s) => s.id));
+  if (new Set(ids).size !== ids.length || ids.length !== own.size || ids.some((id) => !own.has(id))) {
+    throw new ApiError(400, 'validation', 'Порядок: нужен полный список ваших услуг без повторов');
+  }
+  maybeFailWrite();
+  services = services.map((s) => ({ ...s, sort_order: ids.indexOf(s.id) + 1 }));
+  return { items: orderedServices(true) };
 }
 
 /** VITE_MOCK_AUTH_FAIL=1 — сервер не принял initData (401): экран «Не удалось подтвердить вход через MAX». */
@@ -920,6 +1027,13 @@ export async function mockRequest<T>(method: string, path: string, body?: unknow
   const actionPath = /^\/deals\/([A-Za-z0-9]+)\/actions$/.exec(path);
   if (actionPath && method === 'POST') return applyAction(actionPath[1], body as DealActionRequest) as unknown as T;
   if (method === 'PUT' && path === '/me/profile') return { profile: saveProfile(body as SellerProfile) } as unknown as T;
+  if (method === 'GET' && (path === '/services' || path === '/services?all=1')) {
+    return { items: orderedServices(path.endsWith('all=1')) } as unknown as T;
+  }
+  if (method === 'POST' && path === '/services') return createService(body as ServiceBody) as unknown as T;
+  if (method === 'PUT' && path === '/services/order') return reorderServices((body as { ids: number[] }).ids) as unknown as T;
+  const servicePath = /^\/services\/(\d+)$/.exec(path);
+  if (servicePath && method === 'PUT') return updateService(Number(servicePath[1]), body as ServiceBody) as unknown as T;
   if (method === 'POST' && path === '/deals') {
     const request = body as CreateDealRequest;
     maybeFailWrite();

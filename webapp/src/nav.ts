@@ -5,6 +5,8 @@
 // экране (с которого открыли мини-приложение) скрыта — тогда MAX закрывает приложение сам. Адресная строка
 // только отражает текущий экран (replaceState), записи в истории WebView не копятся.
 
+import type { TemplateKey } from './types';
+
 export type Route =
   /** `from` — «Повторить сделку»: форма с условиями прежней сделки (`#/new?from=<id>`). */
   | { name: 'new'; from?: string }
@@ -13,7 +15,14 @@ export type Route =
   | { name: 'edit'; id: string }
   /** Экран сделки `#/deals/<id>` (SPEC §7.9, ЗАДАЧА_08 B). */
   | { name: 'deal'; id: string }
-  | { name: 'settings' };
+  | { name: 'settings' }
+  /** «Мои услуги» исполнителя `#/settings/services` (SPEC §7.6a, ЗАДАЧА_08 C). */
+  | { name: 'services' }
+  /**
+   * Форма услуги: `#/settings/services/<id>` или новая `#/settings/services/new`. `template` — пример ниши, с которого
+   * начата новая услуга (`#/settings/services/new?template=beauty`): форма берёт из него название, предоплату и правило.
+   */
+  | { name: 'service'; id: number | 'new'; template?: TemplateKey };
 
 /** Вкладки нижней панели (ЗАДАЧА_08 A). */
 export type Tab = 'new' | 'deals' | 'settings';
@@ -37,12 +46,22 @@ const DONE_HASH_RE = /^\/done\/([A-Za-z0-9]{1,32})$/;
 /** Экран сделки: `deal_<id>` → `#/deals/<id>` (ЗАДАЧА_08 B). Ровно 10 символов — `#/deals/<id>/edit` сюда не попадает. */
 const DEAL_PARAM_RE = new RegExp(`^deal_${ID}$`);
 const DEAL_HASH_RE = new RegExp(`^/deals/${ID}$`);
+/** Услуга: положительный целый id или `new` (+ необязательный пример ниши). */
+const SERVICE_HASH_RE = /^\/settings\/services\/(?:([1-9]\d{0,9})|new(?:\?template=([a-z_]+))?)$/;
+const TEMPLATE_KEYS: readonly TemplateKey[] = ['beauty', 'lesson', 'repair', 'custom_order', 'freelance', 'free'];
 
 export function parseHash(hash: string): Route | null {
   const path = hash.replace(/^#/, '');
   if (path === '/new') return { name: 'new' };
   if (path === '/deals') return { name: 'deals' };
   if (path === '/settings') return { name: 'settings' };
+  if (path === '/settings/services') return { name: 'services' };
+  const service = SERVICE_HASH_RE.exec(path);
+  if (service) {
+    if (service[1]) return { name: 'service', id: Number(service[1]) };
+    const template = TEMPLATE_KEYS.find((key) => key === service[2]);
+    return template ? { name: 'service', id: 'new', template } : { name: 'service', id: 'new' };
+  }
   const repeat = REPEAT_HASH_RE.exec(path);
   if (repeat) return { name: 'new', from: repeat[1] };
   const edit = EDIT_HASH_RE.exec(path);
@@ -62,6 +81,11 @@ export function routeToHash(route: Route): string {
       return '#/deals';
     case 'settings':
       return '#/settings';
+    case 'services':
+      return '#/settings/services';
+    case 'service':
+      if (route.id !== 'new') return `#/settings/services/${route.id}`;
+      return route.template ? `#/settings/services/new?template=${route.template}` : '#/settings/services/new';
     case 'edit':
       return `#/deals/${route.id}/edit`;
     case 'deal':
@@ -98,7 +122,10 @@ export function initialRoute(hash: string, startParam: string | null): Route {
   return { name: 'new' };
 }
 
-/** Какая вкладка подсвечена на экране: всё про сделки (экран сделки, правка, повтор) — «Сделки», «Готово» — «Новая». */
+/**
+ * Какая вкладка подсвечена на экране: всё про сделки (экран сделки, правка, повтор) — «Сделки», «Готово» — «Новая»,
+ * «Мои услуги» и форма услуги — «Настройки» (туда ведёт вход в них).
+ */
 export function tabOf(route: Route): Tab {
   switch (route.name) {
     case 'new':
@@ -110,6 +137,8 @@ export function tabOf(route: Route): Tab {
     case 'edit':
       return 'deals';
     case 'settings':
+    case 'services':
+    case 'service':
       return 'settings';
   }
 }

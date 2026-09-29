@@ -27,6 +27,8 @@ import { DoneScreen } from './screens/Done';
 import { EditDealScreen } from './screens/EditDeal';
 import { RepeatDealScreen } from './screens/RepeatDeal';
 import { NewScreen } from './screens/New';
+import { ServiceFormScreen } from './screens/ServiceForm';
+import { ServicesScreen } from './screens/Services';
 import { SettingsScreen } from './screens/Settings';
 import type { CreateDealRequest, CreateDealResponse, MeResponse, SellerProfile, Template } from './types';
 
@@ -201,7 +203,28 @@ function Router() {
           />
         );
       case 'settings':
-        return <SettingsScreen me={data.me} onSaved={setProfile} />;
+        return <SettingsScreen me={data.me} onSaved={setProfile} onServices={() => navigate({ name: 'services' })} />;
+      case 'services':
+        return (
+          <ServicesScreen
+            templates={data.templates}
+            onOpen={(id) => navigate({ name: 'service', id })}
+            onNew={(template) => navigate(template ? { name: 'service', id: 'new', template } : { name: 'service', id: 'new' })}
+            onSettings={() => navigate({ name: 'settings' })}
+          />
+        );
+      case 'service':
+        return (
+          <ServiceFormScreen
+            key={routeToHash(route)}
+            id={route.id}
+            template={route.template}
+            me={data.me}
+            templates={data.templates}
+            // Сохранили — форма уступает место списку: «назад» с него не вернёт к отправленной форме.
+            onDone={() => navigate({ name: 'services' }, { replace: true })}
+          />
+        );
       case 'done':
         return (
           <DoneScreen

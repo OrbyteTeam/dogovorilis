@@ -122,6 +122,11 @@ export interface CreateDealRequest {
   repeat_of?: string;
   /** Отправить новую карточку тому же клиенту сразу, без ссылки (только вместе с repeat_of). */
   same_client?: boolean;
+  /**
+   * Услуга, из которой собрана сделка (§7.6a). POST: число или поля нет. PUT: число — сменить, null — отвязать,
+   * поля нет — не менять. Чужая или несуществующая — 404.
+   */
+  service_id?: number | null;
 }
 
 /** Строка списка «Мои сделки» — SPEC §7.4, §7.8 (`GET /api/deals`). */
@@ -188,6 +193,10 @@ export interface DealDetails {
   can_repeat: boolean;
   /** У прежней сделки был настоящий клиент — можно отправить новую ему напрямую. */
   same_client_available: boolean;
+  /** Услуга сделки (§7.6a) — только исполнителю, клиенту null; нет поля — сервер старше ЗАДАЧА_08 C. */
+  service_id?: number | null;
+  /** Длительность визита на момент создания, минуты — только исполнителю. */
+  duration_min?: number | null;
 }
 
 /** `PUT /api/deals/:publicId` — тело как у создания, без профиля (T5). */
@@ -361,4 +370,55 @@ export interface ReceiptUploadResponse {
   deal: DealFull;
   /** Сервер B-srv отдаёт готовый текст «Чек приложен, квитанция ушла обеим сторонам»; в контракте его нет — необязателен. */
   notice?: string | null;
+}
+
+// ─────────────── «Мои услуги» исполнителя — SPEC §7.6a, §7.8 (`/api/services`), ЗАДАЧА_08 C ───────────────
+
+/** Предоплата услуги: процент (1–100) от цены, сумма в рублях (1…цена) или без предоплаты (value 0). */
+export type PrepaymentKind = 'none' | 'percent' | 'amount';
+
+export interface ServicePrepayment {
+  kind: PrepaymentKind;
+  value: number;
+}
+
+/**
+ * Услуга — сохранённые условия, из которых исполнитель собирает карточку. Не витрина: клиент её не видит нигде.
+ * Суммы — целые рубли, как у сделок.
+ */
+export interface Service {
+  id: number;
+  title: string;
+  description: string | null;
+  price_rub: number;
+  /** 15…720 минут, шаг 15; по умолчанию 60. */
+  duration_min: number;
+  prepayment: ServicePrepayment;
+  cancel_rule: CancelRule;
+  /** Ниша, из которой выросла; своя — 'free'. */
+  template: TemplateKey;
+  /** false — скрыта: в форме сделки не предлагается. */
+  active: boolean;
+  sort_order: number;
+}
+
+/** Тело `POST /api/services` и `PUT /api/services/:id`. */
+export interface ServiceBody {
+  title: string;
+  description?: string | null;
+  price_rub: number;
+  duration_min?: number;
+  prepayment: ServicePrepayment;
+  cancel_rule: CancelRule;
+  template?: TemplateKey;
+  /** Только PUT; нет поля — видимость не меняется. */
+  active?: boolean;
+}
+
+export interface ServicesResponse {
+  items: Service[];
+}
+
+export interface ServiceResponse {
+  service: Service;
 }

@@ -38,6 +38,18 @@ describe('стартовый экран', () => {
     expect(initialRoute('', `deal_${ID.slice(0, 9)}-`)).toEqual({ name: 'new' });
   });
 
+  it('«Мои услуги» и форма услуги: id — положительное целое или new, пример — только известная ниша', () => {
+    expect(parseHash('#/settings/services')).toEqual({ name: 'services' });
+    expect(parseHash('#/settings/services/new')).toEqual({ name: 'service', id: 'new' });
+    expect(parseHash('#/settings/services/7')).toEqual({ name: 'service', id: 7 });
+    expect(parseHash('#/settings/services/new?template=lesson')).toEqual({ name: 'service', id: 'new', template: 'lesson' });
+    expect(parseHash('#/settings/services/new?template=unknown')).toEqual({ name: 'service', id: 'new' });
+    expect(parseHash('#/settings/services/0')).toBeNull();
+    expect(parseHash('#/settings/services/-1')).toBeNull();
+    expect(parseHash('#/settings/services/abc')).toBeNull();
+    expect(routeToHash({ name: 'service', id: 12 })).toBe('#/settings/services/12');
+  });
+
   it('экран сделки и правка условий не путаются', () => {
     expect(parseHash(`#/deals/${ID}`)).toEqual({ name: 'deal', id: ID });
     expect(parseHash(`#/deals/${ID}/edit`)).toEqual({ name: 'edit', id: ID });
@@ -60,6 +72,10 @@ describe('стартовый экран', () => {
       { name: 'edit', id: ID },
       { name: 'deal', id: ID },
       { name: 'settings' },
+      { name: 'services' },
+      { name: 'service', id: 'new' },
+      { name: 'service', id: 'new', template: 'beauty' },
+      { name: 'service', id: 42 },
     ];
     for (const r of routes) expect(parseHash(routeToHash(r))).toEqual(r);
   });
@@ -74,6 +90,9 @@ describe('вкладки', () => {
     expect(tabOf({ name: 'deal', id: ID })).toBe('deals');
     expect(tabOf({ name: 'new', from: ID })).toBe('deals');
     expect(tabOf({ name: 'settings' })).toBe('settings');
+    expect(tabOf({ name: 'services' })).toBe('settings');
+    expect(tabOf({ name: 'service', id: 'new' })).toBe('settings');
+    expect(tabOf({ name: 'service', id: 3 })).toBe('settings');
   });
 
   it('вкладка открывает корневой экран раздела', () => {
@@ -122,6 +141,15 @@ describe('история «назад»', () => {
     const h = startHistory(initialRoute('', `deal_${ID}`));
     expect(current(h)).toEqual({ name: 'deal', id: ID });
     expect(canGoBack(h)).toBe(false);
+  });
+
+  it('настройки → услуги → форма; сохранение возвращает к списку, а не к форме', () => {
+    let h = startHistory({ name: 'settings' });
+    h = push(h, { name: 'services' });
+    h = push(h, { name: 'service', id: 'new', template: 'beauty' });
+    h = push(h, { name: 'services' }, { replace: true });
+    expect(h).toEqual([{ name: 'settings' }, { name: 'services' }]);
+    expect(current(back(h))).toEqual({ name: 'settings' });
   });
 
   it('переключение вкладок туда-обратно не растит стек', () => {

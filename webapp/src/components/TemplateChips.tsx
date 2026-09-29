@@ -23,11 +23,13 @@ export interface TemplateChipsProps {
   items: Template[];
   value: TemplateKey | null;
   onSelect: (template: Template) => void;
+  /** Подпись группы для скринридера: в форме сделки — шаблон, на пустом экране «Мои услуги» — примеры. */
+  ariaLabel?: string;
 }
 
-export function TemplateChips({ items, value, onSelect }: TemplateChipsProps) {
+export function TemplateChips({ items, value, onSelect, ariaLabel = 'Шаблон сделки' }: TemplateChipsProps) {
   return (
-    <div className="dg-chips" role="group" aria-label="Шаблон сделки">
+    <div className="dg-chips" role="group" aria-label={ariaLabel}>
       {items.map((template) => {
         const active = template.key === value;
         return (

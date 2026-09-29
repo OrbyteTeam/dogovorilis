@@ -1,23 +1,26 @@
-// Форма сделки — docs/SPEC.md §7.2 (таблица полей и правил), §7.5 (правка условий и повтор), §7.6 (шаблоны);
-// вид — docs/DESIGN.md §4–§5. Одна форма на создание, правку (T5) и повтор: режим задаёт заголовок, предзаполнение
-// и кнопку, а куда отправлять — решает экран-владелец через onSubmit.
+// Форма сделки — docs/SPEC.md §7.2 (таблица полей и правил), §7.5 (правка условий и повтор), §7.6 (шаблоны),
+// §7.6a («Выбрать услугу» и «Сохранить как услугу»); вид — docs/DESIGN.md §4–§5. Одна форма на создание, правку (T5)
+// и повтор: режим задаёт заголовок, предзаполнение и кнопку, а куда отправлять — решает экран-владелец через onSubmit.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Input, Panel, Radio, Switch, Textarea, Typography } from '@maxhub/max-ui';
 
-import { errorText, isRetryable } from '../api';
+import { api, ApiError, errorText, isRetryable } from '../api';
 import { disableClosingConfirmation, enableClosingConfirmation, haptic, userDisplayName } from '../bridge';
 import { ControlRow } from '../components/ControlRow';
 import { Field, revealField } from '../components/Field';
 import { Segmented } from '../components/Segmented';
+import { ServiceChips } from '../components/ServiceChips';
 import { TemplateChips } from '../components/TemplateChips';
 import { useToast } from '../components/Toast';
 import { CANCEL_RULE_LABEL, CANCEL_RULE_TEXT, CANCEL_RULES, formatRub, isoToMoscowInput, moscowInputToIso, TAX_MODE_LABEL, TAX_MODES } from '../format';
+import { canSaveAsService, dealFillFromService, serviceBodyFromDeal, serviceChips, type PrepayMode } from '../services';
 import type {
   CancelRule,
   CreateDealRequest,
   DealDetails,
   MeResponse,
   SellerProfile,
+  Service,
   TaxMode,
   Template,
   TemplateKey,
@@ -33,8 +36,6 @@ const DESCRIPTION_MAX = 1000;
 const PAYOUT_MAX = 200;
 /** «Когда» — не раньше чем через 30 минут (SPEC §7.2). */
 const LEAD_TIME_MS = 30 * 60 * 1000;
-
-type PrepayMode = 'none' | 'p30' | 'p50' | 'custom';
 
 type FieldName = 'display_name' | 'payout_details' | 'title' | 'description' | 'scheduled_at' | 'total' | 'prepayment';
 
@@ -165,6 +166,40 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
   const [sameClient, setSameClient] = useState(sameClientName !== null);
   const dateRef = useRef<HTMLInputElement>(null);
 
+  // ── «Мои услуги» (§7.6a): чипы над полями, выбор подставляет условия; сделка запоминает service_id ──
+  /** Услуга прежней сделки (повтор, правка) — выбрана сразу. */
+  const [initialServiceId] = useState<number | null>(() => (mode.kind === 'create' ? null : (mode.source.service_id ?? null)));
+  const [serviceId, setServiceId] = useState<number | null>(initialServiceId);
+  /** Показываемые услуги; null — не загрузились (блока нет, форма работает как раньше). */
+  const [services, setServices] = useState<Service[] | null>(null);
+  /** Услуга прежней сделки, которую потом скрыли: её чип всё равно виден — выбранным и с пометкой. */
+  const [hiddenService, setHiddenService] = useState<Service | null>(null);
+  const [savingService, setSavingService] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const { items } = await api.services();
+        if (!alive) return;
+        setServices(items);
+        if (initialServiceId !== null && !items.some((s) => s.id === initialServiceId)) {
+          const all = await api.services(true);
+          if (alive) setHiddenService(all.items.find((s) => s.id === initialServiceId) ?? null);
+        }
+      } catch {
+        /* услуги не загрузились — форма работает без блока «Выбрать услугу» (контракт ЗАДАЧА_08 C, п. 4) */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [initialServiceId]);
+
+  const selectedService =
+    services?.find((s) => s.id === serviceId) ?? (hiddenService && hiddenService.id === serviceId ? hiddenService : null);
+  const chips = services ? serviceChips(services, selectedService) : [];
+
   // Повтор: «Когда» пустое и в фокусе — это единственное, что обычно надо заполнить (ЗАДАЧА_04 F).
   useEffect(() => {
     if (!repeating || init.noDate) return;
@@ -260,6 +295,7 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
     terms,
     templateKey,
     sameClient,
+    serviceId,
     needProfile ? [displayName.trim(), taxMode, payoutDetails.trim()] : null,
   ]);
   const [initialDraft] = useState(draft);
@@ -273,6 +309,8 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
   useEffect(() => () => disableClosingConfirmation(), []);
 
   function applyTemplate(template: Template) {
+    // Пример ниши — другой путь, чем готовая услуга: он переписывает предоплату и правило, выбор услуги снимаем.
+    setServiceId(null);
     setTemplateKey(template.key);
     setTemplateHint(template.hint);
     // Название подставляем, если пользователь его ещё не менял руками.
@@ -298,6 +336,58 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
     setDateRequired(template.date_required);
     if (template.date_required) setNoDate(false);
     haptic('selection');
+  }
+
+  /** Услуга подставляет всё, кроме даты; поля остаются редактируемыми. Повторное нажатие снимает выбор, поля не трогает. */
+  function selectService(service: Service) {
+    haptic('selection');
+    if (serviceId === service.id) {
+      setServiceId(null);
+      return;
+    }
+    const fill = dealFillFromService(service);
+    setServiceId(service.id);
+    const template = templates.find((t) => t.key === fill.templateKey) ?? null;
+    setTemplateKey(fill.templateKey);
+    setTemplateHint(template?.hint ?? null);
+    setDateRequired(template?.date_required ?? false);
+    // Как у шаблона: ниша с обязательной датой снимает «Без даты», иначе подсказка и переключатель спорили бы.
+    if (template?.date_required) setNoDate(false);
+    setTitle(fill.title);
+    templateTitle.current = '';
+    setDescription(fill.description);
+    setTotalRaw(fill.totalRaw);
+    setPrepayMode(fill.prepayMode);
+    setPrepayCustomRaw(fill.prepayCustomRaw);
+    setAutoPercent(null);
+    setCancelRule(fill.cancelRule);
+  }
+
+  /** «Сохранить как услугу» (§7.6a): из полей формы — в «Мои услуги»; новая услуга сразу выбрана. */
+  async function saveAsService() {
+    if (savingService) return;
+    const fields = ['title', 'description', 'total', 'prepayment'] as const;
+    if (fields.some((f) => errors[f]) || totalRub === null || prepaymentRub === null) {
+      setTouched((prev) => ({ ...prev, title: true, description: true, total: true, prepayment: true }));
+      haptic('error');
+      showToast('Проверьте название, сумму и предоплату', 'error');
+      return;
+    }
+    setSavingService(true);
+    try {
+      const { service } = await api.createService(
+        serviceBodyFromDeal({ title, description, totalRub, prepayMode, prepaymentRub, cancelRule, templateKey }),
+      );
+      setServices((prev) => [...(prev ?? []), service]);
+      setServiceId(service.id);
+      haptic('success');
+      showToast('Сохранено в «Мои услуги»');
+    } catch (error) {
+      haptic('error');
+      showToast(errorText(error), 'error');
+    } finally {
+      setSavingService(false);
+    }
   }
 
   function buildProfile(): SellerProfile {
@@ -346,6 +436,12 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
       payload.repeat_of = mode.source.public_id;
       if (sameClientName !== null) payload.same_client = sameClient;
     }
+    // Услуга: при правке — только если выбор изменился (null — отвязать), иначе поля нет; при создании — если выбрана.
+    if (editing) {
+      if (serviceId !== initialServiceId) payload.service_id = serviceId;
+    } else if (serviceId !== null) {
+      payload.service_id = serviceId;
+    }
 
     setSending(true);
     setSubmitError(null);
@@ -353,6 +449,15 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
       await onSubmit(payload);
     } catch (error) {
       haptic('error');
+      // Услугу скрыли насовсем или она чужая — 404: снимаем выбор, остальной ввод на месте (контракт ЗАДАЧА_08 C).
+      const lostService = payload.service_id;
+      if (error instanceof ApiError && error.status === 404 && typeof lostService === 'number') {
+        showToast('Услуга не найдена, выберите другую', 'error');
+        setServiceId(null);
+        setServices((prev) => prev?.filter((s) => s.id !== lostService) ?? prev);
+        setHiddenService((prev) => (prev?.id === lostService ? null : prev));
+        return;
+      }
       const text = errorText(error);
       showToast(text, 'error');
       if (isRetryable(error)) setSubmitError(text);
@@ -489,8 +594,24 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
             <h2 id="deal-terms">Условия</h2>
           </Typography.Text>
 
-          <Field label="Шаблон" hint={templateHint ?? 'Шаблон подставит название, предоплату и правило отмены'}>
-            <TemplateChips items={templates} value={templateKey} onSelect={applyTemplate} />
+          {chips.length > 0 ? (
+            <Field
+              label="Выбрать услугу"
+              hint={
+                selectedService
+                  ? 'Условия подставлены, их можно поменять. Дату выберите сами'
+                  : 'Подставит название, сумму, предоплату и правило отмены'
+              }
+            >
+              <ServiceChips chips={chips} value={serviceId} onSelect={selectService} />
+            </Field>
+          ) : null}
+
+          <Field
+            label={chips.length > 0 ? 'Или начните с примера' : 'Шаблон'}
+            hint={templateHint ?? 'Шаблон подставит название, предоплату и правило отмены'}
+          >
+            <TemplateChips items={templates} value={serviceId === null ? templateKey : null} onSelect={applyTemplate} />
           </Field>
 
           <Field label="Что делаем" htmlFor="deal-title" anchorId={anchor('title')} error={shown('title')}>
@@ -634,6 +755,17 @@ export function NewScreen({ me, templates, mode = { kind: 'create' }, onSubmit }
             </div>
           </Field>
         </section>
+
+        {services !== null && canSaveAsService({ selectedId: serviceId, title, totalRaw }) ? (
+          <div className="dg-save-service">
+            <Button type="button" variant="ghost" size="medium" loading={savingService} onClick={() => void saveAsService()}>
+              Сохранить как услугу
+            </Button>
+            <Typography.Text variant="description" color="tertiary">
+              В следующий раз эти условия подставятся в одно нажатие
+            </Typography.Text>
+          </div>
+        ) : null}
 
         {submitError ? (
           <section className="dg-card dg-card_flat" role="alert">

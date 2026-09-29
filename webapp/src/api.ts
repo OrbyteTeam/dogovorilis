@@ -15,6 +15,9 @@ import type {
   ProfileResponse,
   ReceiptUploadResponse,
   SellerProfile,
+  ServiceBody,
+  ServiceResponse,
+  ServicesResponse,
   TemplatesResponse,
   UpdateDealRequest,
   UpdateDealResponse,
@@ -45,6 +48,8 @@ export type ApiErrorCode =
   | 'file_too_large'
   | 'upload_failed'
   | 'unavailable'
+  // 409 — у исполнителя уже 50 услуг (§7.6a).
+  | 'services_limit'
   | 'rate_limited'
   | 'internal'
   | 'network'
@@ -186,6 +191,12 @@ export const api = {
   dealAction: (publicId: string, body: DealActionRequest) =>
     post<DealActionResponse>(`/deals/${encodeURIComponent(publicId)}/actions`, body),
   uploadReceipt,
+  /** «Мои услуги» (§7.6a): без `all` — только показываемые, с `all` — все, со скрытыми. */
+  services: (all = false) => get<ServicesResponse>(all ? '/services?all=1' : '/services'),
+  createService: (body: ServiceBody) => post<ServiceResponse>('/services', body),
+  updateService: (id: number, body: ServiceBody) => put<ServiceResponse>(`/services/${id}`, body),
+  /** Новый порядок — все свои услуги, включая скрытые. */
+  reorderServices: (ids: number[]) => put<ServicesResponse>('/services/order', { ids }),
 };
 
 /**

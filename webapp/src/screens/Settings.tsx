@@ -1,7 +1,8 @@
-// Экран «Настройки» — docs/SPEC.md §7.7 (поля профиля + переключатели оплаты), вид — docs/DESIGN.md §4.
+// Экран «Настройки» — docs/SPEC.md §7.7 (поля профиля + переключатели оплаты), вход в «Мои услуги» (§7.6a),
+// вид — docs/DESIGN.md §4.
 // Блок «Телефон» (Should) появится вместе с POST /api/me/phone.
 import { useMemo, useState } from 'react';
-import { Button, Input, Panel, Radio, Switch, Textarea, Typography } from '@maxhub/max-ui';
+import { Button, CellAction, Input, Panel, Radio, Switch, Textarea, Typography } from '@maxhub/max-ui';
 
 import { api, errorText } from '../api';
 import { ControlRow } from '../components/ControlRow';
@@ -36,9 +37,20 @@ export interface SettingsScreenProps {
   me: MeResponse;
   /** Профиль сохранён — Router кладёт его в `me`, чтобы форма сделки увидела свежие значения. */
   onSaved: (profile: SellerProfile) => void;
+  /** «Мои услуги» `#/settings/services` (§7.6a). */
+  onServices: () => void;
 }
 
-export function SettingsScreen({ me, onSaved }: SettingsScreenProps) {
+function ServicesIcon() {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="4" y="4.5" width="16" height="15" rx="3.5" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M8 9.5h8M8 14.5h5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function SettingsScreen({ me, onSaved, onServices }: SettingsScreenProps) {
   const showToast = useToast();
   const profile = me.profile;
   const providerOff = me.config.provider === 'none';
@@ -120,6 +132,11 @@ export function SettingsScreen({ me, onSaved }: SettingsScreenProps) {
         <Typography.Headline variant="large-strong" asChild>
           <h1>Настройки</h1>
         </Typography.Headline>
+
+        {/* type="button": строка внутри формы настроек не должна её отправлять. */}
+        <CellAction type="button" surface="island" showChevron before={<ServicesIcon />} onClick={onServices}>
+          Мои услуги
+        </CellAction>
 
         <section className="dg-card" aria-labelledby="settings-profile">
           <Typography.Text variant="title" asChild>

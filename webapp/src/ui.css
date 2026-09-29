@@ -976,3 +976,80 @@
     animation: none;
   }
 }
+
+/* ───────── «Мои услуги» (ЗАДАЧА_08 C, SPEC §7.6a) ───────── */
+
+/* Длинные экраны без полей браузера у заголовков (как у экрана сделки) */
+.dg-screen_plain h1,
+.dg-screen_plain h2 {
+  margin: 0;
+}
+
+/* Строка услуги: слева кнопка-строка, справа стрелки порядка — рядом, а не внутри кнопки */
+.dg-service {
+  display: flex;
+  align-items: center;
+}
+
+.dg-service__open {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dg-service__order {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--spacing-size-xs);
+  padding-right: var(--spacing-size-l);
+}
+
+/* Тап-зона стрелки — не меньше 44 px (DESIGN.md §3); IconButton small — 40 px */
+.dg-arrow {
+  width: 44px;
+  height: 44px;
+}
+
+/* Чип услуги: название и цена — цена тише, без точки-разделителя */
+.dg-chip_service {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-size-m);
+  max-width: 280px;
+}
+
+.dg-chip__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dg-chip__price {
+  flex: 0 0 auto;
+  font-weight: var(--font-weight-body);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dg-chip_active .dg-chip__price {
+  color: inherit;
+}
+
+.dg-chip__tag {
+  flex: 0 0 auto;
+  padding: 0 var(--spacing-size-s);
+  border-radius: var(--size-border-radius-action-small);
+  background-color: var(--background-tertiary);
+  font-size: var(--font-size-tag);
+  line-height: var(--line-height-tag);
+  font-weight: var(--font-weight-tag-strong);
+}
+
+/* «Сохранить как услугу»: кнопка-ссылка и подпись под ней */
+.dg-save-service {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-size2xs);
+}
